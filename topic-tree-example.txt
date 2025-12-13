@@ -1,0 +1,67 @@
+tanuki/devices/atc_1234/.meta/name                                    | "ATC 1234"
+tanuki/devices/atc_1234/.meta/type                                    | "Xiaomi Hygrometer"
+tanuki/devices/atc_1234/.meta/tags                                    | ["room.living_room"]
+tanuki/devices/atc_1234/.meta/status                                  | "online"
+tanuki/devices/atc_1234/tanuki.sensor/.meta/version                   | 1
+tanuki/devices/atc_1234/tanuki.sensor/temperature                     | { value: 22.5, unit: "C", timestamp: 1712345678 }
+tanuki/devices/atc_1234/tanuki.sensor/humidity                        | { value: 50.0, unit: "%", timestamp: 1712345678 }
+tanuki/devices/tradfri_shortcut_button_1/.meta/name                   | "Tradfri Shortcut Button 1"
+tanuki/devices/tradfri_shortcut_button_1/.meta/type                   | "IKEA Tradfri Shortcut Button"
+tanuki/devices/tradfri_shortcut_button_1/.meta/tags                   | ["room.living_room"]
+tanuki/devices/tradfri_shortcut_button_1/.meta/status                 | "online"
+tanuki/devices/tradfri_shortcut_button_1/tanuki.buttons/.meta/version | 1
+tanuki/devices/tradfri_shortcut_button_1/tanuki.buttons/button        | ->| pressed, double_pressed, long_press, released, triple_pressed, ...
+tanuki/devices/hue_remote_1/.meta/name                                | "Hue Remote 1"
+tanuki/devices/hue_remote_1/.meta/type                                | "Philips Hue Remote"
+tanuki/devices/hue_remote_1/.meta/tags                                | ["room.living_room"]
+tanuki/devices/hue_remote_1/.meta/status                              | "online"
+tanuki/devices/hue_remote_1/tanuki.buttons/.meta/version              | 1
+tanuki/devices/hue_remote_1/tanuki.buttons/on                         | ->| pressed, ...
+tanuki/devices/hue_remote_1/tanuki.buttons/up                         | ->| pressed, ...
+tanuki/devices/hue_remote_1/tanuki.buttons/down                       | ->| pressed, ...
+tanuki/devices/hue_remote_1/tanuki.buttons/off                        | ->| pressed, ...
+tanuki/devices/north_lamp/.meta/name                                  | "North"
+tanuki/devices/north_lamp/.meta/type                                  | "Philips Hue Lamp"
+tanuki/devices/north_lamp/.meta/tags                                  | ["room.living_room", "misc.main_light"]
+tanuki/devices/north_lamp/.meta/status                                | "online"
+tanuki/devices/north_lamp/tanuki.on_off/.meta/version                 | 1
+tanuki/devices/north_lamp/tanuki.on_off/state                         | "on"
+tanuki/devices/north_lamp/tanuki.on_off/set                           | <-| on, off, toggle
+tanuki/devices/north_lamp/tanuki.light/.meta/version                  | 1
+tanuki/devices/north_lamp/tanuki.light/.meta/capabilities             | { brightness: true, color: true, fade: true }
+tanuki/devices/north_lamp/tanuki.light/color                          | { r: 255, g: 200, b: 150 }
+tanuki/devices/north_lamp/tanuki.light/brightness                     | 75
+tanuki/devices/north_lamp/tanuki.light/effect                         | "none"
+tanuki/devices/north_lamp/tanuki.light/transition                     | 3000
+tanuki/devices/north_lamp/tanuki.light/color/set                      | <-| { r: 255, g: 220, b: 180 }
+tanuki/devices/north_lamp/tanuki.light/brightness/set                 | <-| 85
+tanuki/devices/desk/.meta/name                                        | "Desk"
+tanuki/devices/desk/.meta/type                                        | "Tapo P110"
+tanuki/devices/desk/.meta/tags                                        | ["room.living_room"]
+tanuki/devices/desk/.meta/status                                      | "online"
+tanuki/devices/desk/tanuki.on_off/.meta/version                       | 1
+tanuki/devices/desk/tanuki.on_off/state                               | "on"
+tanuki/devices/desk/tanuki.on_off/state/set                           | <-| on, off, toggle
+tanuki/devices/desk/tanuki.sensor/.meta/version                       | 1
+tanuki/devices/desk/tanuki.sensor/current_power                       | { value: 300.0, unit: "W", timestamp: 1712345678 }
+tanuki/devices/desk/tanuki.sensor/total_power                         | { value: 1230.0, unit: "kWh", timestamp: 1712345678 }
+tanuki/devices/sinon/.meta/name                                       | "Sinon"
+tanuki/devices/sinon/.meta/type                                       | "Linux"
+tanuki/devices/sinon/.meta/tags                                       | ["room.living_room", "role.server"]
+tanuki/devices/sinon/.meta/status                                     | "online"
+tanuki/devices/sinon/tanuki.sensor/.meta/version                      | 1
+tanuki/devices/sinon/tanuki.sensor/cpu_usage                          | { value: 15.0, unit: "%", timestamp: 1712345678 }
+tanuki/devices/sinon/tanuki.sensor/memory_usage                       | { value: 2048, unit: "MiB", timestamp: 1712345678 }
+tanuki/devices/sinon/tanuki.bluetooth/.meta/version                   | 1
+tanuki/devices/sinon/tanuki.bluetooth/controller/name                 | "sinon"
+tanuki/devices/sinon/tanuki.bluetooth/controller/address              | "00:1A:7D:DA:71:13"
+tanuki/devices/sinon/tanuki.bluetooth/controller/scanning             | true
+tanuki/devices/sinon/tanuki.bluetooth/controller/scanning/set         | <-| true, false
+tanuki/devices/sinon/tanuki.bluetooth/devices/00:1B:63:84:45:E6/name  | "Keychron K2"
+tanuki/devices/sinon/tanuki.bluetooth/devices/00:1B:63:84:45:E6/type  | "keyboard"
+tanuki/devices/sinon/tanuki.bluetooth/devices/00:1B:63:84:45:E6/pair  | <-| <empty>
+tanuki/devices/sinon/foo.system/.meta/version                         | 1
+tanuki/devices/sinon/foo.system/whatever                              | "something custom"
+tanuki/tags/room.living_room/.meta/name                               | "Living Room"
+tanuki/tags/role.server/.meta/name                                    | "Server"
+tanuki/tags/misc.main_light/.meta/name                                | "Main Light"

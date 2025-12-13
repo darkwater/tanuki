@@ -1,0 +1,6 @@
+[package]
+name = "tanuki-monitor"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
