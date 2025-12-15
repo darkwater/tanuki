@@ -1,5 +1,18 @@
+//! Simple numeric/boolean sensor data with unit and timestamp
+//!
+//! Topics map to what is measured (eg. `temperature`), and the payload is a [`SensorPayload`].
+//!
+//! # Example Entity
+//!
+//! ```plain
+//! ../tanuki.sensor/$meta/version => 1
+//! ../tanuki.sensor/temperature   => { value: 23.5, unit: "°C", timestamp: 1712345678 }
+//! ../tanuki.sensor/humidity      => { value: 45.0, unit: "%",  timestamp: 1712345678 }
+//! ../tanuki.sensor/motion        => { value: true, unit: "",   timestamp: 1712345678 }
+//! ../tanuki.sensor/battery       => { value: 82,   unit: "%",  timestamp: 1712345678 }
+//! ```
+
 use compact_str::CompactString;
-use mqtt_protocol_core::mqtt::IntoPayload;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,12 +23,6 @@ pub struct SensorPayload {
     pub unit: CompactString,
     /// Unix timestamp in seconds
     pub timestamp: i64,
-}
-
-impl IntoPayload for &SensorPayload {
-    fn into_payload(self) -> mqtt_protocol_core::mqtt::ArcPayload {
-        serde_json::to_vec(self).unwrap().into_payload()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

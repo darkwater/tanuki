@@ -1,18 +1,6 @@
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    sync::Arc,
-};
+use std::collections::{HashMap, hash_map::Entry};
 
-use heck::ToSnakeCase;
-use mqtt_endpoint_tokio::mqtt_ep::{
-    self,
-    packet::{
-        Qos,
-        v5_0::{self, Connack},
-    },
-    role,
-    transport::{TcpTransport, connect_helper},
-};
+use heck::ToSnakeCase as _;
 use tanuki::{Authority, TanukiConnection, capabilities::sensor::Sensor};
 use tanuki_common::{capabilities::sensor::SensorPayload, meta};
 
@@ -28,11 +16,18 @@ pub enum Error {
     Tanuki(#[from] tanuki::Error),
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tanuki::log::init();
+pub async fn bridge(
+    addr: &str,
+    id_map: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>, impl AsRef<str>)>,
+) -> Result<()> {
+    let id_map = id_map
+        .into_iter()
+        .map(|(k, id, name)| {
+            (k.as_ref().to_owned(), (id.as_ref().to_owned(), name.as_ref().to_owned()))
+        })
+        .collect::<HashMap<_, _>>();
 
-    let tanuki = TanukiConnection::connect("tanuki-bthome", "192.168.0.106:1883").await?;
+    let tanuki = TanukiConnection::connect("tanuki-bthome", addr).await?;
 
     tokio::spawn({
         let tanuki = tanuki.clone();
@@ -63,8 +58,15 @@ async fn main() -> Result<()> {
             Entry::Vacant(entry) => {
                 tracing::info!(?update.name, ?update.address, "Registering new device");
 
-                let entity = tanuki.owned_entity(update.name.to_snake_case()).await?;
-                entity.publish_meta(meta::Name(update.name.into())).await?;
+                let (id, name) = id_map
+                    .get(update.name.as_str())
+                    .or_else(|| id_map.get(update.address.as_str()))
+                    .cloned()
+                    .unwrap_or((update.name.to_snake_case(), update.name));
+
+                let entity = tanuki.owned_entity(id).await?;
+
+                entity.publish_meta(meta::Name(name.into())).await?;
                 entity
                     .publish_meta(meta::Type("BTHome Sensor".into()))
                     .await?;

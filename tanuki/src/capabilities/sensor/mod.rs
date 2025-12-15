@@ -2,7 +2,7 @@ use compact_str::ToCompactString;
 use tanuki_common::capabilities::sensor::SensorPayload;
 
 use super::CapabilityImpl;
-use crate::{Authority, EntityRole, Result, TanukiCapability, capability};
+use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
 
 #[capability(id = "tanuki.sensor")]
 pub struct Sensor<R: EntityRole> {
@@ -12,7 +12,7 @@ pub struct Sensor<R: EntityRole> {
 impl Sensor<Authority> {
     pub async fn publish(&self, key: impl ToCompactString, payload: SensorPayload) -> Result<()> {
         self.cap
-            .publish_raw(key.to_compact_string(), &payload)
+            .publish_raw(key.to_compact_string(), &payload, PublishOpts::entity_data())
             .await
     }
 }

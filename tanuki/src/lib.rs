@@ -95,7 +95,12 @@ impl TanukiConnection {
         Ok(packet)
     }
 
-    pub async fn publish(&self, topic: Topic, payload: impl Serialize) -> Result<()> {
+    pub async fn publish(
+        &self,
+        topic: Topic,
+        payload: impl Serialize,
+        opts: PublishOpts,
+    ) -> Result<()> {
         let payload = serde_json::to_string(&payload)?;
 
         tracing::debug!("Publishing to topic {topic}: {payload}");
@@ -103,7 +108,8 @@ impl TanukiConnection {
         let publish = v5_0::Publish::builder()
             .topic_name(topic.to_string())?
             .payload(payload)
-            .qos(Qos::AtLeastOnce)
+            .qos(opts.qos)
+            .retain(opts.retain)
             .packet_id(self.next_payload_id())
             .build()?;
 
@@ -129,6 +135,7 @@ impl TanukiConnection {
                 key: T::KEY,
             },
             meta,
+            PublishOpts::metadata(),
         )
         .await
     }
@@ -144,6 +151,30 @@ impl TanukiConnection {
         };
         entity.initialize().await?;
         Ok(Arc::new(entity))
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PublishOpts {
+    pub qos: Qos,
+    pub retain: bool,
+}
+
+impl PublishOpts {
+    pub const fn metadata() -> Self {
+        Self { qos: Qos::AtLeastOnce, retain: true }
+    }
+
+    pub const fn entity_data() -> Self {
+        Self { qos: Qos::AtLeastOnce, retain: true }
+    }
+
+    pub const fn event() -> Self {
+        Self { qos: Qos::ExactlyOnce, retain: false }
+    }
+
+    pub const fn control() -> Self {
+        Self { qos: Qos::ExactlyOnce, retain: false }
     }
 }
 
@@ -236,6 +267,7 @@ impl<R: EntityRole> TanukiCapability<R> {
         &self,
         topic: impl ToCompactString,
         payload: impl Serialize,
+        opts: PublishOpts,
     ) -> Result<()> {
         let topic = Topic::CapabilityData {
             entity: self.entity.id().into(),
@@ -243,7 +275,7 @@ impl<R: EntityRole> TanukiCapability<R> {
             rest: topic.to_compact_string(),
         };
 
-        self.entity.conn.publish(topic, payload).await
+        self.entity.conn.publish(topic, payload, opts).await
     }
 
     pub async fn publish_meta<T: MetaField>(&self, meta: T) -> Result<()> {
@@ -253,6 +285,9 @@ impl<R: EntityRole> TanukiCapability<R> {
             key: T::KEY,
         };
 
-        self.entity.conn.publish(topic, meta).await
+        self.entity
+            .conn
+            .publish(topic, meta, PublishOpts::metadata())
+            .await
     }
 }

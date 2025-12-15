@@ -25,8 +25,8 @@ tanuki/entities/north_lamp/$meta/type                                  | "Philip
 tanuki/entities/north_lamp/$meta/tags                                  | ["room.living_room", "misc.main_light"]
 tanuki/entities/north_lamp/$meta/status                                | "online"
 tanuki/entities/north_lamp/tanuki.on_off/$meta/version                 | 1
-tanuki/entities/north_lamp/tanuki.on_off/state                         | "on"
-tanuki/entities/north_lamp/tanuki.on_off/set                           | <-| on, off, toggle
+tanuki/entities/north_lamp/tanuki.on_off/on                            | true
+tanuki/entities/north_lamp/tanuki.on_off/command                       | <-| on, off, toggle
 tanuki/entities/north_lamp/tanuki.light/$meta/version                  | 1
 tanuki/entities/north_lamp/tanuki.light/$meta/capabilities             | { brightness: true, color: true, fade: true }
 tanuki/entities/north_lamp/tanuki.light/color                          | { r: 255, g: 200, b: 150 }
@@ -40,8 +40,8 @@ tanuki/entities/desk/$meta/type                                        | "Tapo P
 tanuki/entities/desk/$meta/tags                                        | ["room.living_room"]
 tanuki/entities/desk/$meta/status                                      | "online"
 tanuki/entities/desk/tanuki.on_off/$meta/version                       | 1
-tanuki/entities/desk/tanuki.on_off/state                               | "on"
-tanuki/entities/desk/tanuki.on_off/state/set                           | <-| on, off, toggle
+tanuki/entities/desk/tanuki.on_off/on                                  | true
+tanuki/entities/desk/tanuki.on_off/command                             | <-| on, off, toggle
 tanuki/entities/desk/tanuki.sensor/$meta/version                       | 1
 tanuki/entities/desk/tanuki.sensor/current_power                       | { value: 300.0, unit: "W", timestamp: 1712345678 }
 tanuki/entities/desk/tanuki.sensor/total_power                         | { value: 1230.0, unit: "kWh", timestamp: 1712345678 }
