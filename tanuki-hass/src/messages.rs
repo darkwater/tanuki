@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tanuki_common::capabilities::light::ColorMode;
 
+use crate::entity::ServiceCallTarget;
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[expect(clippy::enum_variant_names)]
@@ -79,8 +81,7 @@ pub enum ClientMessage {
         service: String,
         #[serde(skip_serializing_if = "Value::is_null")]
         service_data: serde_json::Value,
-        #[serde(skip_serializing_if = "Value::is_null")]
-        target: serde_json::Value,
+        target: ServiceCallTarget,
         // return_response: bool,
     },
 }
@@ -108,11 +109,11 @@ pub struct StateAttributes {
     // light
     pub brightness: Option<u8>,
     pub color_mode: Option<ColorMode>,
-    pub rgbww_color: [f32; 5],
-    pub rgbw_color: [f32; 4],
-    pub rgb_color: [f32; 3],
-    pub hs_color: [f32; 2],
-    pub xy_color: [f32; 2],
+    pub rgbww_color: Option<[f32; 5]>,
+    pub rgbw_color: Option<[f32; 4]>,
+    pub rgb_color: Option<[f32; 3]>,
+    pub hs_color: Option<[f32; 2]>,
+    pub xy_color: Option<[f32; 2]>,
     pub color_temp: Option<u16>,
 }
 

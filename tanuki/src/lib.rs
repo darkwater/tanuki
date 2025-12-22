@@ -1,6 +1,6 @@
 #![feature(macro_attr)]
 
-use core::{marker::PhantomData, sync::atomic::AtomicU16};
+use core::{marker::PhantomData, str::FromStr as _, sync::atomic::AtomicU16};
 use std::sync::Arc;
 
 use compact_str::{CompactString, ToCompactString};
@@ -10,7 +10,10 @@ use mqtt_endpoint_tokio::mqtt_ep::{
     role,
     transport::{TcpTransport, connect_helper},
 };
-use mqtt_protocol_core::mqtt::packet::{Qos, v5_0::Connack};
+use mqtt_protocol_core::mqtt::packet::{
+    Qos, SubEntry, SubOpts,
+    v5_0::{Connack, Publish},
+};
 use serde::Serialize;
 use tanuki_common::{
     EntityId, EntityStatus, Property, Topic,
@@ -23,7 +26,7 @@ pub mod capabilities;
 pub mod log;
 pub mod registry;
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -37,6 +40,8 @@ pub enum Error {
     MqttPacket(mqtt_ep::result_code::MqttError),
     #[error("serde json error: {0}")]
     SerdeJson(#[from] serde_json::Error),
+    #[error("bad topic: {0}")]
+    BadTopic(&'static str),
 }
 
 impl From<mqtt_ep::result_code::MqttError> for Error {
@@ -96,6 +101,46 @@ impl TanukiConnection {
         Ok(packet)
     }
 
+    pub async fn recv(&self) -> Result<PublishEvent> {
+        loop {
+            let packet = self.recv_raw().await?;
+
+            let publish: Result<Publish, _> = packet.try_into();
+            if let Ok(publish) = publish {
+                let topic = Topic::from_str(publish.topic_name()).map_err(Error::BadTopic)?;
+
+                let payload: serde_json::Value =
+                    serde_json::from_slice(publish.payload().as_slice())?;
+
+                break Ok(PublishEvent { topic, payload });
+            }
+        }
+    }
+
+    pub async fn raw_subscribe(&self, topic: &str) -> Result<()> {
+        let subscribe = v5_0::Subscribe::builder()
+            .packet_id(self.next_payload_id())
+            .entries(vec![SubEntry::new(
+                topic.to_string(),
+                SubOpts::new().set_qos(Qos::AtLeastOnce),
+            )?])
+            .build()?;
+
+        tracing::info!("Subscribing to topic '{topic}'");
+
+        self.endpoint
+            .register_packet_id(subscribe.packet_id())
+            .await?;
+
+        self.endpoint.send(subscribe).await?;
+
+        Ok(())
+    }
+
+    pub async fn subscribe(&self, topic: Topic) -> Result<()> {
+        self.raw_subscribe(&topic.to_string()).await
+    }
+
     pub async fn publish(
         &self,
         topic: Topic,
@@ -151,7 +196,13 @@ impl TanukiConnection {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug, Clone)]
+pub struct PublishEvent {
+    pub topic: Topic,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct PublishOpts {
     pub qos: Qos,
     pub retain: bool,

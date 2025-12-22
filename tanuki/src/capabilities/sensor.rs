@@ -4,7 +4,7 @@ use tanuki_common::capabilities::sensor::SensorPayload;
 use super::CapabilityImpl;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
 
-#[capability(id = "tanuki.sensor")]
+#[capability(id = tanuki_common::capabilities::ids::SENSOR)]
 pub struct Sensor<R: EntityRole> {
     cap: TanukiCapability<R>,
 }

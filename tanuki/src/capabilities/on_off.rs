@@ -3,7 +3,7 @@ use tanuki_common::capabilities::on_off::OnOffProperty;
 use super::CapabilityImpl;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
 
-#[capability(id = "tanuki.on_off")]
+#[capability(id = tanuki_common::capabilities::ids::ON_OFF)]
 pub struct OnOff<R: EntityRole> {
     cap: TanukiCapability<R>,
 }

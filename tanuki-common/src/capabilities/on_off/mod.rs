@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Property, property};
 
 pub trait OnOffProperty: Property {}
+pub trait OnOffCommandTrait: Property {}
 
 #[property(OnOffProperty, key = "on")]
 pub struct On(pub bool);

@@ -99,32 +99,41 @@ impl CapMapping {
 
                 on_off.publish(On(on)).await?;
 
-                let light = registry.light(tanuki_id, async |_| unreachable!()).await?;
+                if on {
+                    let light = registry.light(tanuki_id, async |_| unreachable!()).await?;
 
-                if let Some(brightness) = state.attributes.brightness {
-                    light.publish(Brightness(brightness as f32 / 255.0)).await?;
-                }
+                    if let Some(brightness) = state.attributes.brightness {
+                        light.publish(Brightness(brightness as f32)).await?;
+                    }
 
-                if let Some(color_mode) = state.attributes.color_mode
-                    && color_mode != ColorMode::Brightness
-                {
-                    let color_list = match color_mode {
-                        ColorMode::Rgbww => &state.attributes.rgbww_color[..],
-                        ColorMode::Rgbw => &state.attributes.rgbw_color[..],
-                        ColorMode::Rgb => &state.attributes.rgb_color[..],
-                        ColorMode::Hs => &state.attributes.hs_color[..],
-                        ColorMode::Xy => &state.attributes.xy_color[..],
-                        ColorMode::ColorTemp => &[], // TODO
-                        ColorMode::Brightness => &[],
-                        ColorMode::OnOff => &[],
-                    };
+                    if let Some(color_mode) = state.attributes.color_mode
+                        && color_mode != ColorMode::Brightness
+                    {
+                        fn get_color<const N: usize>(opt: &Option<[f32; N]>) -> &[f32] {
+                            match opt {
+                                Some(slice) => slice,
+                                None => &[],
+                            }
+                        }
 
-                    if let Some(color) = Color::from_slice(color_mode, color_list) {
-                        light.publish(ColorProperty(color)).await?;
-                    } else {
-                        tracing::warn!(
-                            "Failed to parse light color from mode {color_mode:?} and data {color_list:?}",
-                        );
+                        let color_list = match color_mode {
+                            ColorMode::Rgbww => get_color(&state.attributes.rgbww_color),
+                            ColorMode::Rgbw => get_color(&state.attributes.rgbw_color),
+                            ColorMode::Rgb => get_color(&state.attributes.rgb_color),
+                            ColorMode::Hs => get_color(&state.attributes.hs_color),
+                            ColorMode::Xy => get_color(&state.attributes.xy_color),
+                            ColorMode::ColorTemp => &[], // TODO
+                            ColorMode::Brightness => &[],
+                            ColorMode::OnOff => &[],
+                        };
+
+                        if let Some(color) = Color::from_slice(color_mode, color_list) {
+                            light.publish(ColorProperty(color)).await?;
+                        } else {
+                            tracing::warn!(
+                                "Failed to parse light color from mode {color_mode:?} and data {color_list:?}",
+                            );
+                        }
                     }
                 }
 
@@ -147,24 +156,29 @@ pub enum ServiceMapping {
 impl ServiceMapping {
     pub(crate) fn translate_command(
         &self,
+        capability: &str,
         topic: &str,
         payload: &serde_json::Value,
     ) -> Option<ServiceCall> {
-        match (self, topic, payload.as_str()) {
-            (Self::OnOff { domain }, "command", Some(r#""on""#)) => Some(ServiceCall {
-                domain: domain.to_string(),
-                service: "turn_on".to_string(),
-                service_data: serde_json::Value::Null,
-            }),
-            (Self::OnOff { domain }, "command", Some(r#""off""#)) => Some(ServiceCall {
-                domain: domain.to_string(),
-                service: "turn_off".to_string(),
-                service_data: serde_json::Value::Null,
-            }),
-            (Self::Light, "color/set", Some(color)) => {
+        use tanuki_common::capabilities::ids;
+        match (self, capability, topic) {
+            (Self::OnOff { domain }, ids::ON_OFF, "command") => match payload.as_str() {
+                Some("on") => Some(ServiceCall {
+                    domain: domain.to_string(),
+                    service: "turn_on".to_string(),
+                    service_data: serde_json::Value::Null,
+                }),
+                Some("off") => Some(ServiceCall {
+                    domain: domain.to_string(),
+                    service: "turn_off".to_string(),
+                    service_data: serde_json::Value::Null,
+                }),
+                _ => None,
+            },
+            (Self::Light, ids::LIGHT, "command") => {
                 use tanuki_common::capabilities::light::Color;
 
-                let color: Color = serde_json::from_str(color).ok()?; // TODO: handle better
+                let color: Color = serde_json::from_value(payload.clone()).ok()?; // TODO: handle better
 
                 Some(ServiceCall {
                     domain: "light".to_string(),
@@ -196,7 +210,7 @@ pub(crate) struct TargetedServiceCall {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ServiceCallTarget {
-    EntityId(EntityId),
+    EntityId(String),
 }
 
 #[cfg(test)]
@@ -212,7 +226,7 @@ mod tests {
                     service: "turn_on".to_string(),
                     service_data: serde_json::json!({ "brightness_pct": 24 }),
                 },
-                target: ServiceCallTarget::EntityId(EntityId::from("light.living_room")),
+                target: ServiceCallTarget::EntityId("light.living_room".to_owned()),
             })
             .unwrap(),
             serde_json::json!({

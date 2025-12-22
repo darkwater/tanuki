@@ -3,7 +3,7 @@ use tanuki_common::capabilities::light::LightProperty;
 use super::CapabilityImpl;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
 
-#[capability(id = "tanuki.light")]
+#[capability(id = tanuki_common::capabilities::ids::LIGHT)]
 pub struct Light<R: EntityRole> {
     cap: TanukiCapability<R>,
 }
