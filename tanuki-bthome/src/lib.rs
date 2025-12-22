@@ -79,15 +79,13 @@ pub async fn bridge(
             }
         };
 
-        let timestamp = update.timestamp.timestamp();
-
         for object in &update.objects {
             sensor
                 .get()
                 .publish(object.topic(), SensorPayload {
                     value: object.value(),
                     unit: object.unit().into(),
-                    timestamp,
+                    timestamp: update.timestamp,
                 })
                 .await?;
         }

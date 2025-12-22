@@ -1,13 +1,22 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tanuki_common::capabilities::light::ColorMode;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[expect(clippy::enum_variant_names)]
 pub enum AuthServerMessage {
-    AuthRequired { ha_version: String },
-    AuthOk { ha_version: String },
-    AuthInvalid { message: String },
+    AuthRequired {
+        ha_version: String,
+    },
+    AuthOk {
+        #[expect(dead_code)]
+        ha_version: String,
+    },
+    AuthInvalid {
+        message: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -23,7 +32,7 @@ pub(crate) struct Packet<T> {
     pub(crate) payload: T,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct PacketId(pub u32);
 
@@ -48,7 +57,7 @@ pub struct ServerError {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 pub struct Event {
     pub data: serde_json::Value,
     pub event_type: String,
@@ -74,4 +83,44 @@ pub enum ClientMessage {
         target: serde_json::Value,
         // return_response: bool,
     },
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct StateChangeEvent {
+    pub entity_id: String,
+    pub new_state: SensorState,
+    pub old_state: SensorState,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct StateEvent {
+    pub entity_id: String,
+    #[serde(flatten)]
+    pub state: SensorState,
+}
+
+#[derive(Debug, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct StateAttributes {
+    // sensor
+    pub unit_of_measurement: String,
+
+    // light
+    pub brightness: Option<u8>,
+    pub color_mode: Option<ColorMode>,
+    pub rgbww_color: [f32; 5],
+    pub rgbw_color: [f32; 4],
+    pub rgb_color: [f32; 3],
+    pub hs_color: [f32; 2],
+    pub xy_color: [f32; 2],
+    pub color_temp: Option<u16>,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct SensorState {
+    pub attributes: StateAttributes,
+    pub last_changed: DateTime<Utc>,
+    pub last_updated: DateTime<Utc>,
+    pub last_reported: DateTime<Utc>,
+    pub state: String,
 }

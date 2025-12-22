@@ -1,21 +1,20 @@
 use core::sync::atomic::AtomicU32;
-use std::collections::{HashMap, hash_map::Entry};
 
 use futures::{SinkExt, Stream, StreamExt};
-use serde::Deserialize;
-use tanuki::{Authority, TanukiConnection, capabilities::sensor::Sensor};
-use tanuki_common::{
-    capabilities::sensor::{SensorPayload, SensorValue},
-    meta,
-};
+use tanuki::{Authority, TanukiConnection, TanukiEntity, registry::Registry};
+use tanuki_common::meta;
 use tokio_tungstenite::tungstenite::{self, Message};
 
+use self::{
+    entity::{EntityDataMapping, MappedEntity},
+    messages::{StateChangeEvent, StateEvent},
+};
 use crate::messages::{
     AuthClientMessage, AuthServerMessage, ClientMessage, Packet, PacketId, ServerMessage,
 };
 
 pub mod entity;
-pub mod messages;
+mod messages;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -33,7 +32,12 @@ pub enum Error {
     Authentication(String),
 }
 
-pub async fn bridge(tanuki: &str, host: &str, token: &str) -> Result<()> {
+pub async fn bridge(
+    tanuki: &str,
+    host: &str,
+    token: &str,
+    mappings: Vec<MappedEntity>,
+) -> Result<()> {
     let addr = format!("wss://{host}/api/websocket");
     let (mut conn, res) = tokio_tungstenite::connect_async(addr).await?;
 
@@ -84,15 +88,24 @@ pub async fn bridge(tanuki: &str, host: &str, token: &str) -> Result<()> {
     }
 
     let id = AtomicU32::new(1);
+    let next_id = move || {
+        PacketId(match id.fetch_add(1, std::sync::atomic::Ordering::Relaxed) {
+            0 => id.fetch_add(1, std::sync::atomic::Ordering::Relaxed), // skip 0
+            n => n,
+        })
+    };
 
-    conn.send(Message::Text(
-        serde_json::to_string(&Packet {
-            // TODO: 0 is an invalid packet id
-            id: PacketId(id.fetch_add(1, std::sync::atomic::Ordering::SeqCst)),
-            payload: ClientMessage::SubscribeEvents { event_type: None },
-        })?
-        .into(),
-    ))
+    conn.send(Message::text(serde_json::to_string(&Packet {
+        id: next_id(),
+        payload: ClientMessage::SubscribeEvents { event_type: None },
+    })?))
+    .await?;
+
+    let get_states_id = next_id();
+    conn.send(Message::text(serde_json::to_string(&Packet {
+        id: get_states_id,
+        payload: ClientMessage::GetStates,
+    })?))
     .await?;
 
     let tanuki = TanukiConnection::connect("tanuki-hass", tanuki).await?;
@@ -103,16 +116,20 @@ pub async fn bridge(tanuki: &str, host: &str, token: &str) -> Result<()> {
         async move {
             loop {
                 let packet = tanuki.recv_raw().await;
-                tracing::debug!("Received packet: {packet:?}");
+                tracing::info!("Received packet: {packet:?}");
             }
         }
     });
 
-    let mut devices = HashMap::<&'static str, Sensor<Authority>>::new();
+    async fn entity_init(ent: &TanukiEntity<Authority>) -> tanuki::Result<()> {
+        ent.publish_meta(meta::Provider("tanuki-hass".into())).await
+    }
+
+    let mut registry = Registry::new(tanuki);
 
     loop {
-        let msg = match conn.next().await {
-            Some(Ok(Message::Text(txt))) => serde_json::from_str::<ServerMessage>(&txt)?,
+        let packet = match conn.next().await {
+            Some(Ok(Message::Text(txt))) => serde_json::from_str::<Packet<ServerMessage>>(&txt)?,
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
             Some(Ok(msg)) => {
                 tracing::warn!("expected text message, got: {:?}", msg);
@@ -124,150 +141,69 @@ pub async fn bridge(tanuki: &str, host: &str, token: &str) -> Result<()> {
             }
         };
 
-        tracing::info!("Received message: {msg:#?}");
+        tracing::info!("Received message: {packet:#?}");
 
-        if let ServerMessage::Event { event } = msg {
-            #[derive(Deserialize)]
-            struct SensorStateEvent {
-                entity_id: String,
-                new_state: SensorState,
-                old_state: SensorState,
-            }
-
-            #[derive(PartialEq, Deserialize)]
-            struct SensorState {
-                attributes: SensorAttributes,
-                state: String,
-            }
-
-            #[derive(PartialEq, Deserialize)]
-            struct SensorAttributes {
-                #[serde(default)]
-                unit_of_measurement: String,
-            }
-
-            struct EntityMapping {
-                tanuki_entity: &'static str,
-                cap: CapMapping,
-            }
-
-            enum CapMapping {
-                Sensor { key: String, binary: bool },
-            }
-
-            impl CapMapping {
-                fn sensor(key: impl ToString) -> Self {
-                    CapMapping::Sensor { key: key.to_string(), binary: false }
+        match packet.payload {
+            ServerMessage::Result { success, result, error } => {
+                if !success {
+                    return Err(Error::Protocol(format!("Request failed: {:?}", error)));
                 }
 
-                fn binary_sensor(key: impl ToString) -> Self {
-                    CapMapping::Sensor { key: key.to_string(), binary: true }
-                }
-            }
+                if packet.id == get_states_id {
+                    let states: Vec<StateEvent> = serde_json::from_value(result)?;
+                    tracing::info!("Initial states received: {} entries", states.len());
 
-            let mappings = HashMap::<&str, EntityMapping>::from_iter([
-                ("sensor.tv_voltage", EntityMapping {
-                    tanuki_entity: "tapo_tv",
-                    cap: CapMapping::sensor("voltage"),
-                }),
-                ("sensor.tv_current", EntityMapping {
-                    tanuki_entity: "tapo_tv",
-                    cap: CapMapping::sensor("current"),
-                }),
-                ("sensor.tv_current_consumption", EntityMapping {
-                    tanuki_entity: "tapo_tv",
-                    cap: CapMapping::sensor("current_consumption"),
-                }),
-                ("sensor.vindstyrka_temperature", EntityMapping {
-                    tanuki_entity: "vindstyrka",
-                    cap: CapMapping::sensor("temperature"),
-                }),
-                ("sensor.vindstyrka_humidity", EntityMapping {
-                    tanuki_entity: "vindstyrka",
-                    cap: CapMapping::sensor("humidity"),
-                }),
-                ("sensor.vindstyrka_pm2_5", EntityMapping {
-                    tanuki_entity: "vindstyrka",
-                    cap: CapMapping::sensor("pm2_5"),
-                }),
-                ("binary_sensor.motion_sensor_motion", EntityMapping {
-                    tanuki_entity: "motion_sensor",
-                    cap: CapMapping::binary_sensor("motion"),
-                }),
-            ]);
+                    for state in states {
+                        tracing::info!(
+                            "Sensor '{}' is {} {}",
+                            state.entity_id,
+                            state.state.state,
+                            state.state.attributes.unit_of_measurement,
+                        );
 
-            if let Ok(sensor_event) = serde_json::from_value::<SensorStateEvent>(event.data) {
-                tracing::info!(
-                    "Sensor '{}' changed from {} {} to {} {}",
-                    sensor_event.entity_id,
-                    sensor_event.old_state.state,
-                    sensor_event.old_state.attributes.unit_of_measurement,
-                    sensor_event.new_state.state,
-                    sensor_event.new_state.attributes.unit_of_measurement,
-                );
+                        for MappedEntity { tanuki_id, from_hass, to_hass: _ } in &mappings {
+                            for EntityDataMapping { from_id, map_to } in from_hass {
+                                if from_id != &state.entity_id {
+                                    continue;
+                                }
 
-                if let Some(EntityMapping { tanuki_entity, cap }) =
-                    mappings.get(sensor_event.entity_id.as_str())
-                {
-                    let entry = devices.entry(tanuki_entity);
-                    let sensor = match entry {
-                        Entry::Occupied(entry) => entry,
-                        Entry::Vacant(entry) => {
-                            let entity = tanuki.owned_entity(tanuki_entity).await?;
-
-                            // entity.publish_meta(meta::Name(name.into())).await?;
-                            // entity
-                            //     .publish_meta(meta::Type("BTHome Sensor".into()))
-                            //     .await?;
-                            entity
-                                .publish_meta(meta::Provider("tanuki-hass".into()))
-                                .await?;
-
-                            let sensor = entity.capability::<Sensor<_>>().await?;
-                            entry.insert_entry(sensor)
+                                map_to
+                                    .propagate_state(
+                                        &state.state,
+                                        &mut registry,
+                                        tanuki_id,
+                                        entity_init,
+                                    )
+                                    .await?;
+                            }
                         }
-                    };
+                    }
+                }
+            }
+            ServerMessage::Event { event } => {
+                if let Ok(sensor_event) = serde_json::from_value::<StateChangeEvent>(event.data) {
+                    tracing::info!(
+                        "Sensor '{}' changed from {} {} to {} {}",
+                        sensor_event.entity_id,
+                        sensor_event.old_state.state,
+                        sensor_event.old_state.attributes.unit_of_measurement,
+                        sensor_event.new_state.state,
+                        sensor_event.new_state.attributes.unit_of_measurement,
+                    );
 
-                    match &cap {
-                        CapMapping::Sensor { key, binary } => {
-                            let value = match binary {
-                                false => {
-                                    let Ok(value) = sensor_event.new_state.state.parse() else {
-                                        tracing::warn!(
-                                            "Failed to parse sensor value '{}' as number",
-                                            sensor_event.new_state.state
-                                        );
-                                        continue;
-                                    };
-                                    SensorValue::Number(value)
-                                }
-                                true => {
-                                    let value = match sensor_event.new_state.state.as_str() {
-                                        "on" | "true" | "1" => true,
-                                        "off" | "false" | "0" => false,
-                                        _ => {
-                                            tracing::warn!(
-                                                "Failed to parse binary sensor value '{}' as boolean",
-                                                sensor_event.new_state.state
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    SensorValue::Boolean(value)
-                                }
-                            };
+                    for MappedEntity { tanuki_id, from_hass, to_hass: _ } in &mappings {
+                        for EntityDataMapping { from_id, map_to } in from_hass {
+                            if from_id != &sensor_event.entity_id {
+                                continue;
+                            }
 
-                            sensor
-                                .get()
-                                .publish(key.clone(), SensorPayload {
-                                    value,
-                                    unit: sensor_event
-                                        .new_state
-                                        .attributes
-                                        .unit_of_measurement
-                                        .into(),
-                                    timestamp: event.time_fired.timestamp(),
-                                })
+                            map_to
+                                .propagate_state(
+                                    &sensor_event.new_state,
+                                    &mut registry,
+                                    tanuki_id,
+                                    entity_init,
+                                )
                                 .await?;
                         }
                     }

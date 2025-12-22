@@ -62,6 +62,6 @@ tanuki/entities/sinon/tanuki.bluetooth/devices/00:1B:63:84:45:E6/type  | "keyboa
 tanuki/entities/sinon/tanuki.bluetooth/devices/00:1B:63:84:45:E6/pair  | <-| <empty>
 tanuki/entities/sinon/foo.system/$meta/version                         | 1
 tanuki/entities/sinon/foo.system/whatever                              | "something custom"
-tanuki/tags/room.living_room/$meta/name                               | "Living Room"
-tanuki/tags/role.server/$meta/name                                    | "Server"
-tanuki/tags/misc.main_light/$meta/name                                | "Main Light"
+tanuki/tags/room.living_room/$meta/name                                | "Living Room"
+tanuki/tags/role.server/$meta/name                                     | "Server"
+tanuki/tags/misc.main_light/$meta/name                                 | "Main Light"

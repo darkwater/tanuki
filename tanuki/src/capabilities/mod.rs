@@ -2,13 +2,15 @@ use core::ops::Deref;
 
 use crate::{EntityRole, TanukiCapability};
 
+pub mod light;
+pub mod on_off;
 pub mod sensor;
 
 pub trait CapabilityImpl<R: EntityRole>:
     From<TanukiCapability<R>> + Deref<Target = TanukiCapability<R>>
 {
     const ID: &'static str;
-    const VERSION: i32 = 1;
+    const VERSION: i32 = 0;
 }
 
 #[macro_export]

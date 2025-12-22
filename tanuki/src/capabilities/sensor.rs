@@ -12,7 +12,7 @@ pub struct Sensor<R: EntityRole> {
 impl Sensor<Authority> {
     pub async fn publish(&self, key: impl ToCompactString, payload: SensorPayload) -> Result<()> {
         self.cap
-            .publish_raw(key.to_compact_string(), &payload, PublishOpts::entity_data())
+            .publish_raw(key, &payload, PublishOpts::entity_data())
             .await
     }
 }

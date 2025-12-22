@@ -12,6 +12,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Property, property};
+
+pub trait OnOffProperty: Property {}
+
+#[property(OnOffProperty, key = "on")]
+pub struct On(pub bool);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnOffCommand {
@@ -23,6 +30,12 @@ pub enum OnOffCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn on_property_format() {
+        assert_eq!(serde_json::to_value(On(true)).unwrap(), serde_json::json!(true));
+        assert_eq!(serde_json::to_value(On(false)).unwrap(), serde_json::json!(false));
+    }
 
     #[test]
     fn on_off_command_format() {

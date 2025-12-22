@@ -12,6 +12,7 @@
 //! ../tanuki.sensor/battery       => { value: 82,   unit: "%",  timestamp: 1712345678 }
 //! ```
 
+use chrono::{DateTime, Utc};
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +23,8 @@ pub struct SensorPayload {
     /// Unit of the sensor value, e.g., "°C", "%", "V"
     pub unit: CompactString,
     /// Unix timestamp in seconds
-    pub timestamp: i64,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,7 +44,7 @@ mod tests {
             serde_json::to_value(&SensorPayload {
                 value: SensorValue::Number(23.5),
                 unit: "°C".into(),
-                timestamp: 1712345678,
+                timestamp: DateTime::<Utc>::from_timestamp_secs(1712345678).unwrap(),
             })
             .unwrap(),
             serde_json::json!({

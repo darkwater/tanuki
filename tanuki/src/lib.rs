@@ -13,7 +13,7 @@ use mqtt_endpoint_tokio::mqtt_ep::{
 use mqtt_protocol_core::mqtt::packet::{Qos, v5_0::Connack};
 use serde::Serialize;
 use tanuki_common::{
-    EntityStatus, Topic,
+    EntityId, EntityStatus, Property, Topic,
     meta::{self, MetaField},
 };
 
@@ -21,8 +21,9 @@ use self::capabilities::CapabilityImpl;
 
 pub mod capabilities;
 pub mod log;
+pub mod registry;
 
-type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -124,15 +125,11 @@ impl TanukiConnection {
         Ok(())
     }
 
-    pub async fn publish_entity_meta<T: MetaField>(
-        &self,
-        entity: impl ToCompactString,
-        meta: T,
-    ) -> Result<()> {
+    pub async fn publish_entity_meta<T: MetaField>(&self, entity: EntityId, meta: T) -> Result<()> {
         self.publish(
             Topic::EntityMeta {
-                entity: entity.to_compact_string(),
-                key: T::KEY,
+                entity,
+                key: CompactString::const_new(T::KEY),
             },
             meta,
             PublishOpts::metadata(),
@@ -142,10 +139,10 @@ impl TanukiConnection {
 
     pub async fn owned_entity(
         self: &Arc<Self>,
-        id: impl ToCompactString,
+        id: impl Into<EntityId>,
     ) -> Result<Arc<TanukiEntity<Authority>>> {
         let entity = TanukiEntity {
-            id: id.to_compact_string(),
+            id: id.into(),
             conn: self.clone(),
             _role: PhantomData,
         };
@@ -191,7 +188,7 @@ impl EntityRole for User {
 }
 
 pub struct TanukiEntity<R: EntityRole> {
-    id: CompactString,
+    id: EntityId,
     conn: Arc<TanukiConnection>,
     _role: PhantomData<R>,
 }
@@ -199,7 +196,7 @@ pub struct TanukiEntity<R: EntityRole> {
 impl TanukiEntity<Authority> {
     pub(crate) async fn initialize(&self) -> Result<()> {
         self.conn
-            .publish_entity_meta(&self.id, meta::Status(EntityStatus::Online)) // TODO: Init first
+            .publish_entity_meta(self.id.clone(), meta::Status(EntityStatus::Online)) // TODO: Init first
             .await?;
 
         Ok(())
@@ -212,12 +209,12 @@ impl TanukiEntity<Authority> {
     // }
 
     pub async fn publish_meta(&self, meta: impl MetaField) -> Result<()> {
-        self.conn.publish_entity_meta(&self.id, meta).await
+        self.conn.publish_entity_meta(self.id.clone(), meta).await
     }
 }
 
 impl<R: EntityRole> TanukiEntity<R> {
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> &EntityId {
         &self.id
     }
 
@@ -249,7 +246,7 @@ impl<R: EntityRole> TanukiCapability<R> {
         self.entity.clone()
     }
 
-    pub fn entity_id(&self) -> &str {
+    pub fn entity_id(&self) -> &EntityId {
         self.entity.id()
     }
 
@@ -270,7 +267,7 @@ impl<R: EntityRole> TanukiCapability<R> {
         opts: PublishOpts,
     ) -> Result<()> {
         let topic = Topic::CapabilityData {
-            entity: self.entity.id().into(),
+            entity: self.entity.id().clone(),
             capability: self.capability.clone(),
             rest: topic.to_compact_string(),
         };
@@ -278,11 +275,19 @@ impl<R: EntityRole> TanukiCapability<R> {
         self.entity.conn.publish(topic, payload, opts).await
     }
 
+    pub async fn publish_property<T: Property>(
+        &self,
+        property: T,
+        opts: PublishOpts,
+    ) -> Result<()> {
+        self.publish_raw(T::KEY, property, opts).await
+    }
+
     pub async fn publish_meta<T: MetaField>(&self, meta: T) -> Result<()> {
         let topic = Topic::CapabilityMeta {
-            entity: self.entity.id().into(),
+            entity: self.entity.id().clone(),
             capability: self.capability.clone(),
-            key: T::KEY,
+            key: CompactString::const_new(T::KEY),
         };
 
         self.entity
