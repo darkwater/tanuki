@@ -1,3 +1,4 @@
+use core::any::{Any, TypeId};
 use std::{
     collections::{HashMap, hash_map::Entry},
     sync::Arc,
@@ -5,46 +6,12 @@ use std::{
 
 use tanuki_common::EntityId;
 
-use crate::{
-    Authority, Result, TanukiConnection, TanukiEntity,
-    capabilities::{CapabilityImpl, light::Light, on_off::OnOff, sensor::Sensor},
-};
+use crate::{Authority, Result, TanukiConnection, TanukiEntity, capabilities::Capability};
 
 pub struct Registry {
     tanuki: Arc<TanukiConnection>,
     entities: HashMap<EntityId, Arc<TanukiEntity<Authority>>>,
-    sensors: HashMap<EntityId, Sensor<Authority>>,
-    on_offs: HashMap<EntityId, OnOff<Authority>>,
-    lights: HashMap<EntityId, Light<Authority>>,
-}
-
-async fn get<'a, T: CapabilityImpl<Authority>>(
-    tanuki: &Arc<TanukiConnection>,
-    entities: &mut HashMap<EntityId, Arc<TanukiEntity<Authority>>>,
-    cap_map: &'a mut HashMap<EntityId, T>,
-    id: &EntityId,
-    init: impl AsyncFnOnce(&TanukiEntity<Authority>) -> Result<()>,
-) -> Result<&'a mut T> {
-    let cap = cap_map.entry(id.clone());
-    let out = match cap {
-        Entry::Occupied(cap) => cap.into_mut(),
-        Entry::Vacant(entry) => {
-            let entity = entities.entry(id.clone());
-            let entity = match entity {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => {
-                    let entity = tanuki.owned_entity(id.clone()).await?;
-                    init(&entity).await?;
-                    entry.insert(entity)
-                }
-            };
-
-            let sensor = entity.capability::<T>().await?;
-            entry.insert(sensor)
-        }
-    };
-
-    Ok(out)
+    caps: HashMap<(EntityId, TypeId), Box<dyn Any + Send + Sync + 'static>>,
 }
 
 impl Registry {
@@ -52,33 +19,36 @@ impl Registry {
         Self {
             tanuki,
             entities: HashMap::new(),
-            sensors: HashMap::new(),
-            on_offs: HashMap::new(),
-            lights: HashMap::new(),
+            caps: HashMap::new(),
         }
     }
 
-    pub async fn sensor(
+    pub async fn get<T: Capability<Authority> + Send + Sync + 'static>(
         &mut self,
         id: &EntityId,
         entity_init: impl AsyncFnOnce(&TanukiEntity<Authority>) -> Result<()>,
-    ) -> Result<&mut Sensor<Authority>> {
-        get(&self.tanuki, &mut self.entities, &mut self.sensors, id, entity_init).await
-    }
+    ) -> Result<&mut T> {
+        let cap = self.caps.entry((id.clone(), TypeId::of::<T>()));
+        let out = match cap {
+            Entry::Occupied(cap) => cap.into_mut(),
+            Entry::Vacant(entry) => {
+                let entity = self.entities.entry(id.clone());
+                let entity = match entity {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        let entity = self.tanuki.owned_entity(id.clone()).await?;
+                        entity_init(&entity).await?;
+                        entry.insert(entity)
+                    }
+                };
 
-    pub async fn on_off(
-        &mut self,
-        id: &EntityId,
-        entity_init: impl AsyncFnOnce(&TanukiEntity<Authority>) -> Result<()>,
-    ) -> Result<&mut OnOff<Authority>> {
-        get(&self.tanuki, &mut self.entities, &mut self.on_offs, id, entity_init).await
-    }
+                let sensor = entity.capability::<T>().await?;
+                entry.insert(Box::new(sensor))
+            }
+        };
 
-    pub async fn light(
-        &mut self,
-        id: &EntityId,
-        entity_init: impl AsyncFnOnce(&TanukiEntity<Authority>) -> Result<()>,
-    ) -> Result<&mut Light<Authority>> {
-        get(&self.tanuki, &mut self.entities, &mut self.lights, id, entity_init).await
+        Ok(out
+            .downcast_mut::<T>()
+            .expect("wrong type stored in registry"))
     }
 }

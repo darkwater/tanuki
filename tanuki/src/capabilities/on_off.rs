@@ -1,6 +1,6 @@
 use tanuki_common::capabilities::on_off::OnOffProperty;
 
-use super::CapabilityImpl;
+use super::Capability;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
 
 #[capability(id = tanuki_common::capabilities::ids::ON_OFF)]

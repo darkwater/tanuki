@@ -1,5 +1,9 @@
 use serde::Serialize;
-use tanuki::{Authority, TanukiEntity, registry::Registry};
+use tanuki::{
+    Authority, TanukiEntity,
+    capabilities::{light::Light, on_off::OnOff, sensor::Sensor},
+    registry::Registry,
+};
 use tanuki_common::{
     EntityId,
     capabilities::{
@@ -45,7 +49,7 @@ impl CapMapping {
     ) -> tanuki::Result<()> {
         match self {
             CapMapping::Sensor { key, binary } => {
-                let sensor = registry.sensor(tanuki_id, entity_init).await?;
+                let sensor: &mut Sensor<Authority> = registry.get(tanuki_id, entity_init).await?;
 
                 let value = match binary {
                     false => {
@@ -83,7 +87,7 @@ impl CapMapping {
                     .await
             }
             CapMapping::Light => {
-                let on_off = registry.on_off(tanuki_id, entity_init).await?;
+                let on_off: &mut OnOff<Authority> = registry.get(tanuki_id, entity_init).await?;
 
                 let on = match state.state.as_str() {
                     "on" => true,
@@ -100,7 +104,8 @@ impl CapMapping {
                 on_off.publish(On(on)).await?;
 
                 if on {
-                    let light = registry.light(tanuki_id, async |_| unreachable!()).await?;
+                    let light: &mut Light<Authority> =
+                        registry.get(tanuki_id, async |_| unreachable!()).await?;
 
                     if let Some(brightness) = state.attributes.brightness {
                         light.publish(Brightness(brightness as f32)).await?;

@@ -1,7 +1,7 @@
 use compact_str::ToCompactString;
 use tanuki_common::capabilities::sensor::SensorPayload;
 
-use super::CapabilityImpl;
+use super::Capability;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
 
 #[capability(id = tanuki_common::capabilities::ids::SENSOR)]
