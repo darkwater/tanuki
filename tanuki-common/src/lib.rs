@@ -1,5 +1,5 @@
 #![cfg_attr(not(test), no_std)]
-#![feature(macro_attr, str_split_remainder)]
+#![feature(macro_attr, macro_derive, str_split_remainder)]
 
 extern crate alloc;
 
@@ -9,6 +9,7 @@ use compact_str::{CompactString, ToCompactString};
 use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
+pub mod macros;
 pub mod meta;
 
 #[doc(hidden)]
@@ -35,19 +36,6 @@ impl Display for EntityId {
     fn fmt(&self, f: &mut alloc::fmt::Formatter<'_>) -> alloc::fmt::Result {
         write!(f, "{}", self.0)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityStatus {
-    /// The entity is online but its data may not yet be valid
-    Init,
-    /// The entity is online and its data is valid
-    Online,
-    /// The entity disconnected cleanly
-    Disconnected,
-    /// The entity was unexpectedly disconnected and its data may not be valid
-    Lost,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

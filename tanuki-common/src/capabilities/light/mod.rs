@@ -6,11 +6,16 @@ use crate::{Property, property};
 
 pub trait LightProperty: Property {}
 
-#[property(LightProperty, key = "brightness")]
-pub struct Brightness(pub f32);
-
-#[property(LightProperty, key = "color")]
-pub struct ColorProperty(pub Color);
+#[property(LightProperty, State, key = "state")]
+pub struct LightState {
+    /// Should also be provided by tanuki.on_off
+    pub on: bool,
+    /// Brightness level (0.0-1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]

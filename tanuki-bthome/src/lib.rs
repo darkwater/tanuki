@@ -1,7 +1,10 @@
 use std::collections::{HashMap, hash_map::Entry};
 
 use heck::ToSnakeCase as _;
-use tanuki::{Authority, TanukiConnection, capabilities::sensor::Sensor};
+use tanuki::{
+    TanukiConnection,
+    capabilities::{Authority, sensor::Sensor},
+};
 use tanuki_common::{capabilities::sensor::SensorPayload, meta};
 
 mod bthome;
@@ -64,7 +67,7 @@ pub async fn bridge(
                     .cloned()
                     .unwrap_or((update.name.to_snake_case(), update.name));
 
-                let entity = tanuki.owned_entity(id).await?;
+                let entity = tanuki.entity(id).await?;
 
                 entity.publish_meta(meta::Name(name.into())).await?;
                 entity

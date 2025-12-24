@@ -16,10 +16,11 @@ use mqtt_protocol_core::mqtt::packet::{
 };
 use serde::Serialize;
 use tanuki_common::{
-    EntityId, EntityStatus, Topic,
+    EntityId, Topic,
     meta::{self, MetaField},
 };
 
+use self::capabilities::{Authority, EntityRole};
 use crate::capabilities::{Capability, TanukiCapability};
 
 pub mod capabilities;
@@ -182,16 +183,18 @@ impl TanukiConnection {
         .await
     }
 
-    pub async fn owned_entity(
+    pub async fn entity<R: EntityRole>(
         self: &Arc<Self>,
         id: impl Into<EntityId>,
-    ) -> Result<Arc<TanukiEntity<Authority>>> {
-        let entity = TanukiEntity {
+    ) -> Result<Arc<TanukiEntity<R>>> {
+        let entity = TanukiEntity::<R> {
             id: id.into(),
             conn: self.clone(),
             _role: PhantomData,
         };
-        entity.initialize().await?;
+
+        R::_maybe_initialize(&entity).await?;
+
         Ok(Arc::new(entity))
     }
 }
@@ -226,18 +229,6 @@ impl PublishOpts {
     }
 }
 
-pub trait EntityRole {
-    const AUTHORITY: bool;
-}
-pub struct Authority;
-pub struct User;
-impl EntityRole for Authority {
-    const AUTHORITY: bool = true;
-}
-impl EntityRole for User {
-    const AUTHORITY: bool = false;
-}
-
 pub struct TanukiEntity<R: EntityRole> {
     id: EntityId,
     conn: Arc<TanukiConnection>,
@@ -247,7 +238,7 @@ pub struct TanukiEntity<R: EntityRole> {
 impl TanukiEntity<Authority> {
     pub(crate) async fn initialize(&self) -> Result<()> {
         self.conn
-            .publish_entity_meta(self.id.clone(), meta::Status(EntityStatus::Online)) // TODO: Init first
+            .publish_entity_meta(self.id.clone(), meta::EntityStatus::Online) // TODO: Init first
             .await?;
 
         Ok(())

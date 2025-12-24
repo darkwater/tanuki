@@ -10,17 +10,17 @@
 //! ../tanuki.on_off/command       <- "on" | "off" | "toggle"
 //! ```
 
-use serde::{Deserialize, Serialize};
-
 use crate::{Property, property};
 
 pub trait OnOffProperty: Property {}
 pub trait OnOffCommandTrait: Property {}
 
-#[property(OnOffProperty, key = "on")]
+#[property(OnOffProperty, State, key = "on")]
+#[derive(Copy, Eq)]
 pub struct On(pub bool);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[property(OnOffProperty, Command, key = "command")]
+#[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OnOffCommand {
     On,
@@ -40,10 +40,10 @@ mod tests {
 
     #[test]
     fn on_off_command_format() {
-        assert_eq!(serde_json::to_value(&OnOffCommand::On).unwrap(), serde_json::json!("on"));
-        assert_eq!(serde_json::to_value(&OnOffCommand::Off).unwrap(), serde_json::json!("off"));
+        assert_eq!(serde_json::to_value(OnOffCommand::On).unwrap(), serde_json::json!("on"));
+        assert_eq!(serde_json::to_value(OnOffCommand::Off).unwrap(), serde_json::json!("off"));
         assert_eq!(
-            serde_json::to_value(&OnOffCommand::Toggle).unwrap(),
+            serde_json::to_value(OnOffCommand::Toggle).unwrap(),
             serde_json::json!("toggle")
         );
     }

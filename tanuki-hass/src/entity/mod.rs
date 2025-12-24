@@ -1,13 +1,13 @@
 use serde::Serialize;
 use tanuki::{
-    Authority, TanukiEntity,
-    capabilities::{light::Light, on_off::OnOff, sensor::Sensor},
+    TanukiEntity,
+    capabilities::{Authority, light::Light, on_off::OnOff, sensor::Sensor},
     registry::Registry,
 };
 use tanuki_common::{
     EntityId,
     capabilities::{
-        light::{Brightness, Color, ColorMode, ColorProperty},
+        light::{Color, ColorMode, LightState},
         on_off::On,
         sensor::{SensorPayload, SensorValue},
     },
@@ -87,8 +87,6 @@ impl CapMapping {
                     .await
             }
             CapMapping::Light => {
-                let on_off: &mut OnOff<Authority> = registry.get(tanuki_id, entity_init).await?;
-
                 let on = match state.state.as_str() {
                     "on" => true,
                     "off" => false,
@@ -101,46 +99,42 @@ impl CapMapping {
                     }
                 };
 
-                on_off.publish(On(on)).await?;
+                let brightness = state
+                    .attributes
+                    .brightness
+                    .map(|b| (b as f32 / 254.0).clamp(0., 1.));
 
-                if on {
-                    let light: &mut Light<Authority> =
-                        registry.get(tanuki_id, async |_| unreachable!()).await?;
-
-                    if let Some(brightness) = state.attributes.brightness {
-                        light.publish(Brightness(brightness as f32)).await?;
-                    }
-
-                    if let Some(color_mode) = state.attributes.color_mode
-                        && color_mode != ColorMode::Brightness
-                    {
-                        fn get_color<const N: usize>(opt: &Option<[f32; N]>) -> &[f32] {
-                            match opt {
-                                Some(slice) => slice,
-                                None => &[],
-                            }
-                        }
-
-                        let color_list = match color_mode {
-                            ColorMode::Rgbww => get_color(&state.attributes.rgbww_color),
-                            ColorMode::Rgbw => get_color(&state.attributes.rgbw_color),
-                            ColorMode::Rgb => get_color(&state.attributes.rgb_color),
-                            ColorMode::Hs => get_color(&state.attributes.hs_color),
-                            ColorMode::Xy => get_color(&state.attributes.xy_color),
-                            ColorMode::ColorTemp => &[], // TODO
-                            ColorMode::Brightness => &[],
-                            ColorMode::OnOff => &[],
-                        };
-
-                        if let Some(color) = Color::from_slice(color_mode, color_list) {
-                            light.publish(ColorProperty(color)).await?;
-                        } else {
-                            tracing::warn!(
-                                "Failed to parse light color from mode {color_mode:?} and data {color_list:?}",
-                            );
-                        }
+                fn get_color<const N: usize>(opt: &Option<[f32; N]>) -> &[f32] {
+                    match opt {
+                        Some(slice) => slice,
+                        None => &[],
                     }
                 }
+
+                let color = state.attributes.color_mode.and_then(|color_mode| {
+                    let color_list = match color_mode {
+                        ColorMode::Rgbww => get_color(&state.attributes.rgbww_color),
+                        ColorMode::Rgbw => get_color(&state.attributes.rgbw_color),
+                        ColorMode::Rgb => get_color(&state.attributes.rgb_color),
+                        ColorMode::Hs => get_color(&state.attributes.hs_color),
+                        ColorMode::Xy => get_color(&state.attributes.xy_color),
+                        _ => &[], // TODO: handle more cases
+                    };
+
+                    Color::from_slice(color_mode, color_list)
+                });
+
+                registry
+                    .get::<Light<Authority>>(tanuki_id, entity_init)
+                    .await?
+                    .publish(LightState { on, brightness, color })
+                    .await?;
+
+                registry
+                    .get::<OnOff<Authority>>(tanuki_id, async |_| unreachable!())
+                    .await?
+                    .publish(On(on))
+                    .await?;
 
                 Ok(())
             }

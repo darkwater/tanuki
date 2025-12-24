@@ -2,8 +2,8 @@ use core::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 use futures::{SinkExt, Stream, StreamExt};
-use tanuki::{Authority, TanukiConnection, TanukiEntity, registry::Registry};
-use tanuki_common::{EntityId, Topic, meta};
+use tanuki::{TanukiConnection, TanukiEntity, capabilities::Authority, registry::Registry};
+use tanuki_common::{Topic, meta};
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use self::{

@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ButtonEvent {
     /// Button was pressed
@@ -25,7 +25,7 @@ mod tests {
     #[test]
     fn button_event_format() {
         assert_eq!(
-            serde_json::to_value(&ButtonEvent::Pressed).unwrap(),
+            serde_json::to_value(ButtonEvent::Pressed).unwrap(),
             serde_json::json!("pressed")
         );
     }

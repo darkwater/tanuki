@@ -8,7 +8,7 @@ use tanuki_common::{
     meta::{self, MetaField},
 };
 
-use crate::{EntityRole, PublishOpts, Result, TanukiEntity};
+use crate::{PublishOpts, Result, TanukiEntity};
 
 pub mod light;
 pub mod on_off;
@@ -72,6 +72,34 @@ impl<R: EntityRole> TanukiCapability<R> {
             .conn
             .publish(topic, meta, PublishOpts::metadata())
             .await
+    }
+}
+
+pub trait EntityRole {
+    const AUTHORITY: bool;
+
+    #[doc(hidden)] // implementation detail
+    #[expect(async_fn_in_trait)] // its internal anyway
+    async fn _maybe_initialize(entity: &TanukiEntity<Self>) -> Result<()>
+    where
+        Self: Sized;
+}
+
+pub struct Authority;
+pub struct User;
+
+impl EntityRole for Authority {
+    const AUTHORITY: bool = true;
+
+    async fn _maybe_initialize(entity: &TanukiEntity<Self>) -> Result<()> {
+        entity.initialize().await
+    }
+}
+impl EntityRole for User {
+    const AUTHORITY: bool = false;
+
+    async fn _maybe_initialize(_entity: &TanukiEntity<Self>) -> Result<()> {
+        Ok(())
     }
 }
 
