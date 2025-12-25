@@ -1,20 +1,25 @@
-use core::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
-use futures::{SinkExt, Stream, StreamExt};
-use tanuki::{TanukiConnection, TanukiEntity, capabilities::Authority, registry::Registry};
-use tanuki_common::{Topic, meta};
-use tokio_tungstenite::tungstenite::{self, Message};
+use tanuki::{
+    TanukiConnection, TanukiEntity,
+    capabilities::{Authority, light::Light, on_off::OnOff},
+    registry::Registry,
+};
+use tanuki_common::{
+    capabilities::{light::LightCommand, on_off::OnOffCommand},
+    meta,
+};
+use tokio_tungstenite::tungstenite::{self};
 
 use self::{
-    entity::{EntityDataMapping, EntityServiceMapping, MappedEntity, ServiceCallTarget},
+    entity::{EntityDataMapping, EntityServiceMapping, MappedEntity, ServiceCall, ServiceMapping},
+    hass::HomeAssistant,
     messages::{StateChangeEvent, StateEvent},
 };
-use crate::messages::{
-    AuthClientMessage, AuthServerMessage, ClientMessage, Packet, PacketId, ServerMessage,
-};
+use crate::messages::{Packet, PacketId, ServerMessage};
 
 pub mod entity;
+mod hass;
 mod messages;
 
 type Result<T> = std::result::Result<T, Error>;
@@ -40,156 +45,93 @@ pub async fn bridge(
     mappings: Vec<MappedEntity>,
 ) -> Result<()> {
     let addr = format!("wss://{host}/api/websocket");
-    let (mut conn, res) = tokio_tungstenite::connect_async(addr).await?;
-
-    tracing::debug!("WebSocket response: {res:?}");
-
-    // Authentication phase
-    async fn get_message(
-        mut conn: impl Stream<Item = tungstenite::Result<Message>> + Unpin,
-    ) -> Result<AuthServerMessage> {
-        match conn.next().await {
-            Some(Ok(Message::Text(txt))) => {
-                serde_json::from_str::<AuthServerMessage>(&txt).map_err(Error::from)
-            }
-            Some(Ok(msg)) => Err(Error::Protocol(format!("expected text message, got: {:?}", msg))),
-            Some(Err(e)) => Err(Error::WebSocket(e)),
-            None => Err(Error::Protocol("connection closed unexpectedly".to_string())),
-        }
-    }
-
-    let auth_required = get_message(&mut conn).await?;
-    match auth_required {
-        AuthServerMessage::AuthRequired { ha_version } => {
-            tracing::info!("Connected to Home Assistant version {ha_version}");
-        }
-        _ => {
-            return Err(Error::Protocol(format!(
-                "expected AuthRequired message, got: {auth_required:?}",
-            )));
-        }
-    }
-
-    conn.send(Message::Text(
-        serde_json::to_string(&AuthClientMessage::Auth { access_token: token.to_owned() })?.into(),
-    ))
-    .await?;
-
-    let auth_required = get_message(&mut conn).await?;
-    match auth_required {
-        AuthServerMessage::AuthOk { ha_version: _ } => {
-            tracing::info!("Authentication successful");
-        }
-        AuthServerMessage::AuthInvalid { message } => {
-            return Err(Error::Authentication(message));
-        }
-        _ => {
-            return Err(Error::Protocol(format!("expected auth outcome, got: {auth_required:?}")));
-        }
-    }
-
-    let id = AtomicU32::new(1);
-    let next_id = move || {
-        PacketId(match id.fetch_add(1, std::sync::atomic::Ordering::Relaxed) {
-            0 => id.fetch_add(1, std::sync::atomic::Ordering::Relaxed), // skip 0
-            n => n,
-        })
-    };
-
-    conn.send(Message::text(serde_json::to_string(&Packet {
-        id: next_id(),
-        payload: ClientMessage::SubscribeEvents { event_type: None },
-    })?))
-    .await?;
-
-    let get_states_id = next_id();
-    conn.send(Message::text(serde_json::to_string(&Packet {
-        id: get_states_id,
-        payload: ClientMessage::GetStates,
-    })?))
-    .await?;
-
-    let tanuki: Arc<TanukiConnection> = TanukiConnection::connect("tanuki-hass", tanuki).await?;
-
-    let mappings = Arc::<[_]>::from(mappings.into_boxed_slice());
-
-    let (mut conn_tx, mut conn_rx) = conn.split();
-
-    tokio::spawn({
-        let tanuki = tanuki.clone();
-        let mappings = mappings.clone();
-
-        tanuki.subscribe(Topic::CAPABILITY_DATA_WILDCARD).await?;
-
-        async move {
-            loop {
-                let packet = tanuki.recv().await;
-                tracing::info!("Received message: {packet:?}");
-
-                let Ok(packet) = packet else {
-                    continue;
-                };
-
-                if let Topic::CapabilityData { entity, capability, rest } = packet.topic {
-                    for MappedEntity { tanuki_id, from_hass: _, to_hass } in mappings.as_ref() {
-                        if tanuki_id != &entity {
-                            continue;
-                        }
-
-                        for EntityServiceMapping { hass_id, service } in to_hass {
-                            let cmd =
-                                service.translate_command(&capability, &rest, &packet.payload);
-
-                            if let Some(cmd) = cmd {
-                                tracing::info!("{hass_id} <- {cmd:#?}");
-
-                                // TODO
-                                conn_tx
-                                    .send(Message::text(
-                                        serde_json::to_string(&Packet {
-                                            id: next_id(),
-                                            payload: ClientMessage::CallService {
-                                                domain: cmd.domain,
-                                                service: cmd.service,
-                                                service_data: cmd.service_data,
-                                                target: ServiceCallTarget::EntityId(
-                                                    hass_id.clone(),
-                                                ),
-                                            },
-                                        })
-                                        .unwrap(),
-                                    ))
-                                    .await
-                                    .unwrap();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
+    let (hass, mut hass_rx) = HomeAssistant::connect(&addr, token).await?;
+    let hass = Arc::new(hass);
 
     async fn entity_init(ent: &TanukiEntity<Authority>) -> tanuki::Result<()> {
         ent.publish_meta(meta::Provider("tanuki-hass".into())).await
     }
 
-    let mut registry = Registry::new(tanuki);
+    let tanuki: Arc<TanukiConnection> = TanukiConnection::connect("tanuki-hass", tanuki).await?;
+
+    let mut registry = Registry::new(tanuki.clone());
+
+    let mappings = Arc::<[_]>::from(mappings.into_boxed_slice());
+
+    tokio::spawn({
+        let tanuki = tanuki.clone();
+
+        async move {
+            let Err(e) = tanuki.handle().await;
+            tracing::error!("Error handling Tanuki messages: {e}");
+        }
+    });
+
+    for MappedEntity { tanuki_id, from_hass: _, to_hass } in mappings.as_ref() {
+        for EntityServiceMapping { hass_id, service } in to_hass {
+            let hass = hass.clone();
+            let hass_id = hass_id.clone();
+
+            match *service {
+                ServiceMapping::OnOff { domain } => {
+                    let entity: &mut OnOff<Authority> =
+                        registry.get(tanuki_id, entity_init).await?;
+
+                    entity
+                        .listen(move |cmd: OnOffCommand| {
+                            let call = ServiceCall {
+                                domain: domain.to_string(),
+                                service: match cmd {
+                                    OnOffCommand::On => "turn_on".to_string(),
+                                    OnOffCommand::Off => "turn_off".to_string(),
+                                    OnOffCommand::Toggle => "toggle".to_string(),
+                                },
+                                service_data: serde_json::Value::Null,
+                            };
+
+                            hass.call_service(call.target_entity(&hass_id));
+                        })
+                        .await
+                        .unwrap(); // TODO: better handling?
+                }
+                ServiceMapping::Light => {
+                    let entity: &mut Light<Authority> =
+                        registry.get(tanuki_id, entity_init).await?;
+
+                    entity
+                        .listen(move |cmd: LightCommand| {
+                            let call = ServiceCall {
+                                domain: "light".to_string(),
+                                service: match cmd.on {
+                                    true => "turn_on".to_string(),
+                                    false => "turn_off".to_string(),
+                                },
+                                service_data: if cmd.on
+                                    && let Some(color) = cmd.color
+                                {
+                                    serde_json::json!({
+                                        color.hass_service_data_key(): color.to_hass()
+                                    })
+                                } else {
+                                    serde_json::Value::Null
+                                },
+                            };
+
+                            hass.call_service(call.target_entity(&hass_id));
+                        })
+                        .await
+                        .unwrap(); // TODO: better handling?
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
 
     loop {
-        let packet = match conn_rx.next().await {
-            Some(Ok(Message::Text(txt))) => serde_json::from_str::<Packet<ServerMessage>>(&txt)?,
-            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-            Some(Ok(msg)) => {
-                tracing::warn!("expected text message, got: {:?}", msg);
-                continue;
-            }
-            Some(Err(e)) => return Err(Error::WebSocket(e)),
-            None => {
-                return Err(Error::Protocol("connection closed unexpectedly".to_string()));
-            }
+        let Some(packet) = hass_rx.recv().await else {
+            panic!("Home Assistant connection closed");
         };
-
-        tracing::info!("Received message: {packet:#?}");
 
         match packet.payload {
             ServerMessage::Result { success, result, error } => {
@@ -197,8 +139,8 @@ pub async fn bridge(
                     return Err(Error::Protocol(format!("Request failed: {:?}", error)));
                 }
 
-                if packet.id == get_states_id {
-                    let states: Vec<StateEvent> = serde_json::from_value(result)?;
+                // get_states result
+                if let Ok(states) = serde_json::from_value::<Vec<StateEvent>>(result) {
                     for state in states {
                         tracing::debug!(
                             "Sensor '{}' is {} {}",

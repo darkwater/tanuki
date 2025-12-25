@@ -152,51 +152,20 @@ pub enum ServiceMapping {
     Light,
 }
 
-impl ServiceMapping {
-    pub(crate) fn translate_command(
-        &self,
-        capability: &str,
-        topic: &str,
-        payload: &serde_json::Value,
-    ) -> Option<ServiceCall> {
-        use tanuki_common::capabilities::ids;
-        match (self, capability, topic) {
-            (Self::OnOff { domain }, ids::ON_OFF, "command") => match payload.as_str() {
-                Some("on") => Some(ServiceCall {
-                    domain: domain.to_string(),
-                    service: "turn_on".to_string(),
-                    service_data: serde_json::Value::Null,
-                }),
-                Some("off") => Some(ServiceCall {
-                    domain: domain.to_string(),
-                    service: "turn_off".to_string(),
-                    service_data: serde_json::Value::Null,
-                }),
-                _ => None,
-            },
-            (Self::Light, ids::LIGHT, "command") => {
-                use tanuki_common::capabilities::light::Color;
-
-                let color: Color = serde_json::from_value(payload.clone()).ok()?; // TODO: handle better
-
-                Some(ServiceCall {
-                    domain: "light".to_string(),
-                    service: "turn_on".to_string(),
-                    service_data: serde_json::json!({
-                        color.hass_service_data_key(): color.to_hass()
-                    }),
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub(crate) struct ServiceCall {
     pub domain: String,
     pub service: String,
     pub service_data: serde_json::Value,
+}
+
+impl ServiceCall {
+    pub fn target_entity(self, entity_id: impl ToString) -> TargetedServiceCall {
+        TargetedServiceCall {
+            call: self,
+            target: ServiceCallTarget::EntityId(entity_id.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

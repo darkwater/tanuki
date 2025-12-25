@@ -16,7 +16,7 @@ pub mod meta;
 pub use serde as _serde;
 
 mod property;
-pub use property::Property;
+pub use property::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

@@ -15,3 +15,16 @@ impl Light<Authority> {
             .await
     }
 }
+
+impl<R: EntityRole> Light<R> {
+    pub async fn listen<T: LightProperty>(
+        &self,
+        listener: impl Fn(T) + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.cap.listen(listener, false).await
+    }
+
+    pub async fn get<T: LightProperty + Send + 'static>(&self) -> Result<T> {
+        self.cap.get().await
+    }
+}

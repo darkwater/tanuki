@@ -16,3 +16,7 @@ impl Sensor<Authority> {
             .await
     }
 }
+
+impl<R: EntityRole> Sensor<R> {
+    // pub fn get<T:
+}

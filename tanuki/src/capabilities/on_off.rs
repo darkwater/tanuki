@@ -15,3 +15,16 @@ impl OnOff<Authority> {
             .await
     }
 }
+
+impl<R: EntityRole> OnOff<R> {
+    pub async fn listen<T: OnOffProperty>(
+        &self,
+        listener: impl Fn(T) + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.cap.listen(listener, false).await
+    }
+
+    pub async fn get<T: OnOffProperty + Send + 'static>(&self) -> Result<T> {
+        self.cap.get().await
+    }
+}

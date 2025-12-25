@@ -1,7 +1,7 @@
 #![feature(macro_attr)]
 
-use core::{marker::PhantomData, str::FromStr as _, sync::atomic::AtomicU16};
-use std::sync::Arc;
+use core::{convert::Infallible, marker::PhantomData, str::FromStr as _, sync::atomic::AtomicU16};
+use std::{collections::BTreeMap, sync::Arc};
 
 use compact_str::{CompactString, ToCompactString};
 use mqtt_endpoint_tokio::mqtt_ep::{
@@ -11,7 +11,7 @@ use mqtt_endpoint_tokio::mqtt_ep::{
     transport::{TcpTransport, connect_helper},
 };
 use mqtt_protocol_core::mqtt::packet::{
-    Qos, SubEntry, SubOpts,
+    Property, Qos, SubEntry, SubOpts, SubscriptionIdentifier,
     v5_0::{Connack, Publish},
 };
 use serde::Serialize;
@@ -19,6 +19,7 @@ use tanuki_common::{
     EntityId, Topic,
     meta::{self, MetaField},
 };
+use tokio::sync::Mutex;
 
 use self::capabilities::{Authority, EntityRole};
 use crate::capabilities::{Capability, TanukiCapability};
@@ -51,9 +52,13 @@ impl From<mqtt_ep::result_code::MqttError> for Error {
     }
 }
 
+pub(crate) type SubscriptionHandler = Box<dyn FnMut(PublishEvent) -> bool + Send + Sync>;
+
 pub struct TanukiConnection {
     endpoint: Endpoint<role::Client>,
     next_payload_id: AtomicU16,
+    // key could be SubscriptionIdentifier if it implemented Ord
+    sub_handlers: Mutex<BTreeMap<u32, SubscriptionHandler>>,
 }
 
 impl TanukiConnection {
@@ -82,19 +87,29 @@ impl TanukiConnection {
         let connack: Connack = packet.try_into().map_err(Error::MqttPacketField)?;
         tracing::debug!("Received CONNACK: {connack:?}");
 
-        let next_payload_id = AtomicU16::new(1);
-
-        Ok(TanukiConnection { endpoint, next_payload_id }.into())
+        Ok(TanukiConnection {
+            endpoint,
+            next_payload_id: AtomicU16::new(1),
+            sub_handlers: Mutex::new(BTreeMap::new()),
+        }
+        .into())
     }
 
     fn next_payload_id(&self) -> u16 {
-        match self
-            .next_payload_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        {
-            0 => u16::MAX / 2, // zero is invalid, and hopefully this value is fine
-            n => n,
+        loop {
+            let id = self
+                .next_payload_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            if id != 0 {
+                break id;
+            }
         }
+    }
+
+    fn next_subscription_id(&self) -> SubscriptionIdentifier {
+        // max value is 2^28 - 1 (min value is also 1)
+        SubscriptionIdentifier::new(self.next_payload_id() as u32).unwrap()
     }
 
     pub async fn recv_raw(&self) -> Result<mqtt_ep::packet::Packet> {
@@ -108,19 +123,50 @@ impl TanukiConnection {
 
             let publish: Result<Publish, _> = packet.try_into();
             if let Ok(publish) = publish {
+                let sub_id = publish.props.iter().find_map(|p| {
+                    if let Property::SubscriptionIdentifier(id) = p {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                });
+
                 let topic = Topic::from_str(publish.topic_name()).map_err(Error::BadTopic)?;
 
                 let payload: serde_json::Value =
                     serde_json::from_slice(publish.payload().as_slice())?;
 
-                break Ok(PublishEvent { topic, payload });
+                break Ok(PublishEvent { sub_id, topic, payload });
             }
         }
     }
 
-    pub async fn raw_subscribe(&self, topic: &str) -> Result<()> {
+    pub async fn handle(&self) -> Result<Infallible> {
+        loop {
+            let event = self.recv().await?;
+
+            tracing::debug!("Handling publish event: {event:#?}");
+
+            if let Some(sub_id) = event.sub_id.clone() {
+                let mut handlers = self.sub_handlers.lock().await;
+
+                if let Some(handler) = handlers.get_mut(&sub_id.val()) {
+                    let keep = handler(event);
+
+                    if !keep {
+                        handlers.remove(&sub_id.val());
+                    }
+                }
+            }
+        }
+    }
+
+    pub async fn raw_subscribe(&self, topic: &str) -> Result<SubscriptionIdentifier> {
+        let sub_id = self.next_subscription_id();
+
         let subscribe = v5_0::Subscribe::builder()
             .packet_id(self.next_payload_id())
+            .props(vec![Property::SubscriptionIdentifier(sub_id.clone())])
             .entries(vec![SubEntry::new(
                 topic.to_string(),
                 SubOpts::new().set_qos(Qos::AtLeastOnce),
@@ -135,11 +181,24 @@ impl TanukiConnection {
 
         self.endpoint.send(subscribe).await?;
 
-        Ok(())
+        Ok(sub_id)
     }
 
-    pub async fn subscribe(&self, topic: Topic) -> Result<()> {
+    pub async fn subscribe(&self, topic: Topic) -> Result<SubscriptionIdentifier> {
         self.raw_subscribe(&topic.to_string()).await
+    }
+
+    pub async fn subscribe_with_handler(
+        &self,
+        topic: Topic,
+        handler: SubscriptionHandler,
+    ) -> Result<()> {
+        let sub_id = self.subscribe(topic).await?;
+
+        let mut handlers = self.sub_handlers.lock().await;
+        handlers.insert(sub_id.val(), handler);
+
+        Ok(())
     }
 
     pub async fn publish(
@@ -201,6 +260,7 @@ impl TanukiConnection {
 
 #[derive(Debug, Clone)]
 pub struct PublishEvent {
+    pub sub_id: Option<SubscriptionIdentifier>,
     pub topic: Topic,
     pub payload: serde_json::Value,
 }

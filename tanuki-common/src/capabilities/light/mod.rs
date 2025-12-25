@@ -17,6 +17,16 @@ pub struct LightState {
     pub color: Option<Color>,
 }
 
+#[property(LightProperty, Command, key = "command")]
+pub struct LightCommand {
+    pub on: bool,
+    /// Brightness level (0.0-1.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[serde(deny_unknown_fields)]

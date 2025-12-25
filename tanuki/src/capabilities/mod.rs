@@ -73,6 +73,60 @@ impl<R: EntityRole> TanukiCapability<R> {
             .publish(topic, meta, PublishOpts::metadata())
             .await
     }
+
+    pub(crate) async fn listen<T: Property>(
+        &self,
+        mut listener: impl FnMut(T) + Send + Sync + 'static,
+        oneshot: bool,
+    ) -> Result<()> {
+        self.entity
+            .conn
+            .subscribe_with_handler(
+                Topic::CapabilityData {
+                    entity: self.entity.id().clone(),
+                    capability: self.capability.clone(),
+                    rest: CompactString::const_new(T::KEY),
+                },
+                Box::new(move |ev| match serde_json::from_value::<T>(ev.payload) {
+                    Ok(payload) => {
+                        listener(payload);
+                        !oneshot
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to deserialize property {}: {e}", T::KEY);
+                        false
+                    }
+                }),
+            )
+            .await
+    }
+
+    pub(crate) async fn listen_oneshot<T: Property>(
+        &self,
+        listener: impl FnOnce(T) + Send + Sync + 'static,
+    ) -> Result<()> {
+        let mut listener = Some(listener);
+        self.listen(
+            move |v| {
+                if let Some(listener) = listener.take() {
+                    listener(v);
+                }
+            },
+            true,
+        )
+        .await
+    }
+
+    pub(crate) async fn get<T: Property + Send + 'static>(&self) -> Result<T> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.listen_oneshot(move |prop: T| {
+            let _ = tx.send(prop);
+        })
+        .await?;
+
+        Ok(rx.await.unwrap())
+    }
 }
 
 pub trait EntityRole {
