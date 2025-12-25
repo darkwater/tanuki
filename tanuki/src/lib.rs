@@ -151,9 +151,10 @@ impl TanukiConnection {
                 let mut handlers = self.sub_handlers.lock().await;
 
                 if let Some(handler) = handlers.get_mut(&sub_id.val()) {
-                    let keep = handler(event);
+                    let retain = handler(event);
 
-                    if !keep {
+                    if !retain {
+                        tracing::warn!("Removing subscription handler for ID {}", sub_id.val());
                         handlers.remove(&sub_id.val());
                     }
                 }

@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 pub enum ButtonEvent {
     /// Button was pressed
     Pressed,
+    /// Button was held down for some time
+    LongPressed,
 }
 
 #[cfg(test)]

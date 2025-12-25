@@ -61,11 +61,30 @@ pub struct ServerError {
 
 #[derive(Debug, PartialEq, Deserialize)]
 pub struct Event {
-    pub data: serde_json::Value,
-    pub event_type: String,
+    // pub data: serde_json::Value,
+    // pub event_type: String,
     pub time_fired: DateTime<Utc>,
     pub origin: String,
     pub context: serde_json::Value,
+    #[serde(flatten)]
+    pub data: EventData,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(tag = "event_type", content = "data", rename_all = "snake_case")]
+pub enum EventData {
+    StateChanged(Box<StateChangeEvent>),
+    ZhaEvent(Box<ZhaEvent>),
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct ZhaEvent {
+    pub device_id: String,
+    pub device_ieee: String,
+    pub unique_id: String,
+    pub command: String,
+    pub args: serde_json::Value,
+    pub params: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]

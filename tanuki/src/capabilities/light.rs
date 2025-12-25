@@ -1,4 +1,4 @@
-use tanuki_common::capabilities::light::LightProperty;
+use tanuki_common::capabilities::light::{LightCommand, LightProperty};
 
 use super::Capability;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
@@ -17,6 +17,10 @@ impl Light<Authority> {
 }
 
 impl<R: EntityRole> Light<R> {
+    pub async fn command(&self, cmd: LightCommand) -> Result<()> {
+        self.cap.publish_property(cmd, PublishOpts::control()).await
+    }
+
     pub async fn listen<T: LightProperty>(
         &self,
         listener: impl Fn(T) + Send + Sync + 'static,

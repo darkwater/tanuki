@@ -7,6 +7,7 @@ use tanuki::{
 use tanuki_common::{
     EntityId,
     capabilities::{
+        buttons::ButtonEvent,
         light::{Color, ColorMode, LightState},
         on_off::On,
         sensor::{SensorPayload, SensorValue},
@@ -21,14 +22,30 @@ pub struct MappedEntity {
     pub to_hass: Vec<EntityServiceMapping>,
 }
 
-pub struct EntityDataMapping {
-    pub from_id: String,
-    pub map_to: CapMapping,
+pub enum EntityDataMapping {
+    State {
+        from_id: String,
+        map_to: CapMapping,
+    },
+    ZhaCommands {
+        device_ieee: String,
+        translations: Vec<ZhaEventTranslation>,
+    },
 }
 
 pub enum CapMapping {
     Sensor { key: String, binary: bool },
     Light,
+}
+
+pub struct ZhaEventTranslation {
+    pub command: String,
+    pub params: serde_json::Value,
+    pub map_to: CapEventMapping,
+}
+
+pub enum CapEventMapping {
+    Button { button: String, event: ButtonEvent },
 }
 
 impl CapMapping {

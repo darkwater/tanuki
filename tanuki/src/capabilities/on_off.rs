@@ -1,4 +1,4 @@
-use tanuki_common::capabilities::on_off::OnOffProperty;
+use tanuki_common::capabilities::on_off::{OnOffCommand, OnOffProperty};
 
 use super::Capability;
 use crate::{Authority, EntityRole, PublishOpts, Result, TanukiCapability, capability};
@@ -17,6 +17,10 @@ impl OnOff<Authority> {
 }
 
 impl<R: EntityRole> OnOff<R> {
+    pub async fn command(&self, cmd: OnOffCommand) -> Result<()> {
+        self.cap.publish_property(cmd, PublishOpts::control()).await
+    }
+
     pub async fn listen<T: OnOffProperty>(
         &self,
         listener: impl Fn(T) + Send + Sync + 'static,

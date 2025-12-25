@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tanuki::{
     TanukiConnection, TanukiEntity,
-    capabilities::{Authority, light::Light, on_off::OnOff},
+    capabilities::{Authority, buttons::Buttons, light::Light, on_off::OnOff},
     registry::Registry,
 };
 use tanuki_common::{
@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::{self};
 use self::{
     entity::{EntityDataMapping, EntityServiceMapping, MappedEntity, ServiceCall, ServiceMapping},
     hass::HomeAssistant,
-    messages::{StateChangeEvent, StateEvent},
+    messages::{EventData, StateEvent},
 };
 use crate::messages::{Packet, PacketId, ServerMessage};
 
@@ -150,28 +150,30 @@ pub async fn bridge(
                         );
 
                         for MappedEntity { tanuki_id, from_hass, to_hass: _ } in mappings.as_ref() {
-                            for EntityDataMapping { from_id, map_to } in from_hass {
-                                if from_id != &state.entity_id {
-                                    continue;
+                            for mapping in from_hass {
+                                if let EntityDataMapping::State { from_id, map_to } = mapping {
+                                    if from_id != &state.entity_id {
+                                        continue;
+                                    }
+
+                                    map_to
+                                        .propagate_state(
+                                            &state.state,
+                                            &mut registry,
+                                            tanuki_id,
+                                            entity_init,
+                                        )
+                                        .await?;
+
+                                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                                 }
-
-                                map_to
-                                    .propagate_state(
-                                        &state.state,
-                                        &mut registry,
-                                        tanuki_id,
-                                        entity_init,
-                                    )
-                                    .await?;
-
-                                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                             }
                         }
                     }
                 }
             }
-            ServerMessage::Event { event } => {
-                if let Ok(sensor_event) = serde_json::from_value::<StateChangeEvent>(event.data) {
+            ServerMessage::Event { event } => match event.data {
+                EventData::StateChanged(sensor_event) => {
                     tracing::info!(
                         "Sensor '{}' changed from {} {} to {} {}",
                         sensor_event.entity_id,
@@ -180,25 +182,82 @@ pub async fn bridge(
                         sensor_event.new_state.state,
                         sensor_event.new_state.attributes.unit_of_measurement,
                     );
-
                     for MappedEntity { tanuki_id, from_hass, to_hass: _ } in mappings.as_ref() {
-                        for EntityDataMapping { from_id, map_to } in from_hass {
-                            if from_id != &sensor_event.entity_id {
-                                continue;
-                            }
+                        for mapping in from_hass {
+                            if let EntityDataMapping::State { from_id, map_to } = mapping {
+                                if from_id != &sensor_event.entity_id {
+                                    continue;
+                                }
 
-                            map_to
-                                .propagate_state(
-                                    &sensor_event.new_state,
-                                    &mut registry,
-                                    tanuki_id,
-                                    entity_init,
-                                )
-                                .await?;
+                                map_to
+                                    .propagate_state(
+                                        &sensor_event.new_state,
+                                        &mut registry,
+                                        tanuki_id,
+                                        entity_init,
+                                    )
+                                    .await?;
+                            }
                         }
                     }
                 }
-            }
+                EventData::ZhaEvent(zha_event) => {
+                    tracing::info!("ZHA Event {zha_event:#?}");
+
+                    for MappedEntity { tanuki_id, from_hass, to_hass: _ } in mappings.as_ref() {
+                        for mapping in from_hass {
+                            if let EntityDataMapping::ZhaCommands { device_ieee, translations } =
+                                mapping
+                            {
+                                if device_ieee != &zha_event.device_ieee {
+                                    continue;
+                                }
+
+                                for translation in translations {
+                                    if translation.command != zha_event.command {
+                                        continue;
+                                    }
+
+                                    let empty_map = serde_json::Map::new();
+
+                                    let left_params =
+                                        translation.params.as_object().unwrap_or(&empty_map);
+
+                                    let right_params =
+                                        zha_event.params.as_object().unwrap_or(&empty_map);
+
+                                    dbg!((&left_params, &right_params));
+
+                                    // are there any elements in left...
+                                    let mismatch = left_params.iter().any(|(k, v)| {
+                                        // ...where the matching element in right...
+                                        match right_params.get(k) {
+                                            // ...is different?
+                                            Some(rv) => rv != v,
+                                            // ...is missing?
+                                            None => true,
+                                        }
+                                    });
+
+                                    // then it's not a match
+                                    if mismatch {
+                                        continue;
+                                    }
+
+                                    match &translation.map_to {
+                                        entity::CapEventMapping::Button { button, event } => {
+                                            let sensor: &mut Buttons<Authority> =
+                                                registry.get(tanuki_id, entity_init).await?;
+
+                                            sensor.publish_event(button, *event).await?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
         }
     }
 }

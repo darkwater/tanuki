@@ -110,10 +110,7 @@ impl HomeAssistant {
         tokio::spawn(async move {
             loop {
                 let packet = match conn_rx.next().await {
-                    Some(Ok(Message::Text(txt))) => {
-                        serde_json::from_str::<Packet<ServerMessage>>(&txt)
-                            .expect("failed to parse server message")
-                    }
+                    Some(Ok(Message::Text(txt))) => txt,
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
                     Some(Ok(msg)) => {
                         tracing::warn!("expected text message, got: {:?}", msg);
@@ -127,7 +124,15 @@ impl HomeAssistant {
                     }
                 };
 
-                tracing::info!("Received message: {packet:#?}");
+                let packet = match serde_json::from_str::<Packet<ServerMessage>>(&packet) {
+                    Ok(pkt) => pkt,
+                    Err(e) => {
+                        tracing::error!("Failed to deserialize packet: {e}");
+                        continue;
+                    }
+                };
+
+                tracing::trace!("Received message: {packet:#?}");
 
                 packet_tx.send(packet).expect("packet receiver dropped");
             }
