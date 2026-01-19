@@ -1,5 +1,5 @@
 [workspace]
-members = ["tanuki", "tanuki-common", "tanuki-bthome" , "tanuki-monitor", "tanuki-hass"]
+members = ["tanuki", "tanuki-common", "tanuki-bthome" , "tanuki-monitor", "tanuki-hass", "examples/dark-tanuki", "examples/dark-control-panel"]
 resolver = "3"
 
 [workspace.package]

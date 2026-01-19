@@ -1,5 +1,5 @@
 [package]
-name = "tanuki-monitor"
+name = "tanuki-app"
 edition.workspace = true
 version.workspace = true
 

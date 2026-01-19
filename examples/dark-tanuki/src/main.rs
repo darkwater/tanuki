@@ -172,10 +172,10 @@ async fn main() {
 
             let set_lights = {
                 let tanuki = tanuki.clone();
-                move |cmd| {
+                move |cmd, extent| {
                     let tanuki = tanuki.clone();
                     tokio::spawn(async move {
-                        for (tanuki_id, _) in &LIGHTS[..6] {
+                        for (tanuki_id, _) in &LIGHTS[..extent] {
                             tanuki
                                 .entity(tanuki_id)
                                 .await
@@ -194,10 +194,13 @@ async fn main() {
             remote
                 .listen(move |button, event| match dbg!((button, event)) {
                     ("on", ButtonEvent::Pressed) => {
-                        set_lights(OnOffCommand::On);
+                        set_lights(OnOffCommand::On, 5);
+                    }
+                    ("on", ButtonEvent::LongPressed) => {
+                        set_lights(OnOffCommand::On, 8);
                     }
                     ("off", ButtonEvent::Pressed) => {
-                        set_lights(OnOffCommand::Off);
+                        set_lights(OnOffCommand::Off, 8);
                     }
                     (button, event) => {
                         tracing::info!("Unhandled button event: {} {:?}", button, event);
