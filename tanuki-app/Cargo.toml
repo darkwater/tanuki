@@ -3,4 +3,32 @@ name = "tanuki-app"
 edition.workspace = true
 version.workspace = true
 
+[lib]
+# cdylib is required for Android, lib is required for desktop
+crate-type = ["cdylib", "lib"]
+
 [dependencies]
+tanuki        = { path = "../tanuki" }
+tanuki-common = { path = "../tanuki-common" }
+
+egui  = "0.33.3"
+log   = "0.4.29"
+tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe            = { version = "0.33.3", features = ["persistence"] }
+pretty_env_logger = "0.5.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe         = { version = "0.33.3", default-features = false, features = [ "android-native-activity" , "default_fonts", "glow"] }
+android_logger = "0.15.1"
+winit          = "0.30.12"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[package.metadata.android.application]
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+orientation = "landscape"

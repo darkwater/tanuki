@@ -24,6 +24,10 @@ pub struct EntityId(pub CompactString);
 
 impl EntityId {
     pub const WILDCARD: Self = EntityId(CompactString::const_new("+"));
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl<T: AsRef<str>> From<T> for EntityId {

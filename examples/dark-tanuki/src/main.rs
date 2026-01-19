@@ -112,6 +112,107 @@ async fn main() {
                 }],
                 to_hass: vec![],
             },
+            MappedEntity {
+                tanuki_id: "symfonisk_remote_1".into(),
+                from_hass: vec![EntityDataMapping::ZhaCommands {
+                    device_ieee: "94:de:b8:ff:fe:53:fd:97".to_owned(),
+                    translations: vec![
+                        ZhaEventTranslation {
+                            command: "toggle".to_owned(),
+                            params: serde_json::json!({}),
+                            map_to: CapEventMapping::Button {
+                                button: "play_pause".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "move_with_on_off".to_owned(),
+                            params: serde_json::json!({
+                                "move_mode": 0,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "volume_up".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "move_with_on_off".to_owned(),
+                            params: serde_json::json!({
+                                "move_mode": 1,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "volume_down".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "step".to_owned(),
+                            params: serde_json::json!({
+                                "step_mode": 0,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "next".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "step".to_owned(),
+                            params: serde_json::json!({
+                                "step_mode": 1,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "previous".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "shortcut_v1_events".to_owned(),
+                            params: serde_json::json!({
+                                "shortcut_button": 1,
+                                "shortcut_event": 1,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "shortcut_one".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "shortcut_v1_events".to_owned(),
+                            params: serde_json::json!({
+                                "shortcut_button": 2,
+                                "shortcut_event": 1,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "shortcut_two".to_owned(),
+                                event: ButtonEvent::Pressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "shortcut_v1_events".to_owned(),
+                            params: serde_json::json!({
+                                "shortcut_button": 1,
+                                "shortcut_event": 3,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "shortcut_one".to_owned(),
+                                event: ButtonEvent::LongPressed,
+                            },
+                        },
+                        ZhaEventTranslation {
+                            command: "shortcut_v1_events".to_owned(),
+                            params: serde_json::json!({
+                                "shortcut_button": 2,
+                                "shortcut_event": 3,
+                            }),
+                            map_to: CapEventMapping::Button {
+                                button: "shortcut_two".to_owned(),
+                                event: ButtonEvent::LongPressed,
+                            },
+                        },
+                    ],
+                }],
+                to_hass: vec![],
+            },
         ];
 
         const LIGHTS: [(&str, &str); 8] = [
