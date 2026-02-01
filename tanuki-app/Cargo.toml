@@ -29,6 +29,3 @@ name = "android.permission.INTERNET"
 
 [package.metadata.android.application]
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
-
-[package.metadata.android.application.activity]
-orientation = "landscape"

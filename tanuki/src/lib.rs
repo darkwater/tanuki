@@ -28,6 +28,8 @@ pub mod capabilities;
 pub mod log;
 pub mod registry;
 
+pub use tanuki_common as common;
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(thiserror::Error, Debug)]

@@ -12,6 +12,7 @@ use crate::{PublishOpts, Result, TanukiEntity};
 
 pub mod buttons;
 pub mod light;
+pub mod media;
 pub mod on_off;
 pub mod sensor;
 

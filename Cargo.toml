@@ -1,11 +1,11 @@
 [workspace]
-members = ["tanuki", "tanuki-app", "tanuki-common", "tanuki-bthome" , "tanuki-hass", "examples/dark-tanuki", "examples/dark-control-panel"]
+members = ["tanuki", "tanuki-app", "tanuki-common", "tanuki-bthome" , "tanuki-hass", "examples/dark-tanuki", "examples/dark-control-panel", "tanuki-mpris"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.0.1"
 
 [workspace.dependencies]
-tanuki        = { path = "tanuki" }
-tanuki-common = { path = "tanuki-common" }
+tanuki        = { version = "0.0.1", path = "tanuki" }
+tanuki-common = { version = "0.0.1", path = "tanuki-common" }
