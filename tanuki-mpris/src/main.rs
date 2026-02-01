@@ -6,7 +6,7 @@ use mpris::PlayerFinder;
 use tanuki::{
     TanukiConnection,
     capabilities::{Authority, media::Media},
-    common::capabilities::media::{MediaInfo, MediaState, MediaStatus},
+    common::capabilities::media::{MediaCapabilities, MediaInfo, MediaState, MediaStatus},
 };
 
 // TODO: probably rewrite using direct dbus instead of this mpris crate
@@ -41,7 +41,9 @@ async fn main() -> anyhow::Result<()> {
 
         eprintln!("Found active player: {}", player.bus_name());
 
-        handle_player(tanuki.clone(), &args, &player).await?;
+        if let Err(e) = handle_player(tanuki.clone(), &args, &player).await {
+            eprintln!("Error handling player: {:#}", e);
+        }
     }
 }
 
@@ -52,6 +54,14 @@ async fn handle_player(
 ) -> anyhow::Result<()> {
     let entity = tanuki.entity(&args.entity_id).await?;
     let tanuki_media = entity.capability::<Media<Authority>>().await?;
+
+    let mut caps = MediaCapabilities::default();
+    caps.play = player.can_play()?;
+    caps.pause = player.can_pause()?;
+    caps.stop = player.can_stop()?;
+    caps.next = player.can_go_next()?;
+    caps.previous = player.can_go_previous()?;
+    tanuki_media.publish(caps).await?;
 
     let mut state = MediaState::default();
     state.status = match player.get_playback_status()? {

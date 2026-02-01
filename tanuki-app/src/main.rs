@@ -1,11 +1,14 @@
+use eframe::NativeOptions;
+use egui::ViewportBuilder;
 use tanuki_app::TanukiApp;
 
 fn main() -> eframe::Result {
     pretty_env_logger::init_timed();
 
-    eframe::run_native(
-        "tanuki",
-        Default::default(),
-        Box::new(|cc| Ok(Box::new(TanukiApp::new(cc)))),
-    )
+    let opts = NativeOptions {
+        viewport: ViewportBuilder::default().with_transparent(true),
+        ..Default::default()
+    };
+
+    eframe::run_native("tanuki", opts, Box::new(|cc| Ok(Box::new(TanukiApp::new(cc)))))
 }

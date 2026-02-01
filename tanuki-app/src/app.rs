@@ -5,18 +5,22 @@ use std::{
 };
 
 use egui::{
-    Align, CentralPanel, Layout, ScrollArea, SidePanel, TextWrapMode,
+    Align, Button, CentralPanel, Layout, Margin, ScrollArea, SidePanel, TextWrapMode,
     ahash::{HashMap, HashMapExt as _},
     vec2,
 };
 use tanuki::{
     PublishEvent, TanukiConnection,
-    capabilities::{User, on_off::OnOff},
+    capabilities::{User, media::Media, on_off::OnOff},
 };
 use tanuki_common::{
     EntityId, Topic,
     capabilities::{
-        buttons::ButtonEvent, light::LightState, on_off::OnOffCommand, sensor::SensorValue,
+        buttons::ButtonEvent,
+        light::LightState,
+        media::{MediaCapabilities, MediaCommand, MediaState, MediaStatus},
+        on_off::OnOffCommand,
+        sensor::SensorValue,
     },
 };
 
@@ -51,19 +55,21 @@ impl TanukiEntity {
 }
 
 pub enum TanukiCapability {
-    TanukiSensor(TanukiSensorState),
-    TanukiOnOff(TanukiOnOffState),
-    TanukiLight(TanukiLightState),
     TanukiButtons(TanukiButtonsState),
+    TanukiLight(TanukiLightState),
+    TanukiMedia(TanukiMediaState),
+    TanukiOnOff(TanukiOnOffState),
+    TanukiSensor(TanukiSensorState),
 }
 
 impl TanukiCapability {
     pub fn new_from_name(name: &str) -> Option<Self> {
         match name {
-            "tanuki.sensor" => Some(TanukiCapability::TanukiSensor(Default::default())),
-            "tanuki.on_off" => Some(TanukiCapability::TanukiOnOff(Default::default())),
-            "tanuki.light" => Some(TanukiCapability::TanukiLight(Default::default())),
             "tanuki.buttons" => Some(TanukiCapability::TanukiButtons(Default::default())),
+            "tanuki.light" => Some(TanukiCapability::TanukiLight(Default::default())),
+            "tanuki.media" => Some(TanukiCapability::TanukiMedia(Default::default())),
+            "tanuki.on_off" => Some(TanukiCapability::TanukiOnOff(Default::default())),
+            "tanuki.sensor" => Some(TanukiCapability::TanukiSensor(Default::default())),
             _ => None,
         }
     }
@@ -91,6 +97,12 @@ pub struct TanukiLightState {
 }
 
 #[derive(Default)]
+pub struct TanukiMediaState {
+    pub capabilities: MediaCapabilities,
+    pub state: MediaState,
+}
+
+#[derive(Default)]
 pub struct TanukiButtonsState {
     pub buttons: HashMap<String, Timeline<ButtonEvent>>,
 }
@@ -106,6 +118,10 @@ impl<T> Default for Timeline<T> {
 }
 
 impl<T> Timeline<T> {
+    pub fn last(&self) -> Option<&T> {
+        self.readings.last().map(|(_, v)| v)
+    }
+
     pub fn update(&mut self, payload: T) {
         self.readings.push((Instant::now(), payload));
     }
@@ -159,7 +175,10 @@ impl TanukiApp {
         cc.egui_ctx.all_styles_mut(|s| {
             s.interaction.selectable_labels = false;
 
+            s.spacing.window_margin = Margin::symmetric(10, 8);
+            s.spacing.item_spacing = vec2(8., 1.);
             s.spacing.button_padding = vec2(8., 6.);
+            s.spacing.interact_size = vec2(40., 22.);
         });
 
         Self {
@@ -197,13 +216,49 @@ impl eframe::App for TanukiApp {
                     if let Some(cap) = TanukiCapability::new_from_name(&capability) {
                         log::info!("Created capability instance for {capability}");
 
-                        let entity_entry = self.entity_mut(entity);
-
-                        entity_entry
+                        self.entity_mut(entity)
                             .capabilities
                             .insert(capability.to_string(), cap);
                     } else {
                         log::warn!("Unknown capability name: {capability}");
+                    }
+                }
+                Topic::CapabilityData { entity, capability, rest }
+                    if capability == "tanuki.media" && rest == "state" =>
+                {
+                    if let Some(TanukiCapability::TanukiMedia(state)) = self
+                        .entity_mut(entity)
+                        .capabilities
+                        .get_mut(capability.as_str())
+                        && let Ok(media_state) =
+                            serde_json::from_value::<MediaState>(packet.payload)
+                    {
+                        state.state = media_state;
+                    }
+                }
+                Topic::CapabilityData { entity, capability, rest }
+                    if capability == "tanuki.media" && rest == "capabilities" =>
+                {
+                    if let Some(TanukiCapability::TanukiMedia(state)) = self
+                        .entity_mut(entity)
+                        .capabilities
+                        .get_mut(capability.as_str())
+                        && let Ok(media_caps) =
+                            serde_json::from_value::<MediaCapabilities>(packet.payload)
+                    {
+                        state.capabilities = media_caps;
+                    }
+                }
+                Topic::CapabilityData { entity, capability, rest }
+                    if capability == "tanuki.on_off" && rest == "state" =>
+                {
+                    if let Some(TanukiCapability::TanukiOnOff(state)) = self
+                        .entity_mut(entity)
+                        .capabilities
+                        .get_mut(capability.as_str())
+                        && let Ok(on) = serde_json::from_value::<bool>(packet.payload)
+                    {
+                        state.on.update(on);
                     }
                 }
                 _ => {}
@@ -252,11 +307,62 @@ impl eframe::App for TanukiApp {
                 && let Some(capability) = entity.capabilities.get(selected_capability_name)
             {
                 CentralPanel::default().show(ctx, |ui| match capability {
-                    TanukiCapability::TanukiSensor(state) => {
+                    TanukiCapability::TanukiButtons(state) => {
+                        ui.heading("todo");
+                    }
+                    TanukiCapability::TanukiLight(state) => {
+                        ui.heading("todo");
+                    }
+                    TanukiCapability::TanukiMedia(state) => {
+                        if let Some(title) = &state.state.info.title {
+                            ui.heading(title);
+                        }
+
+                        if let Some(artist) = state.state.info.artists.first() {
+                            ui.label(artist);
+                        }
+
+                        ui.add_space(4.);
+
+                        match state.state.status {
+                            MediaStatus::Playing => ui.label("Playing"),
+                            MediaStatus::Paused => ui.label("Paused"),
+                            MediaStatus::Stopped => ui.label("Stopped"),
+                            MediaStatus::Buffering => ui.label("Buffering"),
+                            MediaStatus::Idle => ui.label("Idle"),
+                            MediaStatus::Unknown => ui.label("Unknown status"),
+                        };
+
+                        ui.add_space(8.);
+
+                        ui.horizontal(|ui| {
+                            for (cap, label, cmd) in [
+                                (state.capabilities.play, "Play", MediaCommand::Play),
+                                (state.capabilities.pause, "Pause", MediaCommand::Pause),
+                                (state.capabilities.stop, "Stop", MediaCommand::Stop),
+                                (state.capabilities.previous, "Previous", MediaCommand::Previous),
+                                (state.capabilities.next, "Next", MediaCommand::Next),
+                            ] {
+                                if ui.add_enabled(cap, Button::new(label)).clicked() {
+                                    let tanuki = self.tanuki.clone();
+                                    let entity = selected_entity_id.clone();
+                                    let cmd = cmd.clone();
+                                    self.tokio_rt.spawn(async move {
+                                        let entity = tanuki.entity(entity).await.unwrap();
+                                        let cap = entity.capability::<Media<User>>().await.unwrap();
+                                        cap.command(cmd).await.unwrap();
+                                    });
+                                }
+                            }
+                        });
+                    }
+                    TanukiCapability::TanukiLight(state) => {
                         ui.heading("todo");
                     }
                     TanukiCapability::TanukiOnOff(state) => {
-                        ui.heading("todo");
+                        if let Some(on) = state.on.last() {
+                            ui.label(format!("State: {}", if *on { "On" } else { "Off" }));
+                        }
 
                         if ui.button("Toggle").clicked() {
                             let tanuki = self.tanuki.clone();
@@ -268,10 +374,7 @@ impl eframe::App for TanukiApp {
                             });
                         }
                     }
-                    TanukiCapability::TanukiLight(state) => {
-                        ui.heading("todo");
-                    }
-                    TanukiCapability::TanukiButtons(state) => {
+                    TanukiCapability::TanukiSensor(state) => {
                         ui.heading("todo");
                     }
                 });

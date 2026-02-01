@@ -11,9 +11,10 @@ crate-type = ["cdylib", "lib"]
 tanuki        = { path = "../tanuki" }
 tanuki-common = { path = "../tanuki-common" }
 
-egui  = "0.33.3"
-log   = "0.4.29"
-tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+egui       = "0.33.3"
+log        = "0.4.29"
+serde_json = "1.0.149"
+tokio      = { version = "1.49.0", features = ["rt-multi-thread"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe            = { version = "0.33.3", features = ["persistence"] }
