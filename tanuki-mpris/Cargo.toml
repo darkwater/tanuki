@@ -1,7 +1,12 @@
 [package]
 name = "tanuki-mpris"
-edition.workspace = true
+description = "MPRIS adapter for Tanuki"
 version.workspace = true
+authors.workspace = true
+edition.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
 tanuki.workspace = true

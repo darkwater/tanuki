@@ -2,6 +2,7 @@
 name = "dark-tanuki"
 edition.workspace = true
 version.workspace = true
+publish = false
 
 [dependencies]
 tanuki        = { path = "../../tanuki" }

@@ -1,3 +1,5 @@
+(NOTE: this was an early sketch and is not up-to-date)
+
 tanuki/entities/atc_1234/$meta/name                                    | "ATC 1234"
 tanuki/entities/atc_1234/$meta/type                                    | "Xiaomi Hygrometer"
 tanuki/entities/atc_1234/$meta/tags                                    | ["room.living_room"]

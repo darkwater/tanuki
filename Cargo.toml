@@ -1,10 +1,16 @@
 [workspace]
-members = ["tanuki", "tanuki-app", "tanuki-common", "tanuki-bthome" , "tanuki-hass", "examples/dark-tanuki", "examples/dark-control-panel", "tanuki-mpris"]
+members = [
+    "tanuki", "tanuki-app", "tanuki-common", "tanuki-bthome", "tanuki-hass", "tanuki-mpris",
+    "examples/dark-tanuki", "examples/dark-control-panel",
+]
 resolver = "3"
 
 [workspace.package]
-edition = "2024"
 version = "0.0.1"
+authors = ["darkwater <dark@dark.red>"]
+edition = "2024"
+repository = "https://github.com/darkwater/tanuki"
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 tanuki        = { version = "0.0.1", path = "tanuki" }

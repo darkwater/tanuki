@@ -1,3 +1,5 @@
+use core::fmt::Display;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -57,6 +59,12 @@ pub enum ServerMessage {
 pub struct ServerError {
     pub code: String,
     pub message: String,
+}
+
+impl Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
 }
 
 #[derive(Debug, PartialEq, Deserialize)]

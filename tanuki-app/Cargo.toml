@@ -1,15 +1,20 @@
 [package]
 name = "tanuki-app"
-edition.workspace = true
+description = "Generic GUI for Tanuki systems"
 version.workspace = true
+authors.workspace = true
+edition.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [lib]
 # cdylib is required for Android, lib is required for desktop
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
-tanuki        = { path = "../tanuki" }
-tanuki-common = { path = "../tanuki-common" }
+tanuki.workspace = true
+tanuki-common.workspace = true
 
 egui       = "0.33.3"
 log        = "0.4.29"

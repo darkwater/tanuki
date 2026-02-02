@@ -1,7 +1,11 @@
 [package]
 name = "tanuki"
+description = "Code-first smart home framework"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [dependencies]
 tanuki-common.workspace = true

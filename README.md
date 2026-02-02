@@ -1,4 +1,4 @@
-tanuki
+Tanuki
 ======
 
 Code-first smart home stuff, still in experimental phase. Proper readme will

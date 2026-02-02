@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::{self};
 use self::{
     entity::{EntityDataMapping, EntityServiceMapping, MappedEntity, ServiceCall, ServiceMapping},
     hass::HomeAssistant,
-    messages::{EventData, StateEvent},
+    messages::{EventData, ServerError, StateEvent},
 };
 use crate::messages::{Packet, PacketId, ServerMessage};
 
@@ -32,6 +32,8 @@ pub enum Error {
     Tanuki(#[from] tanuki::Error),
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("hass error: {0}")]
+    Hass(ServerError),
     #[error("protocol error: {0}")]
     Protocol(String),
     #[error("authentication failed: {0}")]
@@ -136,7 +138,10 @@ pub async fn bridge(
         match packet.payload {
             ServerMessage::Result { success, result, error } => {
                 if !success {
-                    return Err(Error::Protocol(format!("Request failed: {:?}", error)));
+                    return Err(Error::Hass(error.unwrap_or(ServerError {
+                        code: "unknown".to_string(),
+                        message: "success: false, but no error given".to_string(),
+                    })));
                 }
 
                 // get_states result

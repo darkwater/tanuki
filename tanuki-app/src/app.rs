@@ -55,21 +55,21 @@ impl TanukiEntity {
 }
 
 pub enum TanukiCapability {
-    TanukiButtons(TanukiButtonsState),
-    TanukiLight(TanukiLightState),
-    TanukiMedia(TanukiMediaState),
-    TanukiOnOff(TanukiOnOffState),
-    TanukiSensor(TanukiSensorState),
+    Buttons(TanukiButtonsState),
+    Light(TanukiLightState),
+    Media(TanukiMediaState),
+    OnOff(TanukiOnOffState),
+    Sensor(TanukiSensorState),
 }
 
 impl TanukiCapability {
     pub fn new_from_name(name: &str) -> Option<Self> {
         match name {
-            "tanuki.buttons" => Some(TanukiCapability::TanukiButtons(Default::default())),
-            "tanuki.light" => Some(TanukiCapability::TanukiLight(Default::default())),
-            "tanuki.media" => Some(TanukiCapability::TanukiMedia(Default::default())),
-            "tanuki.on_off" => Some(TanukiCapability::TanukiOnOff(Default::default())),
-            "tanuki.sensor" => Some(TanukiCapability::TanukiSensor(Default::default())),
+            "tanuki.buttons" => Some(TanukiCapability::Buttons(Default::default())),
+            "tanuki.light" => Some(TanukiCapability::Light(Default::default())),
+            "tanuki.media" => Some(TanukiCapability::Media(Default::default())),
+            "tanuki.on_off" => Some(TanukiCapability::OnOff(Default::default())),
+            "tanuki.sensor" => Some(TanukiCapability::Sensor(Default::default())),
             _ => None,
         }
     }
@@ -226,7 +226,7 @@ impl eframe::App for TanukiApp {
                 Topic::CapabilityData { entity, capability, rest }
                     if capability == "tanuki.media" && rest == "state" =>
                 {
-                    if let Some(TanukiCapability::TanukiMedia(state)) = self
+                    if let Some(TanukiCapability::Media(state)) = self
                         .entity_mut(entity)
                         .capabilities
                         .get_mut(capability.as_str())
@@ -239,7 +239,7 @@ impl eframe::App for TanukiApp {
                 Topic::CapabilityData { entity, capability, rest }
                     if capability == "tanuki.media" && rest == "capabilities" =>
                 {
-                    if let Some(TanukiCapability::TanukiMedia(state)) = self
+                    if let Some(TanukiCapability::Media(state)) = self
                         .entity_mut(entity)
                         .capabilities
                         .get_mut(capability.as_str())
@@ -252,7 +252,7 @@ impl eframe::App for TanukiApp {
                 Topic::CapabilityData { entity, capability, rest }
                     if capability == "tanuki.on_off" && rest == "state" =>
                 {
-                    if let Some(TanukiCapability::TanukiOnOff(state)) = self
+                    if let Some(TanukiCapability::OnOff(state)) = self
                         .entity_mut(entity)
                         .capabilities
                         .get_mut(capability.as_str())
@@ -292,7 +292,7 @@ impl eframe::App for TanukiApp {
 
                     ScrollArea::vertical().show(ui, |ui| {
                         ui.with_layout(Layout::top_down_justified(Align::Min), |ui| {
-                            for (cap_name, _capability) in &entity.capabilities {
+                            for cap_name in entity.capabilities.keys() {
                                 ui.selectable_value(
                                     &mut self.selected_capability,
                                     Some(cap_name.clone()),
@@ -307,13 +307,13 @@ impl eframe::App for TanukiApp {
                 && let Some(capability) = entity.capabilities.get(selected_capability_name)
             {
                 CentralPanel::default().show(ctx, |ui| match capability {
-                    TanukiCapability::TanukiButtons(state) => {
+                    TanukiCapability::Buttons(_state) => {
                         ui.heading("todo");
                     }
-                    TanukiCapability::TanukiLight(state) => {
+                    TanukiCapability::Light(_state) => {
                         ui.heading("todo");
                     }
-                    TanukiCapability::TanukiMedia(state) => {
+                    TanukiCapability::Media(state) => {
                         if let Some(title) = &state.state.info.title {
                             ui.heading(title);
                         }
@@ -356,10 +356,7 @@ impl eframe::App for TanukiApp {
                             }
                         });
                     }
-                    TanukiCapability::TanukiLight(state) => {
-                        ui.heading("todo");
-                    }
-                    TanukiCapability::TanukiOnOff(state) => {
+                    TanukiCapability::OnOff(state) => {
                         if let Some(on) = state.on.last() {
                             ui.label(format!("State: {}", if *on { "On" } else { "Off" }));
                         }
@@ -374,7 +371,7 @@ impl eframe::App for TanukiApp {
                             });
                         }
                     }
-                    TanukiCapability::TanukiSensor(state) => {
+                    TanukiCapability::Sensor(_state) => {
                         ui.heading("todo");
                     }
                 });
