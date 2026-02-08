@@ -4257,7 +4257,6 @@ dependencies = [
 name = "tanuki"
 version = "0.0.1"
 dependencies = [
- "compact_str",
  "mqtt-endpoint-tokio",
  "mqtt-protocol-core",
  "serde",

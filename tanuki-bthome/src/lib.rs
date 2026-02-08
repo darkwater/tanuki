@@ -67,7 +67,7 @@ pub async fn bridge(
                     .cloned()
                     .unwrap_or((update.name.to_snake_case(), update.name));
 
-                let entity = tanuki.entity(id).await?;
+                let entity = tanuki.author_entity(id).await?;
 
                 entity.publish_meta(meta::Name(name.into())).await?;
                 entity
@@ -77,7 +77,7 @@ pub async fn bridge(
                     .publish_meta(meta::Provider("tanuki-bthome".into()))
                     .await?;
 
-                let sensor = entity.capability::<Sensor<_>>().await?;
+                let sensor = entity.author_capability::<Sensor<_>>().await?;
                 entry.insert_entry(sensor)
             }
         };

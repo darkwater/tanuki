@@ -52,8 +52,8 @@ async fn handle_player(
     args: &Args,
     player: &mpris::Player,
 ) -> anyhow::Result<()> {
-    let entity = tanuki.entity(&args.entity_id).await?;
-    let tanuki_media = entity.capability::<Media<Authority>>().await?;
+    let entity = tanuki.author_entity(&args.entity_id).await?;
+    let tanuki_media = entity.author_capability::<Media<Authority>>().await?;
 
     let mut caps = MediaCapabilities::default();
     caps.play = player.can_play()?;

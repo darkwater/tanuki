@@ -3,7 +3,6 @@
 use core::{convert::Infallible, marker::PhantomData, str::FromStr as _, sync::atomic::AtomicU16};
 use std::{collections::BTreeMap, sync::Arc};
 
-use compact_str::{CompactString, ToCompactString};
 use mqtt_endpoint_tokio::mqtt_ep::{
     self, Endpoint,
     packet::v5_0,
@@ -16,12 +15,12 @@ use mqtt_protocol_core::mqtt::packet::{
 };
 use serde::Serialize;
 use tanuki_common::{
-    EntityId, Topic,
+    EntityId, TanukiString, ToTanukiString, Topic,
     meta::{self, MetaField},
 };
 use tokio::sync::Mutex;
 
-use self::capabilities::{Authority, EntityRole};
+use self::capabilities::{Authority, EntityRole, User};
 use crate::capabilities::{Capability, TanukiCapability};
 
 pub mod capabilities;
@@ -237,7 +236,7 @@ impl TanukiConnection {
         self.publish(
             Topic::EntityMeta {
                 entity,
-                key: CompactString::const_new(T::KEY),
+                key: TanukiString::const_new(T::KEY),
             },
             meta,
             PublishOpts::metadata(),
@@ -245,19 +244,27 @@ impl TanukiConnection {
         .await
     }
 
-    pub async fn entity<R: EntityRole>(
-        self: &Arc<Self>,
-        id: impl Into<EntityId>,
-    ) -> Result<Arc<TanukiEntity<R>>> {
-        let entity = TanukiEntity::<R> {
+    pub fn entity(self: &Arc<Self>, id: impl Into<EntityId>) -> Arc<TanukiEntity<User>> {
+        Arc::new(TanukiEntity {
             id: id.into(),
             conn: self.clone(),
             _role: PhantomData,
-        };
+        })
+    }
 
-        R::_maybe_initialize(&entity).await?;
+    pub fn entity_cap<C: Capability<User>>(self: &Arc<Self>, id: impl Into<EntityId>) -> C {
+        TanukiEntity::new(id.into(), self.clone()).capability::<C>()
+    }
 
-        Ok(Arc::new(entity))
+    pub async fn author_entity(
+        self: &Arc<Self>,
+        id: impl Into<EntityId>,
+    ) -> Result<Arc<TanukiEntity<Authority>>> {
+        let entity = TanukiEntity::new(id.into(), self.clone());
+
+        entity.initialize().await?;
+
+        Ok(entity)
     }
 }
 
@@ -298,6 +305,29 @@ pub struct TanukiEntity<R: EntityRole> {
     _role: PhantomData<R>,
 }
 
+impl<R: EntityRole> TanukiEntity<R> {
+    pub(crate) fn new(id: EntityId, conn: Arc<TanukiConnection>) -> Arc<Self> {
+        Arc::new(Self { id, conn, _role: PhantomData })
+    }
+
+    pub fn id(&self) -> &EntityId {
+        &self.id
+    }
+
+    pub fn connection(&self) -> Arc<TanukiConnection> {
+        self.conn.clone()
+    }
+}
+
+impl TanukiEntity<User> {
+    pub fn capability<C: Capability<User>>(self: &Arc<Self>) -> C {
+        C::from(TanukiCapability {
+            entity: self.clone(),
+            capability: C::ID.to_tanuki_string(),
+        })
+    }
+}
+
 impl TanukiEntity<Authority> {
     pub(crate) async fn initialize(&self) -> Result<()> {
         self.conn
@@ -316,26 +346,14 @@ impl TanukiEntity<Authority> {
     pub async fn publish_meta(&self, meta: impl MetaField) -> Result<()> {
         self.conn.publish_entity_meta(self.id.clone(), meta).await
     }
-}
 
-impl<R: EntityRole> TanukiEntity<R> {
-    pub fn id(&self) -> &EntityId {
-        &self.id
-    }
-
-    pub fn connection(&self) -> Arc<TanukiConnection> {
-        self.conn.clone()
-    }
-
-    pub async fn capability<C: Capability<R>>(self: &Arc<Self>) -> Result<C> {
+    pub async fn author_capability<C: Capability<Authority>>(self: &Arc<Self>) -> Result<C> {
         let cap = C::from(TanukiCapability {
             entity: self.clone(),
-            capability: C::ID.to_compact_string(),
+            capability: C::ID.to_tanuki_string(),
         });
 
-        if R::AUTHORITY {
-            cap.initialize(C::VERSION).await?;
-        }
+        cap.initialize(C::VERSION).await?;
 
         Ok(cap)
     }

@@ -7,7 +7,7 @@ use tanuki::{
 use tanuki_common::{
     EntityId,
     capabilities::{
-        buttons::ButtonEvent,
+        buttons::ButtonAction,
         light::{Color, ColorMode, LightState},
         on_off::On,
         sensor::{SensorPayload, SensorValue},
@@ -45,7 +45,7 @@ pub struct ZhaEventTranslation {
 }
 
 pub enum CapEventMapping {
-    Button { button: String, event: ButtonEvent },
+    Button { button: String, action: ButtonAction },
 }
 
 impl CapMapping {

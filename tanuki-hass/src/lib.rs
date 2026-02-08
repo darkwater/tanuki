@@ -250,11 +250,11 @@ pub async fn bridge(
                                     }
 
                                     match &translation.map_to {
-                                        entity::CapEventMapping::Button { button, event } => {
+                                        entity::CapEventMapping::Button { button, action } => {
                                             let sensor: &mut Buttons<Authority> =
                                                 registry.get(tanuki_id, entity_init).await?;
 
-                                            sensor.publish_event(button, *event).await?;
+                                            sensor.publish_action(button, *action).await?;
                                         }
                                     }
                                 }

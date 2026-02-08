@@ -1,10 +1,17 @@
+#![feature(deref_patterns)]
+#![expect(incomplete_features, reason = "deref_patterns")]
+
 use std::sync::Arc;
 
 use tanuki::{
     TanukiConnection,
-    capabilities::{User, buttons::Buttons, on_off::OnOff},
+    capabilities::{
+        User,
+        buttons::{ButtonEvent, ButtonName},
+        on_off::OnOff,
+    },
 };
-use tanuki_common::capabilities::{buttons::ButtonEvent, on_off::OnOffCommand};
+use tanuki_common::capabilities::{buttons::ButtonAction, on_off::OnOffCommand};
 
 #[tokio::main]
 async fn main() {
@@ -77,7 +84,7 @@ async fn main() {
                             params: serde_json::json!({}),
                             map_to: CapEventMapping::Button {
                                 button: "on".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -87,7 +94,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "on".to_owned(),
-                                event: ButtonEvent::LongPressed,
+                                action: ButtonAction::LongPressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -95,7 +102,7 @@ async fn main() {
                             params: serde_json::json!({}),
                             map_to: CapEventMapping::Button {
                                 button: "off".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -105,7 +112,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "off".to_owned(),
-                                event: ButtonEvent::LongPressed,
+                                action: ButtonAction::LongPressed,
                             },
                         },
                     ],
@@ -122,7 +129,7 @@ async fn main() {
                             params: serde_json::json!({}),
                             map_to: CapEventMapping::Button {
                                 button: "play_pause".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -132,7 +139,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "volume_up".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -142,7 +149,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "volume_down".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -152,7 +159,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "next".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -162,7 +169,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "previous".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -173,7 +180,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "shortcut_one".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -184,7 +191,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "shortcut_two".to_owned(),
-                                event: ButtonEvent::Pressed,
+                                action: ButtonAction::Pressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -195,7 +202,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "shortcut_one".to_owned(),
-                                event: ButtonEvent::LongPressed,
+                                action: ButtonAction::LongPressed,
                             },
                         },
                         ZhaEventTranslation {
@@ -206,7 +213,7 @@ async fn main() {
                             }),
                             map_to: CapEventMapping::Button {
                                 button: "shortcut_two".to_owned(),
-                                event: ButtonEvent::LongPressed,
+                                action: ButtonAction::LongPressed,
                             },
                         },
                     ],
@@ -263,55 +270,47 @@ async fn main() {
                     .await
                     .unwrap();
 
-            let remote = tanuki
-                .entity("rodret_remote_1")
-                .await
-                .unwrap()
-                .capability::<Buttons<User>>()
-                .await
-                .unwrap();
-
             let set_lights = {
-                let tanuki = tanuki.clone();
-                move |cmd, extent| {
-                    let tanuki = tanuki.clone();
-                    tokio::spawn(async move {
-                        for (tanuki_id, _) in &LIGHTS[..extent] {
-                            tanuki
-                                .entity(tanuki_id)
-                                .await
-                                .unwrap()
-                                .capability::<OnOff<User>>()
-                                .await
-                                .unwrap()
-                                .command(cmd)
-                                .await
-                                .unwrap();
-                        }
-                    });
+                async |cmd, extent| {
+                    for (tanuki_id, _) in &LIGHTS[..extent] {
+                        tanuki
+                            .entity_cap::<OnOff<User>>(tanuki_id)
+                            .command(cmd)
+                            .await
+                            .unwrap();
+                    }
                 }
             };
 
-            remote
-                .listen(move |button, event| match dbg!((button, event)) {
-                    ("on", ButtonEvent::Pressed) => {
-                        set_lights(OnOffCommand::On, 5);
+            loop {
+                match tanuki.recv().await {
+                    Ok(ev) => {
+                        if let Ok(ev) = ButtonEvent::try_from(&ev) {
+                            match ev {
+                                ButtonEvent {
+                                    entity: "rodret_remote_1",
+                                    name: ButtonName::On,
+                                    action: ButtonAction::Pressed,
+                                } => {
+                                    set_lights(OnOffCommand::On, 5).await;
+                                }
+                                _ => {
+                                    tracing::info!(
+                                        entity = %ev.entity,
+                                        button = ?ev.name,
+                                        action = ?ev.action,
+                                        "Unhandled button event"
+                                    );
+                                }
+                            }
+                        }
                     }
-                    ("on", ButtonEvent::LongPressed) => {
-                        set_lights(OnOffCommand::On, 8);
+                    Err(e) => {
+                        tracing::error!("Error receiving event: {:?}", e);
+                        break;
                     }
-                    ("off", ButtonEvent::Pressed) => {
-                        set_lights(OnOffCommand::Off, 8);
-                    }
-                    (button, event) => {
-                        tracing::info!("Unhandled button event: {} {:?}", button, event);
-                    }
-                })
-                .await
-                .unwrap();
-
-            #[allow(unreachable_code)] // unwrap will panic on error
-            tanuki.handle().await.unwrap()
+                }
+            }
         });
     }
 

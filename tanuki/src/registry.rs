@@ -36,13 +36,13 @@ impl Registry {
                 let entity = match entity {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
-                        let entity = self.tanuki.entity(id.clone()).await?;
+                        let entity = self.tanuki.author_entity(id.clone()).await?;
                         entity_init(&entity).await?;
                         entry.insert(entity)
                     }
                 };
 
-                let sensor = entity.capability::<T>().await?;
+                let sensor = entity.author_capability::<T>().await?;
                 entry.insert(Box::new(sensor))
             }
         };

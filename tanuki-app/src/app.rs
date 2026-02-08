@@ -16,7 +16,7 @@ use tanuki::{
 use tanuki_common::{
     EntityId, Topic,
     capabilities::{
-        buttons::ButtonEvent,
+        buttons::ButtonAction,
         light::LightState,
         media::{MediaCapabilities, MediaCommand, MediaState, MediaStatus},
         on_off::OnOffCommand,
@@ -104,7 +104,7 @@ pub struct TanukiMediaState {
 
 #[derive(Default)]
 pub struct TanukiButtonsState {
-    pub buttons: HashMap<String, Timeline<ButtonEvent>>,
+    pub buttons: HashMap<String, Timeline<ButtonAction>>,
 }
 
 pub struct Timeline<T> {
@@ -348,9 +348,11 @@ impl eframe::App for TanukiApp {
                                     let entity = selected_entity_id.clone();
                                     let cmd = cmd.clone();
                                     self.tokio_rt.spawn(async move {
-                                        let entity = tanuki.entity(entity).await.unwrap();
-                                        let cap = entity.capability::<Media<User>>().await.unwrap();
-                                        cap.command(cmd).await.unwrap();
+                                        tanuki
+                                            .entity_cap::<Media<User>>(entity)
+                                            .command(cmd)
+                                            .await
+                                            .unwrap();
                                     });
                                 }
                             }
@@ -365,9 +367,11 @@ impl eframe::App for TanukiApp {
                             let tanuki = self.tanuki.clone();
                             let entity = selected_entity_id.clone();
                             self.tokio_rt.spawn(async move {
-                                let entity = tanuki.entity(entity).await.unwrap();
-                                let cap = entity.capability::<OnOff<User>>().await.unwrap();
-                                cap.command(OnOffCommand::Toggle).await.unwrap();
+                                tanuki
+                                    .entity_cap::<OnOff<User>>(entity)
+                                    .command(OnOffCommand::Toggle)
+                                    .await
+                                    .unwrap();
                             });
                         }
                     }

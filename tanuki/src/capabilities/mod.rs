@@ -1,10 +1,9 @@
 use core::ops::Deref;
 use std::sync::Arc;
 
-use compact_str::{CompactString, ToCompactString};
 use serde::Serialize;
 use tanuki_common::{
-    EntityId, Property, Topic,
+    EntityId, Property, TanukiString, ToTanukiString, Topic,
     meta::{self, MetaField},
 };
 
@@ -18,7 +17,7 @@ pub mod sensor;
 
 pub struct TanukiCapability<R: EntityRole> {
     pub(crate) entity: Arc<TanukiEntity<R>>,
-    pub(crate) capability: CompactString,
+    pub(crate) capability: TanukiString,
 }
 
 impl<R: EntityRole> TanukiCapability<R> {
@@ -42,14 +41,14 @@ impl<R: EntityRole> TanukiCapability<R> {
 
     pub async fn publish_raw(
         &self,
-        topic: impl ToCompactString,
+        topic: impl ToTanukiString,
         payload: impl Serialize,
         opts: PublishOpts,
     ) -> Result<()> {
         let topic = Topic::CapabilityData {
             entity: self.entity.id().clone(),
             capability: self.capability.clone(),
-            rest: topic.to_compact_string(),
+            rest: topic.to_tanuki_string(),
         };
 
         self.entity.conn.publish(topic, payload, opts).await
@@ -67,7 +66,7 @@ impl<R: EntityRole> TanukiCapability<R> {
         let topic = Topic::CapabilityMeta {
             entity: self.entity.id().clone(),
             capability: self.capability.clone(),
-            key: CompactString::const_new(T::KEY),
+            key: TanukiString::const_new(T::KEY),
         };
 
         self.entity
@@ -87,7 +86,7 @@ impl<R: EntityRole> TanukiCapability<R> {
                 Topic::CapabilityData {
                     entity: self.entity.id().clone(),
                     capability: self.capability.clone(),
-                    rest: CompactString::const_new(T::KEY),
+                    rest: TanukiString::const_new(T::KEY),
                 },
                 Box::new(move |ev| match serde_json::from_value::<T>(ev.payload) {
                     Ok(payload) => {
@@ -133,12 +132,6 @@ impl<R: EntityRole> TanukiCapability<R> {
 
 pub trait EntityRole {
     const AUTHORITY: bool;
-
-    #[doc(hidden)] // implementation detail
-    #[expect(async_fn_in_trait)] // its internal anyway
-    async fn _maybe_initialize(entity: &TanukiEntity<Self>) -> Result<()>
-    where
-        Self: Sized;
 }
 
 pub struct Authority;
@@ -146,17 +139,9 @@ pub struct User;
 
 impl EntityRole for Authority {
     const AUTHORITY: bool = true;
-
-    async fn _maybe_initialize(entity: &TanukiEntity<Self>) -> Result<()> {
-        entity.initialize().await
-    }
 }
 impl EntityRole for User {
     const AUTHORITY: bool = false;
-
-    async fn _maybe_initialize(_entity: &TanukiEntity<Self>) -> Result<()> {
-        Ok(())
-    }
 }
 
 pub trait Capability<R: EntityRole>:

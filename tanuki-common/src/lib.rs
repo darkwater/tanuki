@@ -1,12 +1,9 @@
 #![cfg_attr(not(test), no_std)]
-#![feature(macro_attr, macro_derive, str_split_remainder)]
+#![feature(deref_pure_trait, macro_attr, macro_derive, str_split_remainder)]
 
 extern crate alloc;
 
 use core::{fmt::Display, str::FromStr};
-
-use compact_str::{CompactString, ToCompactString};
-use serde::{Deserialize, Serialize};
 
 pub mod capabilities;
 pub mod macros;
@@ -16,55 +13,33 @@ pub mod meta;
 pub use serde as _serde;
 
 mod property;
+mod string;
 pub use property::*;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct EntityId(pub CompactString);
-
-impl EntityId {
-    pub const WILDCARD: Self = EntityId(CompactString::const_new("+"));
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<T: AsRef<str>> From<T> for EntityId {
-    fn from(value: T) -> Self {
-        EntityId(value.as_ref().to_compact_string())
-    }
-}
-
-impl Display for EntityId {
-    fn fmt(&self, f: &mut alloc::fmt::Formatter<'_>) -> alloc::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+pub use string::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Topic {
     EntityMeta {
         entity: EntityId,
-        key: CompactString,
+        key: TanukiString,
     },
     CapabilityMeta {
         entity: EntityId,
-        capability: CompactString,
-        key: CompactString,
+        capability: TanukiString,
+        key: TanukiString,
     },
     CapabilityData {
         entity: EntityId,
-        capability: CompactString,
-        rest: CompactString,
+        capability: TanukiString,
+        rest: TanukiString,
     },
 }
 
 impl Topic {
     pub const CAPABILITY_DATA_WILDCARD: Self = Self::CapabilityData {
         entity: EntityId::WILDCARD,
-        capability: CompactString::const_new("+"),
-        rest: CompactString::const_new("#"),
+        capability: TanukiString::const_new("+"),
+        rest: TanukiString::const_new("#"),
     };
 }
 
@@ -99,7 +74,7 @@ impl FromStr for Topic {
                     Some("$meta") => match parts.next() {
                         Some(key) if parts.next().is_none() => Ok(Topic::EntityMeta {
                             entity: EntityId::from(entity),
-                            key: key.to_compact_string(),
+                            key: key.to_tanuki_string(),
                         }),
                         Some(_) => Err("tanuki/entities/{id}/$meta/{key}/..."),
                         _ => Err("tanuki/entities/{id}/$meta"),
@@ -108,18 +83,18 @@ impl FromStr for Topic {
                         Some("$meta") => match parts.next() {
                             Some(key) if parts.next().is_none() => Ok(Topic::CapabilityMeta {
                                 entity: EntityId::from(entity),
-                                capability: capability.to_compact_string(),
-                                key: key.to_compact_string(),
+                                capability: capability.to_tanuki_string(),
+                                key: key.to_tanuki_string(),
                             }),
                             Some(_) => Err("tanuki/entities/{id}/{cap}/$meta/{key}/..."),
                             _ => Err("tanuki/entities/{id}/{cap}/$meta"),
                         },
                         Some(rest) => Ok(Topic::CapabilityData {
                             entity: EntityId::from(entity),
-                            capability: capability.to_compact_string(),
+                            capability: capability.to_tanuki_string(),
                             rest: match parts.remainder() {
-                                Some(remainder) => rest.to_compact_string() + "/" + remainder,
-                                None => rest.to_compact_string(),
+                                Some(remainder) => rest.to_tanuki_string() + "/" + remainder,
+                                None => rest.to_tanuki_string(),
                             },
                         }),
                         None => Err("tanuki/entities/{id}/{cap}"),
@@ -156,7 +131,7 @@ mod tests {
         assert_eq!(
             Topic::EntityMeta {
                 entity: EntityId::from("sensor.temperature"),
-                key: "status".to_compact_string(),
+                key: "status".to_tanuki_string(),
             }
             .to_string(),
             "tanuki/entities/sensor.temperature/$meta/status"
@@ -165,8 +140,8 @@ mod tests {
         assert_eq!(
             Topic::CapabilityMeta {
                 entity: EntityId::from("sensor.temperature"),
-                capability: "temperature_sensor".to_compact_string(),
-                key: "version".to_compact_string(),
+                capability: "temperature_sensor".to_tanuki_string(),
+                key: "version".to_tanuki_string(),
             }
             .to_string(),
             "tanuki/entities/sensor.temperature/temperature_sensor/$meta/version"
@@ -175,8 +150,8 @@ mod tests {
         assert_eq!(
             Topic::CapabilityData {
                 entity: EntityId::from("sensor.temperature"),
-                capability: "temperature_sensor".to_compact_string(),
-                rest: "current".to_compact_string(),
+                capability: "temperature_sensor".to_tanuki_string(),
+                rest: "current".to_tanuki_string(),
             }
             .to_string(),
             "tanuki/entities/sensor.temperature/temperature_sensor/current"
@@ -191,7 +166,7 @@ mod tests {
                 .unwrap(),
             Topic::EntityMeta {
                 entity: EntityId::from("sensor.temperature"),
-                key: "status".to_compact_string(),
+                key: "status".to_tanuki_string(),
             }
         );
 
@@ -206,8 +181,8 @@ mod tests {
                 .unwrap(),
             Topic::CapabilityMeta {
                 entity: EntityId::from("sensor.temperature"),
-                capability: "temperature_sensor".to_compact_string(),
-                key: "version".to_compact_string(),
+                capability: "temperature_sensor".to_tanuki_string(),
+                key: "version".to_tanuki_string(),
             }
         );
 
@@ -223,8 +198,8 @@ mod tests {
                 .unwrap(),
             Topic::CapabilityData {
                 entity: EntityId::from("sensor.temperature"),
-                capability: "temperature_sensor".to_compact_string(),
-                rest: "current".to_compact_string(),
+                capability: "temperature_sensor".to_tanuki_string(),
+                rest: "current".to_tanuki_string(),
             }
         );
 
@@ -234,8 +209,8 @@ mod tests {
                 .unwrap(),
             Topic::CapabilityData {
                 entity: EntityId::from("sensor.temperature"),
-                capability: "temperature_sensor".to_compact_string(),
-                rest: "current/extra".to_compact_string(),
+                capability: "temperature_sensor".to_tanuki_string(),
+                rest: "current/extra".to_tanuki_string(),
             }
         );
     }
