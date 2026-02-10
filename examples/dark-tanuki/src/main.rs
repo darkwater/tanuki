@@ -224,7 +224,7 @@ async fn main() {
 
         const LIGHTS: [(&str, &str); 8] = [
             ("north_lamp", "light.north_light"),
-            ("south_lamp", "light.south_light"),
+            ("south_lamp", "light.kajplats_e27_cws_globe_1055lm"),
             ("cabinet_strip", "light.cabinet_strip_light"),
             ("couch_strip", "light.couch_strip"),
             ("bed_strip", "light.bed_strip_light"),
