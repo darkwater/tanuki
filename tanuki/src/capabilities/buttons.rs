@@ -19,6 +19,7 @@ impl Buttons<Authority> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ButtonEvent {
     pub entity: EntityId,
     pub name: ButtonName,

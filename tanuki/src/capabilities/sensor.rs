@@ -21,6 +21,7 @@ impl Sensor<Authority> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct SensorEvent {
     pub entity: EntityId,
     pub key: TanukiString,

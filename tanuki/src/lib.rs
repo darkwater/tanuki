@@ -1,4 +1,4 @@
-#![feature(macro_attr)]
+#![feature(async_fn_traits, macro_attr, unboxed_closures)]
 
 use core::{convert::Infallible, marker::PhantomData, str::FromStr as _, sync::atomic::AtomicU16};
 use std::{collections::BTreeMap, sync::Arc};
@@ -20,10 +20,14 @@ use tanuki_common::{
 };
 use tokio::sync::Mutex;
 
-use self::capabilities::{Authority, EntityRole, User};
+use self::{
+    capabilities::{Authority, EntityRole, User},
+    listener::{EventHandler, Listener},
+};
 use crate::capabilities::{Capability, TanukiCapability};
 
 pub mod capabilities;
+pub mod listener;
 pub mod log;
 pub mod registry;
 
@@ -266,6 +270,23 @@ impl TanukiConnection {
 
         Ok(entity)
     }
+
+    pub fn listener<'a>(self: &Arc<Self>) -> Listener<'a> {
+        Listener::new(self.clone())
+    }
+
+    pub fn intent<A>(self: &Arc<Self>, f: A)
+    where
+        A: AsyncFnOnce(Arc<Self>) -> Result<()> + Send + 'static,
+        A::CallOnceFuture: Send + 'static,
+    {
+        let conn = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = f(conn).await {
+                tracing::error!("Intent error: {e}");
+            }
+        });
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -273,6 +294,17 @@ pub struct PublishEvent {
     pub sub_id: Option<SubscriptionIdentifier>,
     pub topic: Topic,
     pub payload: serde_json::Value,
+}
+
+impl PublishEvent {
+    pub fn try_handle<E: for<'event> TryFrom<&'event PublishEvent, Error = ()>>(
+        &self,
+        handler: &mut impl EventHandler<E>,
+    ) {
+        if let Ok(event) = E::try_from(self) {
+            handler.handle(event);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

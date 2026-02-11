@@ -1,17 +1,17 @@
 #![feature(deref_patterns)]
 #![expect(incomplete_features, reason = "deref_patterns")]
 
+pub mod handler;
+
 use std::sync::Arc;
 
 use tanuki::{
     TanukiConnection,
-    capabilities::{
-        User,
-        buttons::{ButtonEvent, ButtonName},
-        on_off::OnOff,
-    },
+    capabilities::{buttons::ButtonEvent, sensor::SensorEvent},
 };
-use tanuki_common::capabilities::{buttons::ButtonAction, on_off::OnOffCommand};
+use tanuki_common::capabilities::buttons::ButtonAction;
+
+use self::handler::Handler;
 
 #[tokio::main]
 async fn main() {
@@ -19,8 +19,8 @@ async fn main() {
 
     tokio::spawn(async move {
         tanuki_bthome::bridge("192.168.0.106:1883", [
-            ("ATC_164B6D", "atc_balcony", "ATC Balcony"),
-            ("ATC_2DB3D7", "atc_door_ceiling", "ATC Door Ceiling"),
+            ("ATC_164B6D", "balcony_door.temperature", "ATC Balcony"),
+            ("ATC_C11CAF", "front_door.temperature", "ATC Door Ceiling"),
         ])
         .await
         .unwrap();
@@ -67,11 +67,45 @@ async fn main() {
                 to_hass: vec![],
             },
             MappedEntity {
-                tanuki_id: "motion_sensor".into(),
-                from_hass: vec![EntityDataMapping::State {
-                    from_id: "binary_sensor.motion_sensor_motion".into(),
-                    map_to: CapMapping::binary_sensor("motion"),
-                }],
+                tanuki_id: "motion_room".into(),
+                from_hass: vec![
+                    EntityDataMapping::State {
+                        from_id: "binary_sensor.motion_sensor_motion".into(),
+                        map_to: CapMapping::binary_sensor("motion"),
+                    },
+                    EntityDataMapping::State {
+                        from_id: "sensor.motion_sensor_battery".into(),
+                        map_to: CapMapping::sensor("battery"),
+                    },
+                ],
+                to_hass: vec![],
+            },
+            MappedEntity {
+                tanuki_id: "motion_kitchen".into(),
+                from_hass: vec![
+                    EntityDataMapping::State {
+                        from_id: "binary_sensor.myggspray_wrlss_mtn_sensor_occupancy".into(),
+                        map_to: CapMapping::binary_sensor("motion"),
+                    },
+                    EntityDataMapping::State {
+                        from_id: "sensor.myggspray_wrlss_mtn_sensor_battery".into(),
+                        map_to: CapMapping::sensor("battery"),
+                    },
+                ],
+                to_hass: vec![],
+            },
+            MappedEntity {
+                tanuki_id: "balcony_door.open".into(),
+                from_hass: vec![
+                    EntityDataMapping::State {
+                        from_id: "binary_sensor.myggbett_door_window_sensor_door".into(),
+                        map_to: CapMapping::binary_sensor("open"),
+                    },
+                    EntityDataMapping::State {
+                        from_id: "sensor.myggbett_door_window_sensor_battery".into(),
+                        map_to: CapMapping::sensor("battery"),
+                    },
+                ],
                 to_hass: vec![],
             },
             MappedEntity {
@@ -222,7 +256,7 @@ async fn main() {
             },
         ];
 
-        const LIGHTS: [(&str, &str); 8] = [
+        const HASS_LIGHTS: [(&str, &str); 8] = [
             ("north_lamp", "light.north_light"),
             ("south_lamp", "light.kajplats_e27_cws_globe_1055lm"),
             ("cabinet_strip", "light.cabinet_strip_light"),
@@ -233,7 +267,7 @@ async fn main() {
             ("kitchen_lamp", "light.kitchen_light"),
         ];
 
-        for (tanuki, hass) in LIGHTS {
+        for (tanuki, hass) in HASS_LIGHTS {
             mappings.push(MappedEntity {
                 tanuki_id: tanuki.into(),
                 from_hass: vec![EntityDataMapping::State {
@@ -270,46 +304,12 @@ async fn main() {
                     .await
                     .unwrap();
 
-            let set_lights = {
-                async |cmd, extent| {
-                    for (tanuki_id, _) in &LIGHTS[..extent] {
-                        tanuki
-                            .entity_cap::<OnOff<User>>(tanuki_id)
-                            .command(cmd)
-                            .await
-                            .unwrap();
-                    }
-                }
-            };
+            let mut handler = Handler::new(tanuki.clone());
 
             loop {
-                match tanuki.recv().await {
-                    Ok(ev) => {
-                        if let Ok(ev) = ButtonEvent::try_from(&ev) {
-                            match ev {
-                                ButtonEvent {
-                                    entity: "rodret_remote_1",
-                                    name: ButtonName::On,
-                                    action: ButtonAction::Pressed,
-                                } => {
-                                    set_lights(OnOffCommand::On, 5).await;
-                                }
-                                _ => {
-                                    tracing::info!(
-                                        entity = %ev.entity,
-                                        button = ?ev.name,
-                                        action = ?ev.action,
-                                        "Unhandled button event"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Error receiving event: {:?}", e);
-                        break;
-                    }
-                }
+                let msg = tanuki.recv().await.unwrap();
+                msg.try_handle::<SensorEvent>(&mut handler);
+                msg.try_handle::<ButtonEvent>(&mut handler);
             }
         });
     }
