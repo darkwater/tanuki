@@ -21,6 +21,10 @@ async fn main() {
         tanuki_bthome::bridge("192.168.0.106:1883", [
             ("ATC_164B6D", "balcony_door.temperature", "ATC Balcony"),
             ("ATC_C11CAF", "front_door.temperature", "ATC Door Ceiling"),
+            ("ATC_2A43C0", "desk.temperature", "ATC Desk"),
+            ("ATC_15B569", "couch.temperature", "ATC Couch"),
+            ("ATC_409888", "tetsuya.temperature", "ATC Tetsuya"),
+            ("ATC_2DFB76", "sinon.temperature", "ATC Sinon"),
         ])
         .await
         .unwrap();
