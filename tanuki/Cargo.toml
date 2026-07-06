@@ -1,0 +1,12 @@
+[package]
+name = "tanuki"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow            = "1.0.103"
+log               = "0.4.33"
+pretty_env_logger = "0.5.0"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+wasmtime          = "46.0.1"
+wasmtime-wasi     = { version = "46.0.1", features = ["p3"] }

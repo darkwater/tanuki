@@ -1,0 +1,18 @@
+tanuki/providers/tanuki-hass/status                                                 | "online"
+tanuki/entities/living-room.lamp.north/$meta/status                                 | "online"
+tanuki/entities/living-room.lamp.north/$meta/provider                               | "tanuki-hass"
+tanuki/entities/living-room.lamp.north/$meta/info                                   | {"name": "North Lamp", ...}
+tanuki/entities/living-room.lamp.north/tanuki.on_off/$meta/version                  | 1
+tanuki/entities/living-room.lamp.north/tanuki.on_off/on                             | true
+tanuki/entities/living-room.lamp.north/tanuki.on_off/command                        | <-| on, off, toggle
+tanuki/entities/living-room.lamp.north/tanuki.light/$meta/version                   | 1
+tanuki/entities/living-room.lamp.north/tanuki.light/capabilities                    | { brightness: true, color: true, fade: true }
+tanuki/entities/living-room.lamp.north/tanuki.light/state                           | { on: true, color: { r: 255, g: 200, b: 150 } }
+tanuki/entities/living-room.lamp.north/tanuki.light/command                         | <-| { on: true, color: { r: 255, g: 220, b: 180 } }
+tanuki/entities/living-room.remotes.hue-1/$meta/status                              | "online"
+tanuki/entities/living-room.remotes.hue-1/$meta/provider                            | "tanuki-hass"
+tanuki/entities/living-room.remotes.hue-1/tanuki.button/$meta/version               | 1
+tanuki/entities/living-room.remotes.hue-1/tanuki.button/$buttons                    | ["on", "off", "up", "down"]
+tanuki/entities/living-room.remotes.hue-1/tanuki.button/on                          | ->| "pressed"
+
+vim: ft=csv

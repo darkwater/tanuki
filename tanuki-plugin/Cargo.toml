@@ -1,0 +1,8 @@
+[package]
+name = "tanuki-plugin"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+log         = "0.4"
+wit-bindgen = "0.58.0"

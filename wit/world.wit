@@ -1,0 +1,43 @@
+package tanuki:plugin@0.1.0;
+
+interface provider {
+    record info {
+        name: string,
+        description: string,
+        version: string,
+    }
+
+    get-info: func() -> info;
+    run: async func(config: string) -> result<_, string>;
+}
+
+interface entities {
+    enum status {
+        online,
+        offline,
+    }
+
+    record entity-info {
+        name: option<string>,
+    }
+
+    record command {
+        capability-name: string,
+        payload: string,
+    }
+
+    resource entity {
+        constructor(id: string, info: entity-info);
+        set-status: func(status: status);
+        set-state: func(capability-name: string, name: string, value: string);
+        send-event: func(capability-name: string, name: string, payload: string);
+        commands: func() -> stream<command>;
+    }
+}
+
+world plugin {
+    export provider;
+
+    import entities;
+    import logging;
+}
