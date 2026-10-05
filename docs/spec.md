@@ -36,7 +36,14 @@ Freeform topics accept changing runtime value kinds, optionally warning about a 
 
 Runtime values include ordinary scalar/collection data, null, inline bytes, and first-class timestamps and durations. `Value::Null` represents explicit null; schemas carry optionality/type constraints. Missing topics and inputs with no submitted value are distinct from a present null.
 
-The exact integer domains, float restrictions, semantic time representation, and encoding are open (D5). ISO 8601 duration text is the agreed direction. Enums represented by schema-constrained strings or tagged maps are recommended, not yet selected as a final contract.
+The initial runtime profile uses signed 64-bit integers and finite 64-bit
+floats. Unsigned integers are initially omitted: nonnegative schema ranges cover
+ordinary unsigned constraints, while values above `i64::MAX` have no initial
+representation. Timestamps and signed fixed durations are semantic values;
+timer parameters use a separate nonnegative fixed-duration type. ISO 8601
+duration text is the agreed wire direction. Calendar-relative spans are
+deferred. Enums represented by schema-constrained strings or tagged maps are
+recommended, not yet selected as a final contract.
 
 ## Four node kinds
 
@@ -50,6 +57,12 @@ Node kind has two independent semantic dimensions: retained/instant and input/ou
 | Instant input: command | Emits each submission; no retained payload | Defining/claiming client, independent of submitter |
 
 Output publication implicitly establishes ownership. A different writer normally produces a warning, rather than rejection. Input submission never takes ownership; input definition/claiming is a separate intent. Inputs may be unclaimed. The owner sets input metadata; other clients supply values.
+
+On a freeform topic with no applicable schema, an operation that selects a
+different node kind replaces the existing node and produces a warning. State
+that is invalid for the new kind, such as a retained payload, input definition,
+or claim, is discarded. An applicable schema may deny the change, in which case
+the containing atomic batch has no effects.
 
 Illustrative operation names, not a frozen Rust or wire API:
 
@@ -65,7 +78,7 @@ enum Operation {
 
 Definitions and retained payloads are separate. Input value expiry clears the payload while preserving the definition and claim; application logic decides what an absent request means, and expiry does not undo effects. Claim release preserves the definition and any unexpired value. Defining/reclaiming an input preserves pending intent. Submitting before a controller exists can create an unclaimed input, with its retained/input kind specified.
 
-Commands may be submitted without an owner. They reach current subscribers or are lost; acceptance does not promise execution. Persist input definitions and unexpired retained values, but clear session claims on restart. Reconnecting controllers reclaim explicitly. Remaining creation defaults and kind-change policies are discussed in D1.
+Commands may be submitted without an owner. They reach current subscribers or are lost; acceptance does not promise execution. Persist input definitions and unexpired retained values, but clear session claims on restart. Reconnecting controllers reclaim explicitly.
 
 Repeated writes of an identical value still update `last_updated`, provenance, and supplied expiry. Scripts decide how desired values translate to outputs; Tanuki does not provide built-in desired/actual reconciliation.
 
@@ -80,6 +93,10 @@ A physical HTTP connection is not automatically a managed session. Read-only end
 Persistent sessions can expose connected/disconnected status. A one-off phone submission must not imply that the phone is offline after the request ends. Topic owner, last writer, and the session responsible for a claim are different concepts.
 
 Input claims belong to an owning session. Disconnect either releases them immediately or starts a configured grace period. Other clients' submissions do not renew that claim. Release must be guarded against an intervening replacement claim. Restart clears session claims; reconnecting controllers explicitly reclaim without erasing pending values (D1).
+
+A live managed session may replace an existing input claim with a warning. The
+displaced session immediately loses claim authority. Stateless attribution,
+including a matching client name, cannot claim or replace a claim.
 
 Transport liveness detection uses ordinary transport mechanisms. A separate application heartbeat or session-resumption protocol is not initially required.
 
@@ -104,7 +121,12 @@ Selections can cover wildcard paths, chosen branches, or arbitrary unions:
 /voice-assistant/status + /tv/** + /desktop/workspace
 ```
 
-`*` should behave like a Unix-style single-segment wildcard; `**` provides recursive selection. Exact grammar, brace support, escaping, and recursive zero-segment behaviour need D7. The same selector language is shared by all adapters.
+`*` is a whole-segment wildcard; `**` is a whole-segment recursive wildcard and
+matches zero or more segments. Non-nested whole-segment brace choices are
+supported. Selector unions are represented as a collection rather than a `+`
+text operator. Ordinary topic segments reject the reserved selector characters
+`*`, `?`, `[`, `]`, `{`, `}`, and `\`; there is no initial escaping grammar.
+The same selector language is shared by all adapters.
 
 Clients can supply subscriptions at startup, including an empty set for producers. They receive a complete initial snapshot, then live updates. The intended implementation must establish the snapshot and subsequent stream without a gap. Instant payloads are not replayed in a snapshot.
 

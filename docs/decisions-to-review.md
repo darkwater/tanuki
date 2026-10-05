@@ -20,8 +20,18 @@ A retained input can be defined but never submitted to, lose its desired value t
 - A submission can precede its controller, creating an unclaimed input with its retained/input kind specified.
 - Commands without an owner are allowed; they go to current subscribers or are lost. No replay or execution guarantee is implied.
 - Restore input definitions and unexpired retained values after restart; clear session claims. Instant commands are gone.
+- On a freeform topic with no applicable schema, an implicit node-kind change is accepted with a warning. Incompatible state belonging to the old kind is discarded. Applicable schema policy may deny the change atomically.
 
-**Remaining small policy choices:** ordinary-output creation defaults, kind changes, input claim collisions, omitted-expiry semantics, and instant-output metadata persistence. The user's acceptance of the examples does not implicitly approve every earlier recommendation in this file. Prefer simple documented behaviour, warning on recoverable anomalies, and logging over added lifecycle machinery.
+**Remaining small policy choices:** omitted-expiry semantics and instant-output
+metadata persistence. Ordinary output publication creates its corresponding
+kind when absent. The user's acceptance of the examples does not implicitly
+approve every earlier recommendation in this file. Prefer simple documented
+behaviour, warning on recoverable anomalies, and logging over added lifecycle
+machinery.
+
+**Accepted claim collision:** a live managed session may replace an existing
+input claim with a warning. The displaced session immediately loses claim
+authority; stale cleanup remains guarded by internal session/claim identity.
 
 Rust storage should distinguish `Option<Value>` (no payload yet) from `Some(Value::Null)` (a submitted null). That is separate from encoding an optional value inside a schema.
 
@@ -77,7 +87,7 @@ Subtree links also require clear behaviour when the target disappears and return
 
 The choices are JSON plus MessagePack, inline bytes, semantic timestamps/durations, and ISO 8601 duration text. The full value algebra and tag escapes are not settled.
 
-**Recommended first profile:** null, bool, signed 64-bit integer, finite 64-bit float, string, bytes, list, string-keyed map, timestamp, duration. Add unsigned integers only if needed; distinct positive signed/unsigned values otherwise require an explicit preservation rule across codecs.
+**Accepted first profile:** null, bool, signed 64-bit integer, finite 64-bit float, string, bytes, list, string-keyed map, timestamp, and signed fixed duration. Unsigned integers and calendar-relative spans are excluded initially; a nonnegative schema range expresses ordinary unsigned constraints without adding a second integer representation. Timer parameters use a distinct nonnegative fixed-duration type.
 
 For JSON, a concrete proposal is `{"$timestamp":"..."}`, `{"$duration":"..."}`, `{"$bytes":"<base64>"}`, and `{"$int":"<decimal>"}` for exact large integers. Wrap literal maps containing reserved tag keys as `{"$map":{...}}`. Ordinary JSON objects remain maps. Freeze exact tag recognition/escaping rules and canonical encoding before implementing them. Tagging every value remains an alternative, not a decision.
 
@@ -104,11 +114,21 @@ A disconnect after commit but before acknowledgement leaves the caller uncertain
 
 **Needed before:** topic keys and selector parser.
 
-**Recommended initial grammar:** absolute UTF-8 paths, no empty segments or trailing slash except root, reject `.` and `..` segments. `*` matches within one segment; `**` is allowed only as an entire segment and matches zero or more segments. Thus `/devices/**` includes `/devices` itself if it holds a value. Support finite brace alternatives, with no nested braces initially. Do not add shell expansion, filesystem lookup, or regex behaviour.
+**Accepted initial grammar:** absolute UTF-8 paths, no empty segments or
+trailing slash except root, and reject `.` and `..` segments. `*` is a
+whole-segment wildcard; `**` is allowed only as an entire segment and matches
+zero or more segments. Thus `/devices/**` includes `/devices` itself if it
+holds a value. Support finite non-nested whole-segment brace alternatives. Do
+not add shell expansion, filesystem lookup, regex behavior, or a textual union
+operator; a `Selection` is a collection of selectors.
 
-Choose escaping now: simplest initial rule is to reject literal glob metacharacters in topic segments, rather than invent a backslash grammar. This is a proposed restriction, not already agreed.
+**Accepted escaping/reservation rule:** ordinary topic segments reject `*`,
+`?`, `[`, `]`, `{`, `}`, and `\`, reserving common shell-style selector syntax
+rather than introducing an escaping grammar. A first segment beginning with
+`$` is the Tanuki system namespace. Other punctuation remains available.
 
-Ordinary paths may have both a value and children; they are not actual filesystem directories. Decide how `/` itself behaves: recommendation make it a virtual root, not a writable node.
+Ordinary paths may have both a value and children; they are not actual
+filesystem directories. `/` is an accepted virtual root and is not writable.
 
 ## D8 — Operational defaults that should be explicit, not elaborate
 
