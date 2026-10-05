@@ -1,8 +1,8 @@
 # US-08 — Pending intent before a controller starts
 
-- **Status:** pending-intent core lifecycle implemented; expiry, persistence, transport, and real-world use not yet verified.
+- **Status:** pending-intent lifecycle, transport delivery, and expiry implemented; persistence and real-world use not yet verified.
 - **Origin:** Illustrative assistant example, lifetime behaviour accepted.
-- **Last updated:** 2026-10-05.
+- **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -32,8 +32,9 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 
 - Core test links: [test plan](../test-plan.md) — L1, P1; E1 restart coverage.
 - `tests/core_sessions_inputs.rs::stateless_definition_and_submission_create_unclaimed_pending_intent` verifies US-08.A1.
-- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Network subscription delivery remains task 06; expiry and restart criteria remain tasks 07 and 08.
+- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Network subscription delivery is covered by the task-06 simulated room; restart remains task 08.
 - `tests/http_api.rs::batch_endpoint_composes_unclaimed_input_definition_and_submission` verifies US-08.A1 through the stateless HTTP batch adapter.
+- `tests/core_expiry.rs::equal_deadlines_remove_state_and_clear_only_desired_payload_in_one_commit` verifies US-08.A3's missing-payload state while preserving the definition.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -41,3 +42,4 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-05: Task 03 implemented stateless pending-intent creation and later claim without value loss; delivery, expiry, and persistence remain unverified.
+- 2026-10-06: Tasks 06–07 added live delivery and deterministic desired-payload expiry. Persistence remains pending.

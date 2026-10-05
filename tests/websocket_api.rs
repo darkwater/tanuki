@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
@@ -5,7 +6,7 @@ use jiff::Timestamp as JiffTimestamp;
 use serde_json::{Value as RawJson, json};
 use tanuki::{
     core::Core,
-    domain::{Node, Selection, Selector, Timestamp, Value},
+    domain::{Node, Selection, Selector, Timestamp, TopicPath, Value},
     protocol::{DiagnosticView, JsonValue, NodeView, ServerMessage},
     server::serve_with_core,
     transport::{Clock, SharedCore},
@@ -33,11 +34,15 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
+        let clock: Clock =
+            Arc::new(|| Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()));
+        Self::start_with_clock(clock).await
+    }
+
+    async fn start_with_clock(clock: Clock) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let core = Arc::new(Mutex::new(Core::new()));
-        let clock: Clock =
-            Arc::new(|| Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()));
         let (shutdown, stopped) = oneshot::channel();
         let task = tokio::spawn(serve_with_core(listener, core.clone(), clock, async move {
             let _ = stopped.await;
@@ -407,7 +412,10 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
         }),
     )
     .await;
-    let _ = recv_json(&mut controller).await;
+    assert!(matches!(
+        recv_json(&mut controller).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "own-lamp"
+    ));
     assert_update_topics(&mut controller, &["/lamp/desired", "/lamp/desired"]).await;
     assert_update_topics(&mut dashboard, &["/lamp/desired", "/lamp/desired"]).await;
 
@@ -439,7 +447,10 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
         }),
     )
     .await;
-    let _ = recv_json(&mut controller).await;
+    assert!(matches!(
+        recv_json(&mut controller).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "lamp-actual"
+    ));
     assert_update_topics(&mut dashboard, &["/lamp/brightness", "/lamp/hue"]).await;
 
     let mut location_script = server.connect().await;
@@ -508,10 +519,126 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
     server.stop().await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn explicit_expiry_and_disconnect_grace_flow_through_live_transports() {
+    let second = Arc::new(AtomicI64::new(0));
+    let clock_second = Arc::clone(&second);
+    let clock: Clock = Arc::new(move || {
+        Timestamp::new(JiffTimestamp::from_second(clock_second.load(Ordering::SeqCst)).unwrap())
+    });
+    let server = TestServer::start_with_clock(clock).await;
+
+    let mut dashboard = server.connect().await;
+    send_hello(&mut dashboard, "dashboard", &["/lamp/*", "/battery/*"]).await;
+    let _ = recv_json(&mut dashboard).await;
+    let mut controller = server.connect().await;
+    send_hello(&mut controller, "controller", &[]).await;
+    let _ = recv_json(&mut controller).await;
+    send_json(
+        &mut controller,
+        json!({
+            "type": "write",
+            "request_id": "claim-with-grace",
+            "operations": [
+                {"op": "define_input", "topic": "/lamp/desired", "kind": "desired"},
+                {"op": "claim_input", "topic": "/lamp/desired", "release": {"mode": "after", "duration": "PT10S"}}
+            ]
+        }),
+    )
+    .await;
+    assert!(matches!(
+        recv_json(&mut controller).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "claim-with-grace"
+    ));
+    tokio::task::yield_now().await;
+    assert_update_topics_without_timeout(&mut dashboard, &["/lamp/desired", "/lamp/desired"]).await;
+    controller.close(None).await.unwrap();
+    wait_for_session_count(&server.core, 1).await;
+
+    second.store(5, Ordering::SeqCst);
+    let submitted = server
+        .post_json(
+            "/v1/write",
+            "remote",
+            json!({"operations": [{
+                "op": "submit_desired",
+                "topic": "/lamp/desired",
+                "value": 80,
+                "expiry": {"mode": "clear"}
+            }]}),
+        )
+        .await;
+    assert_eq!(submitted["ok"], true);
+    assert_update_topics(&mut dashboard, &["/lamp/desired"]).await;
+
+    second.store(10, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(10)).await;
+    assert_update_topics(&mut dashboard, &["/lamp/desired"]).await;
+    let snapshot = server.core.lock().unwrap().read(&Selection::new(vec![
+        Selector::parse("/lamp/desired").unwrap(),
+    ]));
+    let Node::Desired(desired) = snapshot
+        .nodes()
+        .get(&TopicPath::parse("/lamp/desired").unwrap())
+        .unwrap()
+    else {
+        panic!("desired definition must survive grace release");
+    };
+    assert!(desired.claim().is_none());
+    assert_eq!(desired.current().unwrap().value(), &Value::Integer(80));
+
+    let expiring = server
+        .post_json(
+            "/v1/state/battery/phone",
+            "phone",
+            json!({"value": 55, "expiry": {"mode": "set", "duration": "PT5S"}}),
+        )
+        .await;
+    assert_eq!(expiring["ok"], true);
+    assert_update_topics(&mut dashboard, &["/battery/phone"]).await;
+    second.store(15, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(5)).await;
+    assert_update_topics(&mut dashboard, &["/battery/phone"]).await;
+    assert!(
+        !server
+            .core
+            .lock()
+            .unwrap()
+            .read(&Selection::new(vec![
+                Selector::parse("/battery/phone").unwrap()
+            ]))
+            .nodes()
+            .contains_key(&TopicPath::parse("/battery/phone").unwrap())
+    );
+
+    dashboard.close(None).await.unwrap();
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
+}
+
 async fn assert_update_topics(socket: &mut TestSocket, expected: &[&str]) {
     let ServerMessage::Update { changes, .. } = recv_json(socket).await else {
         panic!("expected an update message");
     };
+    assert_topics(&changes, expected);
+}
+
+async fn assert_update_topics_without_timeout(socket: &mut TestSocket, expected: &[&str]) {
+    let message = socket
+        .next()
+        .await
+        .expect("WebSocket closed")
+        .expect("WebSocket read failed");
+    let Message::Text(text) = message else {
+        panic!("expected text update, received {message:?}");
+    };
+    let ServerMessage::Update { changes, .. } = serde_json::from_str(&text).unwrap() else {
+        panic!("expected an update message");
+    };
+    assert_topics(&changes, expected);
+}
+
+fn assert_topics(changes: &[tanuki::protocol::ChangeView], expected: &[&str]) {
     let mut topics = changes
         .iter()
         .map(|change| match change {

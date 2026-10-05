@@ -205,6 +205,87 @@ impl Core {
         })
     }
 
+    #[must_use]
+    pub fn next_value_deadline(&self) -> Option<Deadline> {
+        self.nodes
+            .values()
+            .filter_map(Node::retained_value)
+            .filter_map(RetainedValue::expires_at)
+            .min()
+    }
+
+    pub fn process_deadlines(
+        &mut self,
+        now: Timestamp,
+        claim_releases: &[PendingClaimRelease],
+    ) -> Result<Option<UpdateBatch>, CoreError> {
+        let previous = self.nodes.clone();
+        let mut candidate = previous.clone();
+        let expired_topics = previous
+            .iter()
+            .filter(|(_, node)| {
+                node.retained_value()
+                    .and_then(RetainedValue::expires_at)
+                    .is_some_and(|deadline| deadline.get() <= now)
+            })
+            .map(|(topic, _)| topic.clone())
+            .collect::<Vec<_>>();
+
+        for topic in expired_topics {
+            match candidate.get(&topic).cloned() {
+                Some(Node::State(_)) => {
+                    candidate.remove(&topic);
+                }
+                Some(Node::Desired(desired)) => {
+                    candidate.insert(
+                        topic,
+                        Node::Desired(DesiredNode::from_parts(
+                            desired.definition().clone(),
+                            desired.claim().cloned(),
+                            None,
+                        )),
+                    );
+                }
+                Some(Node::Event(_) | Node::Command(_)) | None => {}
+            }
+        }
+
+        for release in claim_releases
+            .iter()
+            .filter(|release| release.deadline().get() <= now)
+        {
+            let Some(node) = candidate.get_mut(release.topic()) else {
+                continue;
+            };
+            if input_claim(Some(node)).is_some_and(|claim| claim.id() == release.claim()) {
+                clear_claim(node);
+            }
+        }
+
+        let changed_topics = previous
+            .keys()
+            .chain(candidate.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let changes = changed_topics
+            .into_iter()
+            .filter_map(
+                |topic| match (previous.get(&topic), candidate.get(&topic)) {
+                    (Some(old), Some(new)) if old != new => Some(Change::Upsert {
+                        topic,
+                        node: new.clone(),
+                    }),
+                    (Some(old), None) => Some(Change::Removed {
+                        topic,
+                        previous: old.clone(),
+                    }),
+                    _ => None,
+                },
+            )
+            .collect();
+        self.install_node_changes(candidate, changes)
+    }
+
     fn validate_actor(&self, actor: &WriteContext) -> Result<(), CoreError> {
         let WriteContext::Managed(handle) = actor else {
             return Ok(());

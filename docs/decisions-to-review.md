@@ -22,17 +22,21 @@ A retained input can be defined but never submitted to, lose its desired value t
 - Restore input definitions and unexpired retained values after restart; clear session claims. Instant commands are gone.
 - On a freeform topic with no applicable schema, an implicit node-kind change is accepted with a warning. Incompatible state belonging to the old kind is discarded. Applicable schema policy may deny the change atomically.
 
-**Remaining small policy choices:** omitted-expiry semantics and instant-output
-metadata persistence. Ordinary output publication creates its corresponding
-kind when absent. The user's acceptance of the examples does not implicitly
-approve every earlier recommendation in this file. Prefer simple documented
-behaviour, warning on recoverable anomalies, and logging over added lifecycle
-machinery.
+**Remaining small policy choice:** instant-output metadata persistence.
+Ordinary output publication creates its corresponding kind when absent. The
+user's acceptance of the examples does not implicitly approve every earlier
+recommendation in this file. Prefer simple documented behaviour, warning on
+recoverable anomalies, and logging over added lifecycle machinery.
 
 **Provisional task-02 default:** retain instant-output node metadata, including
 the last publisher, while never retaining occurrence payloads. This is an
 implementation choice awaiting protocol review rather than an accepted product
 decision.
+
+**Provisional task-07 default:** omitting expiry preserves an existing absolute
+deadline and creates no deadline for a new value. It does not silently renew
+relative time. Explicit `clear` and `set` remain available. This implements the
+earlier recommendation but remains listed for user review.
 
 **Accepted claim collision:** a live managed session may replace an existing
 input claim with a warning. The displaced session immediately loses claim

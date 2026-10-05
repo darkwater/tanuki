@@ -79,8 +79,8 @@ Run it with:
 cargo test --test core_sessions_inputs
 ```
 
-Executing grace timers, desired-value expiry, and stale timer guards remains
-task 07 work.
+Task 07 executes the grace work and verifies stale guards in the deadline
+scheduler suite.
 
 ## Task 04 — JSON and basic HTTP
 
@@ -140,5 +140,25 @@ cargo test --test websocket_api --test protocol_json --test core_subscriptions
 ```
 
 The tests use simulated actors on loopback, not deployed devices or a polished
-client SDK. Total outgoing-byte accounting and task-07 grace timers remain
-unimplemented.
+client SDK. Total outgoing-byte accounting remains unimplemented.
+
+## Task 07 — value expiry and claim grace
+
+`tests/core_expiry.rs` verifies that equal due times form one commit, state
+expiry removes a node, desired expiry clears only its payload, a refreshed
+deadline defeats stale work, submissions during grace survive release, and a
+stale claim ID cannot clear a reclaim.
+
+`tests/scheduler.rs` runs with paused Tokio time and an independently controlled
+wall clock. It verifies that moving a deadline earlier wakes the scheduler and
+that queued grace work publishes a claim-only update while retaining submitted
+intent. `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports`
+extends E1 step 5 across real loopback HTTP/WebSocket traffic.
+`tests/http_api.rs::omitted_expiry_preserves_an_existing_absolute_deadline`
+pins the provisional omission rule.
+
+Run the focused suite with:
+
+```sh
+cargo test --test core_expiry --test scheduler --test http_api --test websocket_api
+```

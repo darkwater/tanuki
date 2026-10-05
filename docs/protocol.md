@@ -42,11 +42,12 @@ not authentication, and creates no managed session. Reads are anonymous.
 
 Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
 `define_input`, `claim_input`, `submit_desired`, `submit_command`,
-`clear_desired`, and `remove_node`. Retained writes require an explicit expiry
-object: `{"mode":"preserve"}`, `{"mode":"clear"}`, or
-`{"mode":"set","duration":"PT1H"}`. This avoids choosing the still-open
-omitted-expiry policy accidentally. Claim releases similarly use `immediate`
-or `after` with a nonnegative fixed ISO-8601 duration.
+`clear_desired`, and `remove_node`. Retained writes accept an expiry object:
+`{"mode":"preserve"}`, `{"mode":"clear"}`, or
+`{"mode":"set","duration":"PT1H"}`. Omission provisionally means
+`preserve`: keep the existing absolute deadline, or use no deadline for a new
+value. Claim releases similarly use `immediate` or `after` with a nonnegative
+fixed ISO-8601 duration.
 
 Successes are `{"ok":true,"data":...}`. Every adapter, extractor, routing,
 and core failure uses `{"ok":false,"error":{"code":"...","message":"..."}}`

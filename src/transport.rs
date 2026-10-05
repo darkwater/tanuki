@@ -30,6 +30,7 @@ use crate::{
         WriteContext, WriteOperation,
     },
     protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView},
+    scheduler::DeadlineScheduler,
 };
 
 pub type SharedCore = Arc<Mutex<Core>>;
@@ -39,6 +40,7 @@ pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 struct HttpState {
     core: SharedCore,
     clock: Clock,
+    scheduler: DeadlineScheduler,
     connections: Arc<Mutex<BTreeMap<ClientName, ActiveConnection>>>,
 }
 
@@ -52,6 +54,7 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const SUBSCRIPTION_BATCH_CAPACITY: usize = 64;
 
 pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
+    let scheduler = DeadlineScheduler::start(core.clone(), clock.clone());
     Router::new()
         .route("/v1/write", post(batch_write))
         .route("/v1/state/{*topic}", post(single_state_write))
@@ -62,6 +65,7 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
         .with_state(HttpState {
             core,
             clock,
+            scheduler,
             connections: Arc::new(Mutex::new(BTreeMap::new())),
         })
 }
@@ -178,8 +182,9 @@ async fn websocket_session(mut socket: WebSocket, state: HttpState) {
         warn!(?warning, client = %handle.client(), "WebSocket session opened with diagnostic");
     }
     for release in opened.pending_releases() {
-        warn!(topic = %release.topic(), claim = release.claim().get(), "replacement claim release awaits task 07 scheduler");
+        warn!(topic = %release.topic(), claim = release.claim().get(), "replacement claim release scheduled");
     }
+    state.scheduler.schedule_claims(opened.pending_releases());
     let (kick, mut kicked) = watch::channel(false);
     let previous = state
         .connections
@@ -319,6 +324,7 @@ fn apply_websocket_write(
             .map_err(ApiError::from_core)
         }) {
         Ok(outcome) => {
+            state.scheduler.rescan();
             for diagnostic in outcome.warnings() {
                 warn!(?diagnostic, client = %handle.client(), "WebSocket write accepted with diagnostic");
             }
@@ -339,8 +345,9 @@ fn finish_websocket_session(state: &HttpState, handle: &SessionHandle) {
             warn!(?warning, client = %handle.client(), "disconnect completed with diagnostic");
         }
         for release in outcome.pending_releases() {
-            warn!(topic = %release.topic(), claim = release.claim().get(), "claim release awaits task 07 scheduler");
+            warn!(topic = %release.topic(), claim = release.claim().get(), "claim release scheduled after disconnect");
         }
+        state.scheduler.schedule_claims(outcome.pending_releases());
     }
     let mut connections = state
         .connections
@@ -439,7 +446,8 @@ struct BatchRequest {
 #[derive(Deserialize)]
 struct StateRequest {
     value: JsonValue,
-    expiry: WireExpiry,
+    #[serde(default)]
+    expiry: Option<WireExpiry>,
 }
 
 #[derive(Deserialize)]
@@ -476,7 +484,7 @@ async fn single_state_write(
         vec![WriteOperation::PublishState {
             topic,
             value: payload.value.into_inner(),
-            expiry: payload.expiry.try_into()?,
+            expiry: expiry_update(payload.expiry)?,
         }],
     )
 }
@@ -497,6 +505,7 @@ fn apply(
     for diagnostic in outcome.warnings() {
         warn!(?diagnostic, client = %actor.client(), "write accepted with diagnostic");
     }
+    state.scheduler.rescan();
     Ok(Json(ApiResponse::success(commit_json(&outcome))))
 }
 
@@ -610,7 +619,8 @@ enum WireOperation {
     PublishState {
         topic: TopicPath,
         value: JsonValue,
-        expiry: WireExpiry,
+        #[serde(default)]
+        expiry: Option<WireExpiry>,
     },
     PublishEvent {
         topic: TopicPath,
@@ -627,7 +637,8 @@ enum WireOperation {
     SubmitDesired {
         topic: TopicPath,
         value: JsonValue,
-        expiry: WireExpiry,
+        #[serde(default)]
+        expiry: Option<WireExpiry>,
     },
     SubmitCommand {
         topic: TopicPath,
@@ -653,7 +664,7 @@ impl TryFrom<WireOperation> for WriteOperation {
             } => Self::PublishState {
                 topic,
                 value: value.into_inner(),
-                expiry: expiry.try_into()?,
+                expiry: expiry_update(expiry)?,
             },
             WireOperation::PublishEvent { topic, value } => Self::PublishEvent {
                 topic,
@@ -675,7 +686,7 @@ impl TryFrom<WireOperation> for WriteOperation {
             } => Self::SubmitDesired {
                 topic,
                 value: value.into_inner(),
-                expiry: expiry.try_into()?,
+                expiry: expiry_update(expiry)?,
             },
             WireOperation::SubmitCommand { topic, value } => Self::SubmitCommand {
                 topic,
@@ -721,6 +732,13 @@ impl TryFrom<WireExpiry> for ExpiryUpdate {
             WireExpiry::Set { duration } => Self::Set(nonnegative_duration(&duration)?),
         })
     }
+}
+
+fn expiry_update(value: Option<WireExpiry>) -> Result<ExpiryUpdate, ApiError> {
+    value
+        .map(TryInto::try_into)
+        .transpose()
+        .map(|expiry| expiry.unwrap_or(ExpiryUpdate::Preserve))
 }
 
 #[derive(Deserialize)]

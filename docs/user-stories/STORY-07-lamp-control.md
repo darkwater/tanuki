@@ -1,6 +1,6 @@
 # US-07 — Lamp desired state and atomic output
 
-- **Status:** simulated input ownership and atomic output delivered over WebSocket; timers and real lamp use not yet verified.
+- **Status:** simulated input ownership, atomic output, value expiry, and claim grace implemented; real lamp use not yet verified.
 - **Origin:** User use case and accepted lifetime example.
 - **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -33,8 +33,9 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
 - `tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. `tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies transport-neutral whole-batch consumption.
-- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies US-07.A1, and `disconnect_immediately_releases_claim_but_preserves_desired_value` verifies the immediate-release portion of US-07.A5. Grace and value-expiry execution remain task 07.
+- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies US-07.A1, and `disconnect_immediately_releases_claim_but_preserves_desired_value` verifies the immediate-release portion of US-07.A5.
 - `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a remote submission reaches the controller and its paired hue/brightness update reaches the dashboard as one WebSocket batch. `disconnect_immediately_releases_an_owned_input_claim` covers socket disconnect cleanup.
+- `tests/core_expiry.rs` and `tests/scheduler.rs` verify US-07.A3–A5, including stale deadline/claim guards. `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` observes submission during disconnect grace and later claim release while retaining the desired value.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -44,3 +45,4 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 - 2026-10-05: Task 02 implemented the atomic hue/brightness core commit boundary; consumer delivery and actual lamp integration remain unverified.
 - 2026-10-05: Task 03 implemented distinct claim and submitter identity, claim-preserving submissions, and immediate claim release. Timer-driven criteria remain pending.
 - 2026-10-06: Task 06 verified the desired-input and atomic actual-output chain with simulated actors over real loopback transports.
+- 2026-10-06: Task 07 implemented and simulated desired-value expiry and guarded disconnect grace. Physical lamp behaviour remains outside Tanuki and unverified.

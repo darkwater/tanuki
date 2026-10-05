@@ -8,12 +8,13 @@ does.
 
 | Module | Status | Responsibility |
 | --- | --- | --- |
-| `server` | tasks 04–06 implemented | Own process lifecycle, listener wiring, and graceful shutdown |
+| `server` | tasks 04–07 implemented | Own process lifecycle, listener wiring, and graceful shutdown |
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | tasks 02–05 implemented | Authoritative nodes, sessions, atomic commits, claims, and subscriptions |
+| `core` | tasks 02–07 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, and deadlines |
 | `protocol` | tasks 04–06 provisional | JSON/MessagePack values and typed snapshot/update/error DTOs pending checkpoint-B approval |
-| `transport` | tasks 04–06 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, and common errors |
+| `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
+| `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | planned | Versioned coherent snapshots and file operations |
 | `schema` | planned | Ordinary-topic validation and freshness policy |
 | `links` | planned | Linked path resolution, visibility, and recovery |
@@ -142,7 +143,7 @@ claimed input require the claiming session.
 Disconnect and same-name replacement share one claim-release procedure.
 Immediate release removes only the claim, preserving the input definition and
 desired value in an optional atomic update. Grace release leaves the claim in
-place and returns `(topic, claim ID, deadline)` work for the task 07 scheduler;
+place and returns `(topic, claim ID, deadline)` work for the deadline scheduler;
 the claim ID is the guard against clearing a later replacement. If a grace
 deadline cannot be represented, the core warns and releases immediately.
 
@@ -199,3 +200,24 @@ natively and uses provisional application extension tags for timestamps and
 durations. Both deserialize to the same transport-independent `Value` enum.
 The connection has a 1 MiB per-message limit and its core subscription has a
 64-batch nonblocking queue. A total queued-byte budget remains open.
+
+## Deadline execution implemented in task 07
+
+Retained values store absolute wall-clock deadlines. `Core::process_deadlines`
+is the authoritative timer mutation boundary: expired output state becomes a
+removal, while an expired desired payload becomes a full-node upsert with its
+definition and claim intact. All changes due at one processing instant form
+one commit and are published through ordinary subscriptions.
+
+The Tokio deadline scheduler owns no domain state. It scans the core for the
+earliest retained-value deadline and holds explicit pending claim-release work
+returned by session disconnect/replacement. Every accepted retained write
+wakes it, so a moved-earlier deadline replaces the current wait. On wake it
+passes due claim IDs and current wall time into the core. Current deadlines and
+claim IDs are rechecked there, making refreshed values and reclaimed inputs
+immune to stale work.
+
+The transport starts one scheduler alongside its shared core. Its clock is the
+same injected wall-clock seam used for writes; Tokio's monotonic timer is only
+used for waiting. Omitted wire expiry provisionally maps to `Preserve`: it
+keeps an existing absolute deadline and yields no deadline on a new value.

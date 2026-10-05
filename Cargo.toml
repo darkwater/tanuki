@@ -18,5 +18,6 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
+tokio = { version = "=1.53.2", features = ["test-util"] }
 tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "handshake"] }
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }

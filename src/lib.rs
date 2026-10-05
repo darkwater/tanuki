@@ -6,5 +6,6 @@ pub mod client;
 pub mod core;
 pub mod domain;
 pub mod protocol;
+pub mod scheduler;
 pub mod server;
 pub mod transport;

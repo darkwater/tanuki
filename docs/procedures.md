@@ -12,12 +12,13 @@ There is no restore step or persistence background work yet. Later startup
 will restore before accepting requests; later shutdown will request a
 best-effort save after stopping new work.
 
-Subscription, expiry execution, restore, and link-recovery procedures remain
-pending their corresponding implementation cards.
+Restore and link-recovery procedures remain pending their corresponding
+implementation cards. The router starts one deadline scheduler for its shared
+core.
 
 ## Output mutation and atomic commit
 
-All implemented output writes pass through `Core::apply`:
+All caller-initiated mutations pass through `Core::apply`:
 
 1. Reject reserved-system targets and ambiguous repeated operations before
    staging. Distinct define/claim/submit input steps may share a topic.
@@ -48,7 +49,7 @@ Replacement and current-session disconnect inspect claims owned by that exact
 session ID. Immediate policies clear the claim in one atomic update while
 preserving definitions and desired values. Grace policies retain the claim and
 return guarded release work containing the topic, claim ID, and deadline for
-the task 07 timer scheduler. A stale disconnect is a successful no-op and
+the deadline scheduler. A stale disconnect is a successful no-op and
 cannot affect the replacement session or its claims.
 
 ## Subscription registration and publication
@@ -82,9 +83,29 @@ commits are filtered out.
    forwarding its own queued selected update.
 6. On close or I/O failure, disconnect the exact session handle. Immediate
    claim release is committed and published; a stale old handle is harmless.
-   Grace-release timer work is logged but cannot execute until task 07.
+   Grace-release timer work is handed to the deadline scheduler.
 
 Message/frame encoding and decoding never happen while the core mutex is held.
 An overflowing core subscription cannot stall other clients and eventually
 closes with `slow_consumer`. A reconnect has no replay cursor and receives a
 fresh snapshot.
+
+## Expiry and claim-grace execution
+
+After every accepted retained write, the transport signals the scheduler to
+rescan. It waits for the earlier of the core's next retained-value deadline and
+its queued claim-release deadlines. A newly earlier write or release command
+wakes and replaces that wait.
+
+At a wake, the scheduler reads the injected wall clock and calls
+`Core::process_deadlines`. The core rechecks each current value deadline and
+claim ID. Stale work therefore produces no mutation. All changes currently due
+are installed as one commit: expired state nodes are removed, desired payloads
+are cleared without losing definition/claim, and due matching claims are
+cleared without losing definition/value. Subscribers receive the same typed
+upsert/removal batches as for caller writes.
+
+An omitted expiry maps provisionally to `Preserve`. On an existing retained
+value it retains the old absolute deadline rather than renewing it; on a new
+value it creates no deadline. `clear` explicitly removes a deadline and `set`
+computes a new absolute deadline from server wall time.

@@ -47,8 +47,9 @@ that does not turn the provisional choice into an accepted requirement.
 1. HTTP listens on `127.0.0.1:3000` unless `TANUKI_LISTEN` is set.
 2. Stateless writes use the validated `tanuki-client` header; reads are
    anonymous.
-3. Retained writes require an explicit expiry mode until omitted-expiry
-   semantics are selected in task 07.
+3. Omitted retained-value expiry provisionally preserves the existing absolute
+   deadline; a new value has no deadline. It does not renew the prior relative
+   duration. Explicit `clear` and `set` remain available.
 4. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
    `$map`; literal maps containing reserved tag keys must use `$map`.
 5. Exact current dependency versions are pinned and `Cargo.lock` is committed.

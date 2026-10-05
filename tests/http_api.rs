@@ -274,6 +274,55 @@ async fn same_name_http_write_does_not_displace_a_managed_session() {
 }
 
 #[tokio::test]
+async fn omitted_expiry_preserves_an_existing_absolute_deadline() {
+    let (app, core) = test_app();
+    let mut first = json_request(
+        "POST",
+        "/v1/state/battery/phone",
+        json!({"value": 70, "expiry": {"mode": "set", "duration": "PT1H"}}),
+    );
+    first
+        .headers_mut()
+        .insert("tanuki-client", "phone".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(first).await.unwrap().status(),
+        StatusCode::OK
+    );
+    let original_deadline = core
+        .lock()
+        .unwrap()
+        .read(&tanuki::domain::Selection::new(vec![
+            tanuki::domain::Selector::parse("/battery/phone").unwrap(),
+        ]))
+        .nodes()
+        .get(&TopicPath::parse("/battery/phone").unwrap())
+        .unwrap()
+        .retained_value()
+        .unwrap()
+        .expires_at();
+
+    let mut refresh = json_request("POST", "/v1/state/battery/phone", json!({"value": 71}));
+    refresh
+        .headers_mut()
+        .insert("tanuki-client", "phone".parse().unwrap());
+    assert_eq!(app.oneshot(refresh).await.unwrap().status(), StatusCode::OK);
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .read(&tanuki::domain::Selection::new(vec![
+            tanuki::domain::Selector::parse("/battery/phone").unwrap(),
+        ]));
+    let retained = snapshot
+        .nodes()
+        .get(&TopicPath::parse("/battery/phone").unwrap())
+        .unwrap()
+        .retained_value()
+        .unwrap();
+    assert_eq!(retained.value(), &Value::Integer(71));
+    assert_eq!(retained.expires_at(), original_deadline);
+}
+
+#[tokio::test]
 async fn tagged_values_and_escaped_maps_survive_json_storage() {
     let (app, _) = test_app();
     let value = json!({
