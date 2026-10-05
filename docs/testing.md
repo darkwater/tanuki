@@ -33,8 +33,8 @@ Run the focused domain suite with:
 cargo test --test domain_paths --test domain_values --test domain_operations
 ```
 
-JSON/MessagePack runtime-value codec equivalence remains task 06 work; task 01
-defines the transport-independent value algebra only.
+Task 01 defines the transport-independent value algebra; task 06 adds
+JSON/MessagePack runtime-value equivalence coverage.
 
 ## Task 02 — core publication and atomic batches
 

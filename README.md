@@ -1,44 +1,103 @@
-# Tanuki design handoff
+# Tanuki
 
-Consolidated 2026-10-05.
+Tanuki is an early personal automation fabric for named state, events, desired
+inputs, and commands. One transport-independent core supplies atomic writes,
+managed input ownership, coherent subscriptions, expiry, and best-effort
+restart persistence to HTTP and WebSocket clients.
 
-Tanuki is a personal automation fabric for named state, events, desired inputs, and commands, with shared validation and subscription semantics across transports. Smart home is a primary use case; ad hoc scripts should remain easy.
+Tasks 00–08 of the implementation plan are implemented. Schema enforcement and
+linked views are the next architecture checkpoint; the current prioritized
+decisions are in [docs/open-questions.md](docs/open-questions.md).
 
-## Current documents
+## Run it
 
-Start with [AGENTS.md](AGENTS.md) for Rust/nightly, TDD, invariants, diagnostics and collaboration requirements. Then read:
+The repository pins `nightly-2026-10-01`, including rustfmt and Clippy.
 
-1. [Specification](docs/spec.md) — consolidated agreed direction, with explicit references to unresolved choices.
-2. [Decisions to review](docs/decisions-to-review.md) — ambiguities found during review, their implementation impact, and proposed defaults for feedback.
-3. [Implementation plan](docs/implementation-plan.md) — phases and sequential task cards with dependencies and acceptance criteria.
-4. [Design proposal](docs/design.md) — proposed Rust types, module boundaries, data flows and user review checkpoints.
-5. [Test plan](docs/test-plan.md) — unit/integration contracts and full-system simulations with producing/consuming mock clients.
+```sh
+cargo run
+```
 
-Recommendations are not automatically accepted requirements. Before implementation, record which defaults were selected. Resolve decisions at the phase that needs them; do not require a complete advanced schema language or future transport design before starting the core.
+The default listener is `127.0.0.1:3000`. Set `TANUKI_LISTEN` to another socket
+address. Retained state is saved every 30 seconds and at orderly shutdown to
+`tanuki.snapshot.json`; set `TANUKI_SNAPSHOT` to choose another path. Client
+names are attribution and session identity, not authentication, so remote
+exposure must be an explicit deployment decision.
 
-## Living use cases
+Publish and read a phone battery through stateless HTTP:
 
-The [user-story index](docs/user-stories/USER-STORIES.md) links one document per
-use case. Read relevant stories alongside the technical plan. Maintain them
-through user conversations and real deployment, linking acceptance criteria to
-tests and recording what is actually in use.
+```sh
+curl -sS \
+  -H 'content-type: application/json' \
+  -H 'tanuki-client: phone task' \
+  --data '{"value":72,"expiry":{"mode":"set","duration":"PT1H"}}' \
+  http://127.0.0.1:3000/v1/state/battery/phone
 
-## Historical discussion notes
+curl -sS \
+  'http://127.0.0.1:3000/v1/snapshot?select=/battery/*'
+```
 
-The numbered files below are preserved for rationale and examples. They contain earlier proposals and superseded questions. Where they conflict, use the current documents above; do not combine every historical suggestion into the implementation scope.
+`POST /v1/write` accepts a nonempty atomic `operations` array. Supported
+operations are `publish_state`, `publish_event`, `define_input`, `claim_input`,
+`submit_desired`, `submit_command`, `clear_desired`, and `remove_node`.
+Stateless HTTP can define or submit inputs but cannot claim them.
 
-- [Goals](docs/history/01-goals.md)
-- [Connections](docs/history/02-connections.md)
-- [Topic metadata](docs/history/03-topic-metadata.md)
-- [Design candidates](docs/history/04-design-candidates.md)
-- [Open questions](docs/history/05-open-questions.md) — historical question list; the current queue is the decisions review.
-- [Node types and subscriptions](docs/history/06-node-types-and-subscriptions.md)
-- [Data transfers](docs/history/07-data-transfers.md) — transfer offers and peer-to-peer designs are deferred.
-- [Values and encoding](docs/history/08-values-and-encoding.md)
-- [Links and schemas](docs/history/09-links-and-schemas.md)
-- [System and enums](docs/history/10-system-and-enums.md)
-- [Operational decisions](docs/history/11-operational-decisions.md)
+## WebSocket
 
-The design API snippets remain review sketches rather than compiled interfaces.
-Task 00 has bootstrapped the executable, lifecycle seam, test, and CI; domain
-and protocol implementation still waits on the documented architecture review.
+Connect to `/v1/ws`. The first frame is a hello and determines the codec for
+the connection. Text frames contain JSON; binary frames contain MessagePack.
+
+```json
+{"type":"hello","request_id":"h1","client":"laptop","selectors":["/battery/*","/lamp/*"]}
+```
+
+The first server message is the correlated complete snapshot. Subsequent
+messages are atomic `update` batches and request-correlated `reply` or `error`
+messages. A write uses the same operation objects as HTTP:
+
+```json
+{"type":"write","request_id":"w1","operations":[{"op":"publish_state","topic":"/battery/laptop","value":87,"expiry":{"mode":"clear"}}]}
+```
+
+A second managed WebSocket with the same client name replaces the old session.
+Same-name HTTP traffic remains stateless and cannot do that. Reconnect after a
+slow-client closure obtains a fresh snapshot; there is no replay log.
+
+See [docs/protocol.md](docs/protocol.md) for current wire details and semantic
+JSON/MessagePack value mappings.
+
+## Quality gates
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+cargo test --release --all-targets --all-features
+```
+
+The suites include real loopback HTTP/WebSocket clients, a simulated room with
+downstream actors, controlled-time expiry/grace checks, atomic-save failure
+coverage, orderly restart, and a production-binary restore smoke test.
+
+## Documentation map
+
+- [AGENTS.md](AGENTS.md) — engineering requirements and working conventions
+- [Specification](docs/spec.md) — accepted product behavior
+- [Architecture](docs/architecture.md) — implemented modules and data flow
+- [Protocol](docs/protocol.md) — current HTTP, WebSocket, codec, and snapshot formats
+- [Runtime procedures](docs/procedures.md) — mutation, sessions, timers, persistence, shutdown
+- [Testing](docs/testing.md) — acceptance-scenario evidence
+- [Implementation plan](docs/implementation-plan.md) — sequential task cards
+- [Decisions to review](docs/decisions-to-review.md) — accepted and proposed choices
+- [Open questions](docs/open-questions.md) — prioritized user-review ledger
+- [Living user stories](docs/user-stories/USER-STORIES.md) — intended versus tested/deployed use
+
+Historical discussion lives under `docs/history/` for rationale only; current
+documents take precedence when they disagree.
+
+## Current limitations
+
+Schemas, linked views, freshness diagnostics, TCP/MQTT/SSE, authentication,
+large-blob transfer, event replay, and a polished client SDK are not yet
+implemented. Persistence is periodic best effort rather than a WAL: an
+acknowledged write can be lost if the process crashes before the next completed
+snapshot. Wire shapes remain provisional pending checkpoint-B review.
