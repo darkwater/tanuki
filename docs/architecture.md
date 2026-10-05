@@ -8,12 +8,12 @@ does.
 
 | Module | Status | Responsibility |
 | --- | --- | --- |
-| `server` | task 04 HTTP implemented | Own process lifecycle, listener wiring, and graceful shutdown |
+| `server` | tasks 04–06 implemented | Own process lifecycle, listener wiring, and graceful shutdown |
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–05 implemented | Authoritative nodes, sessions, atomic commits, claims, and subscriptions |
-| `protocol` | tasks 04–05 provisional | JSON values and typed snapshot/update/error DTOs pending checkpoint-B approval |
-| `transport` | task 04 HTTP implemented | Axum HTTP extraction, routing, and response/error mapping |
+| `protocol` | tasks 04–06 provisional | JSON/MessagePack values and typed snapshot/update/error DTOs pending checkpoint-B approval |
+| `transport` | tasks 04–06 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, and common errors |
 | `persistence` | planned | Versioned coherent snapshots and file operations |
 | `schema` | planned | Ordinary-topic validation and freshness policy |
 | `links` | planned | Linked path resolution, visibility, and recovery |
@@ -177,3 +177,25 @@ and removals in one call before replacing the visible map, returns instant
 occurrences separately, and rejects duplicate or older sequences without
 mutation. These choices are implemented to make review concrete but are not
 recorded as accepted until the user answers checkpoint B.
+
+## WebSocket transport implemented in task 06
+
+The Axum router owns a small connection registry separate from core state. A
+hello frame chooses JSON text or MessagePack binary for the connection, opens
+the managed core session, and atomically registers its selection. The first
+server frame is the correlated snapshot. The registry exists only to signal a
+displaced socket; session authority and replacement correctness remain owned
+by `Core` and its opaque session IDs.
+
+The socket loop selects among replacement, core updates, and client frames.
+Writes use the same `Core::apply` path as HTTP. A reply is encoded immediately
+after that call and before the loop can forward the writer's resulting update.
+Core batches remain indivisible across both codecs. Disconnect invokes core
+cleanup before conditionally removing only the matching registry entry, so an
+old socket cannot remove its replacement.
+
+JSON retains the explicit semantic tag mapping. MessagePack carries bytes
+natively and uses provisional application extension tags for timestamps and
+durations. Both deserialize to the same transport-independent `Value` enum.
+The connection has a 1 MiB per-message limit and its core subscription has a
+64-batch nonblocking queue. A total queued-byte budget remains open.

@@ -42,7 +42,7 @@ fn snapshot_message_is_the_correlated_subscribe_success() {
         Selector::parse("/battery/*").unwrap(),
     ]));
 
-    let message = ServerMessage::snapshot(RequestId::new("s1".to_owned()), &snapshot);
+    let message = ServerMessage::snapshot(RequestId::new("s1".to_owned()), &snapshot, &[]);
     let encoded = serde_json::to_value(&message).unwrap();
     assert_eq!(encoded["type"], "snapshot");
     assert_eq!(encoded["request_id"], "s1");

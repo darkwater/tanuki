@@ -1,8 +1,8 @@
 # US-06 — Clipboard exchange, including small images
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** byte-preserving codecs implemented; clipboard bridge and size-boundary flow not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-05.
+- **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -31,10 +31,11 @@ Manual pull versus automatic sync, MIME/format representation, expiry/persistenc
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — U1 and T1; add text/image round-trip and bridge feedback-loop fixtures.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- `tests/protocol_json.rs::json_and_messagepack_round_trip_the_same_nested_value` and `messagepack_uses_native_binary_and_semantic_extensions` verify byte preservation in both codecs and native MessagePack binary representation. A complete clipboard publish/consume bridge and explicit oversized-payload error remain deferred.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-06: Task 06 implemented and pinned the JSON/MessagePack byte codec layer; this does not yet verify a real clipboard application.

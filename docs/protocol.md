@@ -1,8 +1,9 @@
 # Protocol
 
-Protocol version 1 currently exposes JSON over HTTP. The representation remains
-provisional until checkpoint B reviews snapshot/update/error DTOs; incompatible
-changes are allowed before that checkpoint.
+Protocol version 1 exposes JSON over HTTP and JSON text or MessagePack binary
+messages over WebSocket. The representation remains provisional until
+checkpoint B reviews snapshot/update/error DTOs; incompatible changes are
+allowed before that checkpoint.
 
 ## Current operation boundary
 
@@ -26,8 +27,7 @@ submit on one input topic in operation order.
 The current core rejects duplicate operations in the same input lifecycle slot,
 same-topic output/removal combinations, and writes to the reserved `$`
 namespace. The repeated-target details remain provisional until the external
-batch contract is reviewed. WebSocket message envelopes, request correlation,
-MessagePack extensions, and persistence format are not published yet.
+batch contract is reviewed. The persistence format is not published yet.
 
 ## HTTP version 1
 
@@ -81,7 +81,7 @@ Checkpoint B remains open in `open-questions.md`. The implemented review shape
 uses a correlated snapshot as successful subscription acknowledgement:
 
 ```json
-{"type":"snapshot","request_id":"s1","sequence":42,"nodes":{}}
+{"type":"snapshot","request_id":"s1","sequence":42,"nodes":{},"warnings":[]}
 {"type":"update","sequence":43,"changes":[]}
 {"type":"reply","request_id":"w1","result":{}}
 {"type":"error","request_id":"w1","error":{"code":"...","message":"..."}}
@@ -97,3 +97,43 @@ The sequence is the global in-memory commit sequence, not a replay cursor.
 Filtered subscriptions legitimately skip commits that affect no selected
 topic, so a numeric gap alone does not prove message loss. Reconnection starts
 from a new snapshot; replay is not promised.
+
+## WebSocket version 1
+
+`GET /v1/ws` upgrades to a managed full-duplex session. The first data message
+must be `hello`; its frame kind fixes the codec for the connection:
+
+```json
+{"type":"hello","request_id":"h1","client":"laptop","selectors":["/battery/*"]}
+```
+
+Text frames contain JSON and binary frames contain MessagePack. A successful
+hello receives exactly one correlated `snapshot` before ordinary replies or
+updates. The snapshot's `warnings` include managed-session replacement. Later
+client messages are `write` messages whose `operations` array is identical to
+the HTTP batch operation array:
+
+```json
+{"type":"write","request_id":"w1","operations":[{"op":"publish_state","topic":"/battery/laptop","value":87,"expiry":{"mode":"clear"}}]}
+```
+
+The write reply is sent before that same connection's resulting selected
+update. Updates from unrelated concurrent writers can already be queued, so
+clients distinguish correlated replies by `request_id` rather than assuming
+every adjacent message is a pair. Decode failures whose ID cannot be recovered
+use `request_id: null`. Switching frame codec after hello returns a
+`codec_changed` error.
+
+Opening another managed WebSocket with the same client replaces the old
+session. The old socket closes with code 4001 and reason `session_replaced`;
+same-name stateless HTTP traffic does not replace it. Normal disconnect runs
+claim cleanup. A slow core subscription closes with code 1013 and reason
+`slow_consumer`; reconnecting starts from a fresh snapshot.
+
+Inbound frames and individually encoded outbound messages are limited to 1
+MiB. Each subscription currently buffers at most 64 complete commit batches;
+the open byte-budget decision is tracked in `open-questions.md`.
+
+MessagePack uses native primitives and binary values. Tanuki extension tag 1
+contains a UTF-8 RFC 3339 timestamp and tag 2 contains a UTF-8 ISO-8601 fixed
+duration. These tag numbers remain provisional pending checkpoint B.

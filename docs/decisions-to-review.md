@@ -128,6 +128,14 @@ slow subscriber on capacity overflow. Exact connection byte limits and final
 checkpoint-B acceptance remain open in `open-questions.md`; these implemented
 review defaults are not silently promoted to accepted decisions.
 
+Task 06 exposes that shape through JSON-text and MessagePack-binary WebSockets.
+The hello frame selects one codec for the connection, and its correlated
+snapshot is always the first server message. MessagePack provisionally uses
+application extension tag 1 for timestamp text and tag 2 for fixed-duration
+text. Axum enforces 1 MiB inbound messages, the encoder refuses larger
+individual outbound messages, and subscriptions buffer 64 complete batches;
+total queued-byte accounting and checkpoint-B acceptance remain open.
+
 ## D7 — Paths and glob grammar
 
 **Needed before:** topic keys and selector parser.

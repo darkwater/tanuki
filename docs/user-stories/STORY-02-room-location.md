@@ -1,8 +1,8 @@
 # US-02 — Room location from motion
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** simulated motion-to-location-to-lamp flow implemented; real sensors and inference not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-05.
+- **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -32,10 +32,11 @@ Actual sensors, inference and timeout rules, confidence/unknown representation, 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C2, C3; E1 step 3; add a story-specific missing-sensor case.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` covers the basic US-02.A1/A3/A5 chain with one motion state, an external location actor, an automation actor, and a lamp controller. Multi-sensor atomic recomputation and missing/stale sensor handling remain deferred.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-06: Task 06 exercised the external actor chain over real loopback transports; the inference fixture is intentionally simple and is not evidence from physical sensors.

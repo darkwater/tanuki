@@ -68,3 +68,23 @@ The minimal client applies upserts/removals to a candidate map, installs it only
 after processing the complete batch, and reports event/command occurrences
 outside retained state. Global sequence jumps are allowed because unrelated
 commits are filtered out.
+
+## WebSocket connection lifecycle
+
+1. Upgrade `/v1/ws`, then require one text-JSON or binary-MessagePack hello.
+2. Open the named managed session and register its selectors at the core's
+   snapshot boundary.
+3. Install the transport registry entry. If it replaces an entry, signal the
+   old socket to close with `session_replaced`.
+4. Send the correlated snapshot as the first response, then select among
+   client messages, subscription batches, and replacement notification.
+5. Apply every write through `Core::apply`; send its correlated reply before
+   forwarding its own queued selected update.
+6. On close or I/O failure, disconnect the exact session handle. Immediate
+   claim release is committed and published; a stale old handle is harmless.
+   Grace-release timer work is logged but cannot execute until task 07.
+
+Message/frame encoding and decoding never happen while the core mutex is held.
+An overflowing core subscription cannot stall other clients and eventually
+closes with `slow_consumer`. A reconnect has no replay cursor and receives a
+fresh snapshot.

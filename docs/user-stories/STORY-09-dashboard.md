@@ -1,6 +1,6 @@
 # US-09 — Dashboard combining unrelated topics
 
-- **Status:** transport-neutral selected view implemented; network delivery, rendering, and real-world use not yet verified.
+- **Status:** simulated live WebSocket dashboard delivery implemented; rendering and real-world use not yet verified.
 - **Origin:** User use case.
 - **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -35,6 +35,7 @@ Actual UI, selections and struct/shape mapping; whether any client needs server-
 - `tests/core_subscriptions.rs` verifies US-09.A1, A3, and A5 at the core boundary, including explicit empty snapshots and newly matching wildcard topics.
 - `tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies US-09.A2 in the minimal client projection.
 - `tests/client_view.rs::removals_change_shape_and_occurrences_stay_out_of_retained_nodes`, `tests/protocol_subscription.rs::desired_missing_and_submitted_null_have_distinct_node_views`, and the domain value tests cover the transport-neutral portion of US-09.A4.
+- `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a dashboard selection receiving battery, desired lamp, paired actual lamp, and derived location updates over a real loopback WebSocket.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -42,3 +43,4 @@ Actual UI, selections and struct/shape mapping; whether any client needs server-
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-06: Task 05 implemented coherent selector-union snapshots, atomic delta application, and local selected shape maintenance. WebSocket delivery and an actual dashboard remain pending.
+- 2026-10-06: Task 06 exercised the dashboard wire path with simulated actors. No UI rendering or deployed dashboard has been verified.

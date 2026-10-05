@@ -1,10 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use axum::{
     Json, Router,
     extract::{
-        FromRequestParts, Path, Query, State,
+        FromRequestParts, Path, Query, State, WebSocketUpgrade,
         rejection::{JsonRejection, QueryRejection},
+        ws::{CloseFrame, Message, WebSocket},
     },
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
@@ -12,15 +16,20 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as RawJson, json};
+use tokio::sync::watch;
 use tracing::warn;
 
 use crate::{
-    core::{CommitOutcome, Core, CoreError, Diagnostic},
+    core::{
+        CommitOutcome, Core, CoreError, Diagnostic, Subscription, SubscriptionCapacity,
+        SubscriptionEnd,
+    },
     domain::{
         ClaimRelease, ClientName, ExpiryUpdate, InputDefinition, InputKind, NonNegativeDuration,
-        Selection, Selector, Timestamp, TopicPath, WriteBatch, WriteContext, WriteOperation,
+        Selection, Selector, SessionHandle, SessionId, Timestamp, TopicPath, WriteBatch,
+        WriteContext, WriteOperation,
     },
-    protocol::{JsonValue, SnapshotView},
+    protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView},
 };
 
 pub type SharedCore = Arc<Mutex<Core>>;
@@ -30,16 +39,31 @@ pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 struct HttpState {
     core: SharedCore,
     clock: Clock,
+    connections: Arc<Mutex<BTreeMap<ClientName, ActiveConnection>>>,
 }
+
+#[derive(Debug)]
+struct ActiveConnection {
+    session: SessionId,
+    kick: watch::Sender<bool>,
+}
+
+const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const SUBSCRIPTION_BATCH_CAPACITY: usize = 64;
 
 pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
     Router::new()
         .route("/v1/write", post(batch_write))
         .route("/v1/state/{*topic}", post(single_state_write))
         .route("/v1/snapshot", get(snapshot))
+        .route("/v1/ws", get(websocket_upgrade))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .with_state(HttpState { core, clock })
+        .with_state(HttpState {
+            core,
+            clock,
+            connections: Arc::new(Mutex::new(BTreeMap::new())),
+        })
 }
 
 async fn not_found() -> ApiError {
@@ -56,6 +80,337 @@ async fn method_not_allowed() -> ApiError {
         code: "method_not_allowed",
         message: "the endpoint does not support this HTTP method".to_owned(),
     }
+}
+
+async fn websocket_upgrade(State(state): State<HttpState>, upgrade: WebSocketUpgrade) -> Response {
+    upgrade
+        .max_message_size(MAX_MESSAGE_BYTES)
+        .max_frame_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| websocket_session(socket, state))
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientMessage {
+    Hello {
+        request_id: RequestId,
+        client: ClientName,
+        selectors: Vec<Selector>,
+    },
+    Write {
+        request_id: RequestId,
+        operations: Vec<WireOperation>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WireCodec {
+    Json,
+    MessagePack,
+}
+
+async fn websocket_session(mut socket: WebSocket, state: HttpState) {
+    let Some(first) = socket.recv().await else {
+        return;
+    };
+    let Ok(first) = first else {
+        return;
+    };
+    let (codec, first) = match decode_client_message(first) {
+        Ok(decoded) => decoded,
+        Err((codec, error)) => {
+            let _ = send_server_message(
+                &mut socket,
+                codec,
+                &error_message(None, "invalid_message", error),
+            )
+            .await;
+            return;
+        }
+    };
+    let ClientMessage::Hello {
+        request_id,
+        client,
+        selectors,
+    } = first
+    else {
+        let _ = send_server_message(
+            &mut socket,
+            codec,
+            &error_message(
+                None,
+                "hello_required",
+                "the first WebSocket message must be hello",
+            ),
+        )
+        .await;
+        return;
+    };
+
+    let opened = match state
+        .core
+        .lock()
+        .map_err(ApiError::poisoned)
+        .and_then(|mut core| {
+            let opened = core
+                .open_session(client.clone(), (state.clock)())
+                .map_err(ApiError::from_core)?;
+            let subscription = core
+                .subscribe(
+                    Selection::new(selectors),
+                    SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
+                        .expect("configured subscription capacity is nonzero"),
+                )
+                .map_err(ApiError::from_core)?;
+            Ok((opened, subscription))
+        }) {
+        Ok(value) => value,
+        Err(api) => {
+            let _ =
+                send_server_message(&mut socket, codec, &api_server_error(Some(request_id), api))
+                    .await;
+            return;
+        }
+    };
+    let (opened, mut subscription) = opened;
+    let handle = opened.handle().clone();
+    for warning in opened.warnings() {
+        warn!(?warning, client = %handle.client(), "WebSocket session opened with diagnostic");
+    }
+    for release in opened.pending_releases() {
+        warn!(topic = %release.topic(), claim = release.claim().get(), "replacement claim release awaits task 07 scheduler");
+    }
+    let (kick, mut kicked) = watch::channel(false);
+    let previous = state
+        .connections
+        .lock()
+        .expect("connection registry lock is not poisoned")
+        .insert(
+            client.clone(),
+            ActiveConnection {
+                session: handle.id(),
+                kick,
+            },
+        );
+    if let Some(previous) = previous {
+        previous.kick.send_replace(true);
+    }
+
+    let snapshot = ServerMessage::snapshot(request_id, subscription.snapshot(), opened.warnings());
+    if send_server_message(&mut socket, codec, &snapshot)
+        .await
+        .is_ok()
+    {
+        websocket_loop(
+            &mut socket,
+            &state,
+            codec,
+            &handle,
+            &mut subscription,
+            &mut kicked,
+        )
+        .await;
+    }
+    finish_websocket_session(&state, &handle);
+}
+
+async fn websocket_loop(
+    socket: &mut WebSocket,
+    state: &HttpState,
+    codec: WireCodec,
+    handle: &SessionHandle,
+    subscription: &mut Subscription,
+    kicked: &mut watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            result = kicked.changed() => {
+                if result.is_ok() && *kicked.borrow() {
+                    let _ = socket.send(Message::Close(Some(CloseFrame {
+                        code: 4001,
+                        reason: "session_replaced".into(),
+                    }))).await;
+                }
+                return;
+            }
+            update = subscription.update() => {
+                let Some(update) = update else {
+                    if subscription.end_reason() == Some(SubscriptionEnd::SlowConsumer) {
+                        let _ = socket.send(Message::Close(Some(CloseFrame {
+                            code: 1013,
+                            reason: "slow_consumer".into(),
+                        }))).await;
+                    }
+                    return;
+                };
+                if send_server_message(socket, codec, &ServerMessage::update(&update)).await.is_err() {
+                    return;
+                }
+            }
+            incoming = socket.recv() => {
+                let Some(Ok(incoming)) = incoming else { return };
+                match incoming {
+                    Message::Ping(payload) => {
+                        if socket.send(Message::Pong(payload)).await.is_err() { return; }
+                    }
+                    Message::Pong(_) => {}
+                    Message::Close(_) => return,
+                    Message::Text(_) | Message::Binary(_) => {
+                        let decoded = decode_client_message(incoming);
+                        let message = match decoded {
+                            Ok((incoming_codec, message)) if incoming_codec == codec => message,
+                            Ok(_) => {
+                                if send_server_message(socket, codec, &error_message(None, "codec_changed", "a WebSocket connection must keep the codec selected by hello")).await.is_err() { return; }
+                                continue;
+                            }
+                            Err((_, error)) => {
+                                if send_server_message(socket, codec, &error_message(None, "invalid_message", error)).await.is_err() { return; }
+                                continue;
+                            }
+                        };
+                        match message {
+                            ClientMessage::Hello { request_id, .. } => {
+                                if send_server_message(socket, codec, &error_message(Some(request_id), "already_initialized", "hello is only valid as the first message")).await.is_err() { return; }
+                            }
+                            ClientMessage::Write { request_id, operations } => {
+                                let response = apply_websocket_write(state, handle, request_id, operations);
+                                let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == "session_expired");
+                                if send_server_message(socket, codec, &response).await.is_err() { return; }
+                                if expired { return; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn apply_websocket_write(
+    state: &HttpState,
+    handle: &SessionHandle,
+    request_id: RequestId,
+    operations: Vec<WireOperation>,
+) -> ServerMessage {
+    let operations = match operations
+        .into_iter()
+        .map(TryInto::try_into)
+        .collect::<Result<Vec<_>, ApiError>>()
+    {
+        Ok(operations) => operations,
+        Err(error) => return api_server_error(Some(request_id), error),
+    };
+    let batch = match WriteBatch::new(operations) {
+        Ok(batch) => batch,
+        Err(error) => {
+            return error_message(Some(request_id), "empty_batch", error.to_string());
+        }
+    };
+    match state
+        .core
+        .lock()
+        .map_err(ApiError::poisoned)
+        .and_then(|mut core| {
+            core.apply(
+                &WriteContext::managed(handle.clone()),
+                batch,
+                (state.clock)(),
+            )
+            .map_err(ApiError::from_core)
+        }) {
+        Ok(outcome) => {
+            for diagnostic in outcome.warnings() {
+                warn!(?diagnostic, client = %handle.client(), "WebSocket write accepted with diagnostic");
+            }
+            ServerMessage::Reply {
+                request_id,
+                result: commit_json(&outcome),
+            }
+        }
+        Err(error) => api_server_error(Some(request_id), error),
+    }
+}
+
+fn finish_websocket_session(state: &HttpState, handle: &SessionHandle) {
+    if let Ok(mut core) = state.core.lock()
+        && let Ok(outcome) = core.disconnect(handle, (state.clock)())
+    {
+        for warning in outcome.warnings() {
+            warn!(?warning, client = %handle.client(), "disconnect completed with diagnostic");
+        }
+        for release in outcome.pending_releases() {
+            warn!(topic = %release.topic(), claim = release.claim().get(), "claim release awaits task 07 scheduler");
+        }
+    }
+    let mut connections = state
+        .connections
+        .lock()
+        .expect("connection registry lock is not poisoned");
+    if connections
+        .get(handle.client())
+        .is_some_and(|connection| connection.session == handle.id())
+    {
+        connections.remove(handle.client());
+    }
+}
+
+fn decode_client_message(
+    message: Message,
+) -> Result<(WireCodec, ClientMessage), (WireCodec, String)> {
+    match message {
+        Message::Text(text) => serde_json::from_str(&text)
+            .map(|message| (WireCodec::Json, message))
+            .map_err(|error| (WireCodec::Json, error.to_string())),
+        Message::Binary(bytes) => rmp_serde::from_slice(&bytes)
+            .map(|message| (WireCodec::MessagePack, message))
+            .map_err(|error| (WireCodec::MessagePack, error.to_string())),
+        _ => Err((
+            WireCodec::Json,
+            "expected a text or binary data message".to_owned(),
+        )),
+    }
+}
+
+async fn send_server_message(
+    socket: &mut WebSocket,
+    codec: WireCodec,
+    message: &ServerMessage,
+) -> Result<(), ()> {
+    let message = match codec {
+        WireCodec::Json => {
+            let encoded = serde_json::to_string(message).map_err(|_| ())?;
+            if encoded.len() > MAX_MESSAGE_BYTES {
+                return Err(());
+            }
+            Message::Text(encoded.into())
+        }
+        WireCodec::MessagePack => {
+            let encoded = rmp_serde::to_vec_named(message).map_err(|_| ())?;
+            if encoded.len() > MAX_MESSAGE_BYTES {
+                return Err(());
+            }
+            Message::Binary(encoded.into())
+        }
+    };
+    socket.send(message).await.map_err(|_| ())
+}
+
+fn error_message(
+    request_id: Option<RequestId>,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> ServerMessage {
+    ServerMessage::Error {
+        request_id,
+        error: ErrorView {
+            code: code.into(),
+            message: message.into(),
+        },
+    }
+}
+
+fn api_server_error(request_id: Option<RequestId>, error: ApiError) -> ServerMessage {
+    error_message(request_id, error.code, error.message)
 }
 
 struct StatelessActor(WriteContext);

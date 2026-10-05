@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{
+    Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, MapAccess, SeqAccess, Visitor},
+    ser::{SerializeMap, SerializeSeq, SerializeTuple},
+};
 use serde_json::{Map, Value as RawJson, json};
 use thiserror::Error;
 
 use crate::{
-    core::{Change, Snapshot, UpdateBatch},
+    core::{Change, Diagnostic, Snapshot, UpdateBatch},
     domain::{
         ClaimRelease, CommandOccurrence, EventOccurrence, FiniteF64, InputClaim, Node,
         NonNegativeDuration, RetainedValue, Value, WriteProvenance,
@@ -32,15 +36,234 @@ impl JsonValue {
 
 impl Serialize for JsonValue {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        encode(&self.0).serialize(serializer)
+        if serializer.is_human_readable() {
+            encode(&self.0).serialize(serializer)
+        } else {
+            BinaryValue(&self.0).serialize(serializer)
+        }
     }
 }
 
 impl<'de> Deserialize<'de> for JsonValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        decode(RawJson::deserialize(deserializer)?)
-            .map(Self)
-            .map_err(de::Error::custom)
+        if deserializer.is_human_readable() {
+            decode(RawJson::deserialize(deserializer)?)
+                .map(Self)
+                .map_err(de::Error::custom)
+        } else {
+            BinaryOwnedValue::deserialize(deserializer).map(|value| Self(value.0))
+        }
+    }
+}
+
+struct BinaryValue<'a>(&'a Value);
+
+impl Serialize for BinaryValue<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Null => serializer.serialize_unit(),
+            Value::Bool(value) => serializer.serialize_bool(*value),
+            Value::Integer(value) => serializer.serialize_i64(*value),
+            Value::Float(value) => serializer.serialize_f64(value.get()),
+            Value::String(value) => serializer.serialize_str(value),
+            Value::Bytes(value) => serializer.serialize_bytes(value),
+            Value::List(values) => {
+                let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    sequence.serialize_element(&BinaryValue(value))?;
+                }
+                sequence.end()
+            }
+            Value::Map(values) => {
+                let mut map = serializer.serialize_map(Some(values.len()))?;
+                for (key, value) in values {
+                    map.serialize_entry(key, &BinaryValue(value))?;
+                }
+                map.end()
+            }
+            Value::Timestamp(value) => {
+                let text = value.to_string();
+                ExtValue {
+                    tag: 1,
+                    bytes: text.as_bytes(),
+                }
+                .serialize(serializer)
+            }
+            Value::Duration(value) => {
+                let text = jiff::fmt::temporal::SpanPrinter::new().duration_to_string(value);
+                ExtValue {
+                    tag: 2,
+                    bytes: text.as_bytes(),
+                }
+                .serialize(serializer)
+            }
+        }
+    }
+}
+
+struct ExtValue<'a> {
+    tag: i8,
+    bytes: &'a [u8],
+}
+
+impl Serialize for ExtValue<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_newtype_struct("_ExtStruct", &ExtPayload(self.tag, self.bytes))
+    }
+}
+
+struct ExtPayload<'a>(i8, &'a [u8]);
+
+impl Serialize for ExtPayload<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut tuple = serializer.serialize_tuple(2)?;
+        tuple.serialize_element(&self.0)?;
+        tuple.serialize_element(&BinaryBytes(self.1))?;
+        tuple.end()
+    }
+}
+
+struct BinaryBytes<'a>(&'a [u8]);
+
+impl Serialize for BinaryBytes<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.0)
+    }
+}
+
+struct BinaryOwnedValue(Value);
+
+impl<'de> Deserialize<'de> for BinaryOwnedValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(BinaryValueVisitor)
+    }
+}
+
+struct BinaryValueVisitor;
+
+impl<'de> Visitor<'de> for BinaryValueVisitor {
+    type Value = BinaryOwnedValue;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a Tanuki MessagePack runtime value")
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Ok(BinaryOwnedValue(Value::Null))
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+        self.visit_unit()
+    }
+
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(BinaryOwnedValue(Value::Bool(value)))
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(BinaryOwnedValue(Value::Integer(value)))
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        i64::try_from(value)
+            .map(Value::Integer)
+            .map(BinaryOwnedValue)
+            .map_err(|_| E::custom("unsigned MessagePack integer exceeds signed 64-bit range"))
+    }
+
+    fn visit_f32<E: de::Error>(self, value: f32) -> Result<Self::Value, E> {
+        self.visit_f64(f64::from(value))
+    }
+
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        FiniteF64::new(value)
+            .map(Value::Float)
+            .map(BinaryOwnedValue)
+            .map_err(E::custom)
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        self.visit_string(value.to_owned())
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(BinaryOwnedValue(Value::String(value)))
+    }
+
+    fn visit_bytes<E: de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {
+        self.visit_byte_buf(value.to_vec())
+    }
+
+    fn visit_byte_buf<E: de::Error>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+        Ok(BinaryOwnedValue(Value::Bytes(value)))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+        while let Some(value) = sequence.next_element::<BinaryOwnedValue>()? {
+            values.push(value.0);
+        }
+        Ok(BinaryOwnedValue(Value::List(values)))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut values = BTreeMap::new();
+        while let Some((key, value)) = map.next_entry::<String, BinaryOwnedValue>()? {
+            values.insert(key, value.0);
+        }
+        Ok(BinaryOwnedValue(Value::Map(values)))
+    }
+
+    fn visit_newtype_struct<D: Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        let ExtOwnedPayload(tag, bytes) = ExtOwnedPayload::deserialize(deserializer)?;
+        let text = String::from_utf8(bytes.0).map_err(de::Error::custom)?;
+        match tag {
+            1 => text
+                .parse()
+                .map(Value::Timestamp)
+                .map(BinaryOwnedValue)
+                .map_err(de::Error::custom),
+            2 => text
+                .parse()
+                .map(Value::Duration)
+                .map(BinaryOwnedValue)
+                .map_err(de::Error::custom),
+            _ => Err(de::Error::custom(format!(
+                "unknown Tanuki MessagePack extension tag {tag}"
+            ))),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ExtOwnedPayload(i8, OwnedBytes);
+
+struct OwnedBytes(Vec<u8>);
+
+impl<'de> Deserialize<'de> for OwnedBytes {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BytesVisitor;
+
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = OwnedBytes;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("MessagePack binary data")
+            }
+
+            fn visit_bytes<E: de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {
+                Ok(OwnedBytes(value.to_vec()))
+            }
+
+            fn visit_byte_buf<E: de::Error>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(OwnedBytes(value))
+            }
+        }
+
+        deserializer.deserialize_byte_buf(BytesVisitor)
     }
 }
 
@@ -424,6 +647,7 @@ pub enum ServerMessage {
         request_id: RequestId,
         sequence: u64,
         nodes: BTreeMap<String, NodeView>,
+        warnings: Vec<DiagnosticView>,
     },
     Update {
         sequence: u64,
@@ -441,12 +665,13 @@ pub enum ServerMessage {
 
 impl ServerMessage {
     #[must_use]
-    pub fn snapshot(request_id: RequestId, snapshot: &Snapshot) -> Self {
+    pub fn snapshot(request_id: RequestId, snapshot: &Snapshot, warnings: &[Diagnostic]) -> Self {
         let view = SnapshotView::from(snapshot);
         Self::Snapshot {
             request_id,
             sequence: view.sequence,
             nodes: view.nodes,
+            warnings: warnings.iter().map(DiagnosticView::from).collect(),
         }
     }
 
@@ -464,4 +689,84 @@ impl ServerMessage {
 pub struct ErrorView {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum DiagnosticView {
+    OutputOwnerChanged {
+        topic: String,
+        previous: String,
+        replacement: String,
+    },
+    NodeKindChanged {
+        topic: String,
+        previous: String,
+        replacement: String,
+    },
+    NodeAlreadyAbsent {
+        topic: String,
+    },
+    SessionReplaced {
+        client: String,
+        previous: u64,
+        replacement: u64,
+    },
+    InputClaimReplaced {
+        topic: String,
+        previous: String,
+        replacement: String,
+    },
+    ClaimGraceOutOfRange {
+        topic: String,
+    },
+}
+
+impl From<&Diagnostic> for DiagnosticView {
+    fn from(value: &Diagnostic) -> Self {
+        match value {
+            Diagnostic::OutputOwnerChanged {
+                topic,
+                previous,
+                replacement,
+            } => Self::OutputOwnerChanged {
+                topic: topic.to_string(),
+                previous: previous.as_str().to_owned(),
+                replacement: replacement.as_str().to_owned(),
+            },
+            Diagnostic::NodeKindChanged {
+                topic,
+                previous,
+                replacement,
+            } => Self::NodeKindChanged {
+                topic: topic.to_string(),
+                previous: format!("{previous:?}").to_lowercase(),
+                replacement: format!("{replacement:?}").to_lowercase(),
+            },
+            Diagnostic::NodeAlreadyAbsent { topic } => Self::NodeAlreadyAbsent {
+                topic: topic.to_string(),
+            },
+            Diagnostic::SessionReplaced {
+                client,
+                previous,
+                replacement,
+            } => Self::SessionReplaced {
+                client: client.as_str().to_owned(),
+                previous: previous.get(),
+                replacement: replacement.get(),
+            },
+            Diagnostic::InputClaimReplaced {
+                topic,
+                previous,
+                replacement,
+            } => Self::InputClaimReplaced {
+                topic: topic.to_string(),
+                previous: previous.as_str().to_owned(),
+                replacement: replacement.as_str().to_owned(),
+            },
+            Diagnostic::ClaimGraceOutOfRange { topic } => Self::ClaimGraceOutOfRange {
+                topic: topic.to_string(),
+            },
+        }
+    }
 }

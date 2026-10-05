@@ -14,9 +14,9 @@ that does not turn the provisional choice into an accepted requirement.
 2. **Slow-consumer contract and limits.** Is disconnect-and-resnapshot the
    desired policy when a connection exceeds a 1 MiB outgoing-byte budget, with
    no dropped/coalesced occurrences? Also confirm 1 MiB as the initial maximum
-   individual snapshot/message size. The core currently proves the policy with
-   a configurable batch-count queue; byte accounting belongs at the codec/
-   connection boundary.
+   individual snapshot/message size. The transport now enforces the individual
+   limit and uses a 64-complete-batch core queue; total queued-byte accounting
+   remains unimplemented.
 3. **Repeated same-topic operations.** Should checkpoint B freeze the current
    rule: one definition, one claim, and one submission slot may compose in
    operation order, while repeats in a slot and all same-topic output/removal
@@ -26,15 +26,21 @@ that does not turn the provisional choice into an accepted requirement.
 
 1. **Retained node wire shape.** Normalize both state and desired nodes around a
    `current` object (`value`, `last_write`, `expires_at`). Desired `current:
-   null` then differs cleanly from `current: {value: null, ...}`. Desired uses
-   this shape already; state still has the older top-level fields pending the
-   checkpoint-B DTO refactor.
+   null` then differs cleanly from `current: {value: null, ...}`. The
+   provisional snapshot/update DTOs now use this shape for both kinds.
 2. **Request identifiers.** Use opaque client-supplied strings. An error for a
    message that cannot be decoded enough to recover its ID uses `request_id:
    null`.
 3. **Filtered commit sequences.** Keep the global commit sequence in snapshots
    and updates. Selected streams legitimately skip irrelevant global commits,
    so a gap is informational and not proof of message loss.
+4. **MessagePack semantic extension tags.** Use extension tag `1` for UTF-8
+   RFC 3339 timestamps and tag `2` for UTF-8 ISO-8601 fixed durations. Bytes use
+   MessagePack's native binary type; ordinary values use native primitives.
+5. **Connection codec selection.** Let the hello frame choose JSON text or
+   MessagePack binary and require that codec for the rest of the connection.
+   This avoids per-message ambiguity and currently returns `codec_changed` for
+   a later frame of the other kind.
 
 ## Provisional defaults probably worth a quick skim
 
@@ -46,6 +52,9 @@ that does not turn the provisional choice into an accepted requirement.
 4. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
    `$map`; literal maps containing reserved tag keys must use `$map`.
 5. Exact current dependency versions are pinned and `Cargo.lock` is committed.
+6. WebSocket subscriptions buffer 64 complete update batches. A second managed
+   connection with the same name closes the old socket with private-use code
+   4001; slow consumers use retry-later code 1013.
 
 ## Resolved or accepted elsewhere
 

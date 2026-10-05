@@ -97,8 +97,7 @@ Run the focused suite with:
 cargo test --test protocol_json --test http_api
 ```
 
-The v1 HTTP shape is provisional until checkpoint B. WebSocket and MessagePack
-transport parity remain task 06.
+The v1 HTTP shape is provisional until checkpoint B.
 
 ## Task 05 — coherent core subscriptions and checkpoint-B DTOs
 
@@ -117,5 +116,29 @@ cargo test --test core_subscriptions --test protocol_subscription --test client_
 ```
 
 The core queue is bounded by batch count. Proposed connection byte limits and
-the wire shapes remain provisional pending the user's checkpoint-B answers;
-WebSocket delivery is task 06.
+the wire shapes remain provisional pending the user's checkpoint-B answers.
+
+## Task 06 — WebSocket codecs and mixed-client simulation
+
+`tests/websocket_api.rs` starts the production Axum server on an ephemeral
+listener and uses real WebSocket and HTTP clients. It verifies snapshot-first
+hello acknowledgement, reply/update ordering, JSON and MessagePack delivery,
+same-name stateless HTTP isolation, duplicate managed-session closure, and
+disconnect claim cleanup. Its simulated-room case covers E1 steps 1–4 with a
+laptop, phone, dashboard, lamp controller, motion/location script, and
+automation; assertions follow downstream batches rather than stopping at
+producer acknowledgements.
+
+`tests/protocol_json.rs` pins native MessagePack bytes, timestamp/duration
+extension vectors, nested codec equivalence, and literal JSON tag-map escaping.
+Core slow-consumer isolation remains covered in `tests/core_subscriptions.rs`.
+
+Run the focused suite with:
+
+```sh
+cargo test --test websocket_api --test protocol_json --test core_subscriptions
+```
+
+The tests use simulated actors on loopback, not deployed devices or a polished
+client SDK. Total outgoing-byte accounting and task-07 grace timers remain
+unimplemented.
