@@ -32,7 +32,7 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 
 - Core test links: [test plan](../test-plan.md) — L1, P1; E1 restart coverage.
 - `tests/core_sessions_inputs.rs::stateless_definition_and_submission_create_unclaimed_pending_intent` verifies US-08.A1.
-- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Subscription delivery remains task 05; expiry and restart criteria remain tasks 07 and 08.
+- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Network subscription delivery remains task 06; expiry and restart criteria remain tasks 07 and 08.
 - `tests/http_api.rs::batch_endpoint_composes_unclaimed_input_definition_and_submission` verifies US-08.A1 through the stateless HTTP batch adapter.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.

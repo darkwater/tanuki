@@ -50,3 +50,21 @@ preserving definitions and desired values. Grace policies retain the claim and
 return guarded release work containing the topic, claim ID, and deadline for
 the task 07 timer scheduler. A stale disconnect is a successful no-op and
 cannot affect the replacement session or its claims.
+
+## Subscription registration and publication
+
+Subscription registration and snapshot capture occur in one exclusive core
+call. Once registered, every node-changing transition projects its completed
+`UpdateBatch` through each subscriber's selector union and uses nonblocking
+queue sends. The write caller never waits for a consumer.
+
+An empty projection produces no update. A full queue marks that subscription
+as `SlowConsumer`, drops its sender, and leaves other subscriptions and the
+commit unaffected. Already queued updates remain readable before closure. A
+transport reconnect will establish a new subscription and snapshot; no replay
+or coalescing is performed.
+
+The minimal client applies upserts/removals to a candidate map, installs it only
+after processing the complete batch, and reports event/command occurrences
+outside retained state. Global sequence jumps are allowed because unrelated
+commits are filtered out.

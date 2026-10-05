@@ -121,6 +121,13 @@ repeat in the same lifecycle slot, or any same-topic output/removal combination,
 is rejected. This is tested and documented but remains open for user review
 before the wire batch contract is frozen.
 
+Task 05 provisionally implements delta batches with full-node upserts, distinct
+event/command occurrences, removals carrying previous nodes, and a correlated
+initial snapshot serving as subscribe success. Core queues disconnect only the
+slow subscriber on capacity overflow. Exact connection byte limits and final
+checkpoint-B acceptance remain open in `open-questions.md`; these implemented
+review defaults are not silently promoted to accepted decisions.
+
 ## D7 — Paths and glob grammar
 
 **Needed before:** topic keys and selector parser.

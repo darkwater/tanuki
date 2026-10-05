@@ -222,9 +222,12 @@ async fn stateless_battery_publish_and_anonymous_read_cross_the_real_router() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["data"]["nodes"]["/battery/phone"]["value"], 72);
     assert_eq!(
-        body["data"]["nodes"]["/battery/phone"]["last_write"]["client"],
+        body["data"]["nodes"]["/battery/phone"]["current"]["value"],
+        72
+    );
+    assert_eq!(
+        body["data"]["nodes"]["/battery/phone"]["current"]["last_write"]["client"],
         "phone tasker"
     );
     assert_eq!(core.lock().unwrap().managed_session_count(), 0);
@@ -300,7 +303,10 @@ async fn tagged_values_and_escaped_maps_survive_json_storage() {
         .await
         .unwrap();
     let body = response_json(response).await;
-    assert_eq!(body["data"]["nodes"]["/codec/sample"]["value"], value);
+    assert_eq!(
+        body["data"]["nodes"]["/codec/sample"]["current"]["value"],
+        value
+    );
 }
 
 #[tokio::test]
@@ -339,7 +345,10 @@ async fn battery_publish_and_read_work_over_a_real_tcp_listener() {
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     let (_, body) = response.split_once("\r\n\r\n").unwrap();
     let body: JsonValue = serde_json::from_str(body).unwrap();
-    assert_eq!(body["data"]["nodes"]["/battery/phone"]["value"], 64);
+    assert_eq!(
+        body["data"]["nodes"]["/battery/phone"]["current"]["value"],
+        64
+    );
 
     shutdown_tx.send(()).unwrap();
     server.await.unwrap().unwrap();

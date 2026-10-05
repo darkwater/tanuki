@@ -8,10 +8,11 @@ does.
 
 | Module | Status | Responsibility |
 | --- | --- | --- |
-| `server` | bootstrap | Own the process lifecycle and, later, runtime wiring and shutdown |
+| `server` | task 04 HTTP implemented | Own process lifecycle, listener wiring, and graceful shutdown |
+| `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | tasks 02–03 implemented | Authoritative nodes, managed sessions, atomic commits, and input claims |
-| `protocol` | task 04 JSON implemented | Versioned transport DTOs and codec conversion |
+| `core` | tasks 02–05 implemented | Authoritative nodes, sessions, atomic commits, claims, and subscriptions |
+| `protocol` | tasks 04–05 provisional | JSON values and typed snapshot/update/error DTOs pending checkpoint-B approval |
 | `transport` | task 04 HTTP implemented | Axum HTTP extraction, routing, and response/error mapping |
 | `persistence` | planned | Versioned coherent snapshots and file operations |
 | `schema` | planned | Ordinary-topic validation and freshness policy |
@@ -150,3 +151,29 @@ review: same-topic input lifecycle operations may compose once per lifecycle
 slot while ambiguous repeats are rejected, and instant-output metadata remains
 present in snapshots. These choices support atomic input creation without
 introducing implicit last-write-wins or event replay.
+
+## Checkpoint B — provisionally implemented, awaiting review
+
+`Core::subscribe` registers a selector union and captures its snapshot within
+one exclusive core transition. A concurrent write therefore appears either in
+that snapshot or in a newer queued update. Each subscriber receives a filtered
+projection of the complete commit; overlapping selectors cannot duplicate a
+change. Empty projections are not queued.
+
+Core queues have configurable nonzero batch capacity and use `try_send`, so a
+slow subscriber never blocks mutation or another subscriber. Overflow removes
+only that subscription and records `SlowConsumer` through a separate closure
+signal. Byte accounting and the proposed 1 MiB connection budget remain a
+transport-boundary question in `open-questions.md`.
+
+The provisional wire model uses full `NodeView` values in upserts, explicit
+event/command occurrences, and removals carrying the previous node. Both state
+and desired nodes use a `current` wrapper. A successful correlated snapshot is
+the subscription acknowledgement; subsequent updates carry the global commit
+sequence. Filtered streams may skip irrelevant global sequence numbers.
+
+`SelectedView` is a minimal client-side projection. It stages all node upserts
+and removals in one call before replacing the visible map, returns instant
+occurrences separately, and rejects duplicate or older sequences without
+mutation. These choices are implemented to make review concrete but are not
+recorded as accepted until the user answers checkpoint B.

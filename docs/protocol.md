@@ -70,6 +70,30 @@ outside signed 64-bit range are rejected. A literal map containing any reserved
 tag key must use `$map`. Encoding is recursive and lossless for the accepted
 initial value profile.
 
-A desired node uses an explicit `current` wrapper. `"current":null` means no
-payload exists; `"current":{"value":null,...}` means `Value::Null` was
-actually submitted. This distinction is preserved in snapshots and updates.
+State and desired nodes use an explicit `current` wrapper. Desired
+`"current":null` means no payload exists; `"current":{"value":null,...}`
+means `Value::Null` was actually submitted. This distinction is preserved in
+snapshots and updates.
+
+## Provisional subscription messages
+
+Checkpoint B remains open in `open-questions.md`. The implemented review shape
+uses a correlated snapshot as successful subscription acknowledgement:
+
+```json
+{"type":"snapshot","request_id":"s1","sequence":42,"nodes":{}}
+{"type":"update","sequence":43,"changes":[]}
+{"type":"reply","request_id":"w1","result":{}}
+{"type":"error","request_id":"w1","error":{"code":"...","message":"..."}}
+```
+
+Changes are tagged `upsert`, `event`, `command`, or `removed`. Upsert carries a
+complete node view; removal carries the previous complete node. Consumers apply
+the entire changes array before exposing a recomputed shape. Instant
+occurrences are returned separately by the minimal client view and never enter
+its retained node map.
+
+The sequence is the global in-memory commit sequence, not a replay cursor.
+Filtered subscriptions legitimately skip commits that affect no selected
+topic, so a numeric gap alone does not prove message loss. Reconnection starts
+from a new snapshot; replay is not promised.

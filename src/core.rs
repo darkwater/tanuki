@@ -1,6 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
+};
 
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 use crate::domain::{
     ClaimId, ClaimRelease, ClientName, CommandNode, CommandOccurrence, Deadline, DesiredNode,
@@ -16,6 +21,8 @@ pub struct Core {
     sessions: BTreeMap<ClientName, SessionId>,
     next_session_id: u64,
     next_claim_id: u64,
+    subscribers: BTreeMap<SubscriptionId, SubscriberState>,
+    next_subscription_id: u64,
 }
 
 impl Core {
@@ -73,13 +80,12 @@ impl Core {
         self.nodes = candidate;
         self.next_claim_id = next_claim_id;
         self.sequence = next_sequence;
-        Ok(CommitOutcome {
-            update: UpdateBatch {
-                sequence: next_sequence,
-                changes,
-            },
-            warnings,
-        })
+        let update = UpdateBatch {
+            sequence: next_sequence,
+            changes,
+        };
+        self.publish_update(&update);
+        Ok(CommitOutcome { update, warnings })
     }
 
     pub fn open_session(
@@ -167,6 +173,38 @@ impl Core {
         self.sessions.len()
     }
 
+    pub fn subscribe(
+        &mut self,
+        selection: Selection,
+        capacity: SubscriptionCapacity,
+    ) -> Result<Subscription, CoreError> {
+        self.subscribers
+            .retain(|_, subscriber| !subscriber.updates.is_closed());
+        let raw_id = self
+            .next_subscription_id
+            .checked_add(1)
+            .ok_or(CoreError::SubscriptionIdExhausted)?;
+        let id = SubscriptionId(raw_id);
+        let snapshot = self.read(&selection);
+        let (updates, receiver) = mpsc::channel(capacity.get());
+        let end = Arc::new(Mutex::new(None));
+        self.subscribers.insert(
+            id,
+            SubscriberState {
+                selection,
+                updates,
+                end: Arc::clone(&end),
+            },
+        );
+        self.next_subscription_id = raw_id;
+        Ok(Subscription {
+            id,
+            snapshot,
+            updates: receiver,
+            end,
+        })
+    }
+
     fn validate_actor(&self, actor: &WriteContext) -> Result<(), CoreError> {
         let WriteContext::Managed(handle) = actor else {
             return Ok(());
@@ -196,10 +234,50 @@ impl Core {
             .ok_or(CoreError::SequenceExhausted)?;
         self.nodes = candidate;
         self.sequence = next;
-        Ok(Some(UpdateBatch {
+        let update = UpdateBatch {
             sequence: next,
             changes,
-        }))
+        };
+        self.publish_update(&update);
+        Ok(Some(update))
+    }
+
+    fn publish_update(&mut self, update: &UpdateBatch) {
+        let mut ended = Vec::new();
+        for (id, subscriber) in &self.subscribers {
+            if subscriber.updates.is_closed() {
+                ended.push(*id);
+                continue;
+            }
+            let changes = update
+                .changes
+                .iter()
+                .filter(|change| subscriber.selection.matches(change.topic()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if changes.is_empty() {
+                continue;
+            }
+            let projected = UpdateBatch {
+                sequence: update.sequence,
+                changes,
+            };
+            match subscriber.updates.try_send(projected) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    *subscriber
+                        .end
+                        .lock()
+                        .expect("subscription end lock is not poisoned") =
+                        Some(SubscriptionEnd::SlowConsumer);
+                    ended.push(*id);
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => ended.push(*id),
+            }
+        }
+        for id in ended {
+            self.subscribers.remove(&id);
+        }
     }
 }
 
@@ -210,6 +288,83 @@ impl CommitSequence {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SubscriptionId(u64);
+
+impl SubscriptionId {
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubscriptionCapacity(NonZeroUsize);
+
+impl SubscriptionCapacity {
+    pub fn new(value: usize) -> Result<Self, InvalidSubscriptionCapacity> {
+        NonZeroUsize::new(value)
+            .map(Self)
+            .ok_or(InvalidSubscriptionCapacity)
+    }
+
+    const fn get(self) -> usize {
+        self.0.get()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("a subscription queue must hold at least one update batch")]
+pub struct InvalidSubscriptionCapacity;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubscriptionEnd {
+    SlowConsumer,
+}
+
+#[derive(Debug)]
+struct SubscriberState {
+    selection: Selection,
+    updates: mpsc::Sender<UpdateBatch>,
+    end: Arc<Mutex<Option<SubscriptionEnd>>>,
+}
+
+#[derive(Debug)]
+pub struct Subscription {
+    id: SubscriptionId,
+    snapshot: Snapshot,
+    updates: mpsc::Receiver<UpdateBatch>,
+    end: Arc<Mutex<Option<SubscriptionEnd>>>,
+}
+
+impl Subscription {
+    #[must_use]
+    pub const fn id(&self) -> SubscriptionId {
+        self.id
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+
+    pub fn try_update(&mut self) -> Option<UpdateBatch> {
+        self.updates.try_recv().ok()
+    }
+
+    pub async fn update(&mut self) -> Option<UpdateBatch> {
+        self.updates.recv().await
+    }
+
+    #[must_use]
+    pub fn end_reason(&self) -> Option<SubscriptionEnd> {
+        *self
+            .end
+            .lock()
+            .expect("subscription end lock is not poisoned")
     }
 }
 
@@ -290,6 +445,17 @@ pub enum Change {
         topic: TopicPath,
         previous: Node,
     },
+}
+
+impl Change {
+    fn topic(&self) -> &TopicPath {
+        match self {
+            Self::Upsert { topic, .. }
+            | Self::Occurrence { topic, .. }
+            | Self::Command { topic, .. }
+            | Self::Removed { topic, .. } => topic,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -426,6 +592,8 @@ pub enum CoreError {
     SessionIdExhausted,
     #[error("input claim identifiers are exhausted")]
     ClaimIdExhausted,
+    #[error("subscription identifiers are exhausted")]
+    SubscriptionIdExhausted,
     #[error("managed session {session:?} is no longer current")]
     SessionExpired { session: SessionId },
     #[error("operation `{operation}` requires a managed session")]

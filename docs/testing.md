@@ -99,3 +99,23 @@ cargo test --test protocol_json --test http_api
 
 The v1 HTTP shape is provisional until checkpoint B. WebSocket and MessagePack
 transport parity remain task 06.
+
+## Task 05 — coherent core subscriptions and checkpoint-B DTOs
+
+`tests/core_subscriptions.rs` covers atomic snapshot registration, an actual
+concurrent registration/write race, filtered atomic batches, overlapping
+selector deduplication, explicit empty snapshots, live-only occurrences,
+metadata-only upserts, desired clearing, removals, and isolated slow-consumer
+closure. `tests/protocol_subscription.rs` covers the provisional correlated
+snapshot/update shapes. `tests/client_view.rs` verifies whole-batch local shape
+application, occurrence separation, removals, and stale-update rollback.
+
+Run the focused suite with:
+
+```sh
+cargo test --test core_subscriptions --test protocol_subscription --test client_view
+```
+
+The core queue is bounded by batch count. Proposed connection byte limits and
+the wire shapes remain provisional pending the user's checkpoint-B answers;
+WebSocket delivery is task 06.

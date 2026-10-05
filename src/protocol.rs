@@ -5,7 +5,13 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::{Map, Value as RawJson, json};
 use thiserror::Error;
 
-use crate::domain::{FiniteF64, Value};
+use crate::{
+    core::{Change, Snapshot, UpdateBatch},
+    domain::{
+        ClaimRelease, CommandOccurrence, EventOccurrence, FiniteF64, InputClaim, Node,
+        NonNegativeDuration, RetainedValue, Value, WriteProvenance,
+    },
+};
 
 const TAGS: [&str; 5] = ["$bytes", "$timestamp", "$duration", "$int", "$map"];
 
@@ -169,4 +175,293 @@ pub fn encode(value: &Value) -> RawJson {
             "$duration": jiff::fmt::temporal::SpanPrinter::new().duration_to_string(value)
         }),
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotView {
+    pub sequence: u64,
+    pub nodes: BTreeMap<String, NodeView>,
+}
+
+impl From<&Snapshot> for SnapshotView {
+    fn from(snapshot: &Snapshot) -> Self {
+        Self {
+            sequence: snapshot.sequence().get(),
+            nodes: snapshot
+                .nodes()
+                .iter()
+                .map(|(topic, node)| (topic.to_string(), NodeView::from(node)))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateView {
+    pub sequence: u64,
+    pub changes: Vec<ChangeView>,
+}
+
+impl From<&UpdateBatch> for UpdateView {
+    fn from(update: &UpdateBatch) -> Self {
+        Self {
+            sequence: update.sequence().get(),
+            changes: update.changes().iter().map(ChangeView::from).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NodeView {
+    State {
+        current: CurrentValueView,
+    },
+    Event {
+        last_publisher: ProvenanceView,
+    },
+    Desired {
+        definition: InputDefinitionView,
+        claim: Option<ClaimView>,
+        current: Option<CurrentValueView>,
+    },
+    Command {
+        definition: InputDefinitionView,
+        claim: Option<ClaimView>,
+    },
+}
+
+impl From<&Node> for NodeView {
+    fn from(node: &Node) -> Self {
+        match node {
+            Node::State(node) => Self::State {
+                current: CurrentValueView::from(node.current()),
+            },
+            Node::Event(node) => Self::Event {
+                last_publisher: ProvenanceView::from(node.last_publisher()),
+            },
+            Node::Desired(node) => Self::Desired {
+                definition: InputDefinitionView {},
+                claim: node.claim().map(ClaimView::from),
+                current: node.current().map(CurrentValueView::from),
+            },
+            Node::Command(node) => Self::Command {
+                definition: InputDefinitionView {},
+                claim: node.claim().map(ClaimView::from),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InputDefinitionView {}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CurrentValueView {
+    pub value: JsonValue,
+    pub last_write: ProvenanceView,
+    pub expires_at: Option<String>,
+}
+
+impl From<&RetainedValue> for CurrentValueView {
+    fn from(value: &RetainedValue) -> Self {
+        Self {
+            value: JsonValue::new(value.value().clone()),
+            last_write: ProvenanceView::from(value.last_write()),
+            expires_at: value
+                .expires_at()
+                .map(|deadline| deadline.get().get().to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProvenanceView {
+    pub client: String,
+    pub session: Option<u64>,
+    pub at: String,
+}
+
+impl From<&WriteProvenance> for ProvenanceView {
+    fn from(value: &WriteProvenance) -> Self {
+        Self {
+            client: value.client().as_str().to_owned(),
+            session: value.session().map(|session| session.get()),
+            at: value.at().get().to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ClaimView {
+    pub id: u64,
+    pub owner: String,
+    pub session: u64,
+    pub release: ClaimReleaseView,
+}
+
+impl From<&InputClaim> for ClaimView {
+    fn from(value: &InputClaim) -> Self {
+        Self {
+            id: value.id().get(),
+            owner: value.owner().as_str().to_owned(),
+            session: value.session().get(),
+            release: ClaimReleaseView::from(value.release()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum ClaimReleaseView {
+    Immediate,
+    After { duration: String },
+}
+
+impl From<ClaimRelease> for ClaimReleaseView {
+    fn from(value: ClaimRelease) -> Self {
+        match value {
+            ClaimRelease::Immediate => Self::Immediate,
+            ClaimRelease::After(duration) => Self::After {
+                duration: duration_string(duration),
+            },
+        }
+    }
+}
+
+fn duration_string(value: NonNegativeDuration) -> String {
+    jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&value.get())
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChangeView {
+    Upsert {
+        topic: String,
+        node: NodeView,
+    },
+    Event {
+        topic: String,
+        event: OccurrenceView,
+    },
+    Command {
+        topic: String,
+        command: OccurrenceView,
+    },
+    Removed {
+        topic: String,
+        previous: NodeView,
+    },
+}
+
+impl From<&Change> for ChangeView {
+    fn from(change: &Change) -> Self {
+        match change {
+            Change::Upsert { topic, node } => Self::Upsert {
+                topic: topic.to_string(),
+                node: NodeView::from(node),
+            },
+            Change::Occurrence { topic, event } => Self::Event {
+                topic: topic.to_string(),
+                event: OccurrenceView::from(event),
+            },
+            Change::Command { topic, command } => Self::Command {
+                topic: topic.to_string(),
+                command: OccurrenceView::from(command),
+            },
+            Change::Removed { topic, previous } => Self::Removed {
+                topic: topic.to_string(),
+                previous: NodeView::from(previous),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OccurrenceView {
+    pub value: JsonValue,
+    pub provenance: ProvenanceView,
+}
+
+impl From<&EventOccurrence> for OccurrenceView {
+    fn from(value: &EventOccurrence) -> Self {
+        Self {
+            value: JsonValue::new(value.value().clone()),
+            provenance: ProvenanceView::from(value.publisher()),
+        }
+    }
+}
+
+impl From<&CommandOccurrence> for OccurrenceView {
+    fn from(value: &CommandOccurrence) -> Self {
+        Self {
+            value: JsonValue::new(value.value().clone()),
+            provenance: ProvenanceView::from(value.submitter()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RequestId(String);
+
+impl RequestId {
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerMessage {
+    Snapshot {
+        request_id: RequestId,
+        sequence: u64,
+        nodes: BTreeMap<String, NodeView>,
+    },
+    Update {
+        sequence: u64,
+        changes: Vec<ChangeView>,
+    },
+    Reply {
+        request_id: RequestId,
+        result: RawJson,
+    },
+    Error {
+        request_id: Option<RequestId>,
+        error: ErrorView,
+    },
+}
+
+impl ServerMessage {
+    #[must_use]
+    pub fn snapshot(request_id: RequestId, snapshot: &Snapshot) -> Self {
+        let view = SnapshotView::from(snapshot);
+        Self::Snapshot {
+            request_id,
+            sequence: view.sequence,
+            nodes: view.nodes,
+        }
+    }
+
+    #[must_use]
+    pub fn update(update: &UpdateBatch) -> Self {
+        let view = UpdateView::from(update);
+        Self::Update {
+            sequence: view.sequence,
+            changes: view.changes,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ErrorView {
+    pub code: String,
+    pub message: String,
 }

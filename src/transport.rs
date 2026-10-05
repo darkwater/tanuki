@@ -11,17 +11,16 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Map as JsonMap, Value as RawJson, json};
+use serde_json::{Value as RawJson, json};
 use tracing::warn;
 
 use crate::{
-    core::{CommitOutcome, Core, CoreError, Diagnostic, Snapshot},
+    core::{CommitOutcome, Core, CoreError, Diagnostic},
     domain::{
-        ClaimRelease, ClientName, ExpiryUpdate, InputDefinition, InputKind, Node,
-        NonNegativeDuration, RetainedValue, Selection, Selector, Timestamp, TopicPath, WriteBatch,
-        WriteContext, WriteOperation, WriteProvenance,
+        ClaimRelease, ClientName, ExpiryUpdate, InputDefinition, InputKind, NonNegativeDuration,
+        Selection, Selector, Timestamp, TopicPath, WriteBatch, WriteContext, WriteOperation,
     },
-    protocol::{JsonValue, encode},
+    protocol::{JsonValue, SnapshotView},
 };
 
 pub type SharedCore = Arc<Mutex<Core>>;
@@ -149,7 +148,7 @@ fn apply(
 async fn snapshot(
     State(state): State<HttpState>,
     query: Result<Query<ReadQuery>, QueryRejection>,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+) -> Result<Json<ApiResponse<SnapshotView>>, ApiError> {
     let Query(query) =
         query.map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
     let snapshot = state
@@ -157,7 +156,7 @@ async fn snapshot(
         .lock()
         .map_err(ApiError::poisoned)?
         .read(&Selection::new(vec![query.select]));
-    Ok(Json(ApiResponse::success(snapshot_json(&snapshot))))
+    Ok(Json(ApiResponse::success(SnapshotView::from(&snapshot))))
 }
 
 #[derive(Serialize)]
@@ -209,7 +208,8 @@ impl ApiError {
             }
             CoreError::SequenceExhausted
             | CoreError::SessionIdExhausted
-            | CoreError::ClaimIdExhausted => {
+            | CoreError::ClaimIdExhausted
+            | CoreError::SubscriptionIdExhausted => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "capacity_exhausted")
             }
             CoreError::DuplicateTarget { .. } => (StatusCode::BAD_REQUEST, "duplicate_target"),
@@ -442,56 +442,4 @@ fn diagnostic_json(diagnostic: &Diagnostic) -> RawJson {
             json!({"code": "claim_grace_out_of_range", "topic": topic})
         }
     }
-}
-
-fn snapshot_json(snapshot: &Snapshot) -> RawJson {
-    let nodes: JsonMap<_, _> = snapshot
-        .nodes()
-        .iter()
-        .map(|(topic, node)| (topic.to_string(), node_json(node)))
-        .collect();
-    json!({"sequence": snapshot.sequence().get(), "nodes": nodes})
-}
-
-fn node_json(node: &Node) -> RawJson {
-    match node {
-        Node::State(node) => retained_node_json("state", node.current()),
-        Node::Event(node) => {
-            json!({"kind": "event", "last_write": provenance_json(node.last_publisher())})
-        }
-        Node::Desired(node) => json!({
-            "kind": "desired",
-            "current": node.current().map(current_json),
-            "claim": node.claim().map(|claim| json!({"owner": claim.owner(), "session": claim.session().get(), "id": claim.id().get()}))
-        }),
-        Node::Command(node) => json!({
-            "kind": "command",
-            "claim": node.claim().map(|claim| json!({"owner": claim.owner(), "session": claim.session().get(), "id": claim.id().get()}))
-        }),
-    }
-}
-
-fn retained_node_json(kind: &str, retained: &RetainedValue) -> RawJson {
-    json!({
-        "kind": kind,
-        "value": encode(retained.value()),
-        "last_write": provenance_json(retained.last_write()),
-        "expires_at": retained.expires_at().map(|deadline| deadline.get().get().to_string())
-    })
-}
-
-fn current_json(retained: &RetainedValue) -> RawJson {
-    json!({
-        "value": encode(retained.value()),
-        "last_write": provenance_json(retained.last_write()),
-        "expires_at": retained.expires_at().map(|deadline| deadline.get().get().to_string())
-    })
-}
-
-fn provenance_json(provenance: &WriteProvenance) -> RawJson {
-    json!({
-        "client": provenance.client(),
-        "session": provenance.session().map(|session| session.get()),
-        "at": provenance.at().get().to_string()
-    })
 }
