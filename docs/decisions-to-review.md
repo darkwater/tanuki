@@ -29,6 +29,11 @@ approve every earlier recommendation in this file. Prefer simple documented
 behaviour, warning on recoverable anomalies, and logging over added lifecycle
 machinery.
 
+**Provisional task-02 default:** retain instant-output node metadata, including
+the last publisher, while never retaining occurrence payloads. This is an
+implementation choice awaiting protocol review rather than an accepted product
+decision.
+
 **Accepted claim collision:** a live managed session may replace an existing
 input claim with a warning. The displaced session immediately loses claim
 authority; stale cleanup remains guarded by internal session/claim identity.
@@ -109,6 +114,10 @@ MessagePack should use native primitives and binary data, with an explicit seman
 - Return request-correlated success/error replies. An acknowledgement means accepted by the core, not executed by a command consumer or durably saved.
 
 A disconnect after commit but before acknowledgement leaves the caller uncertain. No deduplication/replay subsystem is proposed: retrying a command can execute it twice. Document this rather than imply exactly-once delivery.
+
+Task 02 uses rejection of duplicate canonical targets as a provisional
+implementation default. It is tested and documented but remains open for user
+review before the wire batch contract is frozen.
 
 ## D7 — Paths and glob grammar
 

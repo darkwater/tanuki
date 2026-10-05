@@ -1,6 +1,6 @@
 # US-01 — Battery monitor
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** core retention behavior partially implemented; transport and real-world use not yet verified.
 - **Origin:** User use case.
 - **Last updated:** 2026-10-05.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -32,10 +32,12 @@ Percentage representation, charging state, publication intervals, freshness thre
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C1, C3, L2, S1, T1; E1 steps 1 and 4.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- `tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry` verifies the core portion of US-01.A3. Connection distinction and widget observation remain tasks 03–06.
+- `tests/core_publication.rs::snapshot_selection_filters_topics_and_removal_carries_previous_state` verifies selected one-off retained reads; live startup/update handoff remains task 05.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-05: Task 02 implemented retained output refresh and selection-filtered core snapshots; no transport or deployment claim yet.

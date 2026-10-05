@@ -80,6 +80,11 @@ impl StateNode {
     pub fn new(current: RetainedValue) -> Self {
         Self { current }
     }
+
+    #[must_use]
+    pub fn current(&self) -> &RetainedValue {
+        &self.current
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,6 +200,16 @@ impl DesiredNode {
     pub fn definition(&self) -> &InputDefinition {
         &self.definition
     }
+
+    #[must_use]
+    pub fn current(&self) -> Option<&RetainedValue> {
+        self.current.as_ref()
+    }
+
+    #[must_use]
+    pub fn claim(&self) -> Option<&InputClaim> {
+        self.claim.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -215,5 +230,10 @@ impl CommandNode {
     #[must_use]
     pub fn definition(&self) -> &InputDefinition {
         &self.definition
+    }
+
+    #[must_use]
+    pub fn claim(&self) -> Option<&InputClaim> {
+        self.claim.as_ref()
     }
 }

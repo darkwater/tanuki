@@ -35,3 +35,25 @@ cargo test --test domain_paths --test domain_values --test domain_operations
 
 JSON/MessagePack runtime-value codec equivalence remains task 06 work; task 01
 defines the transport-independent value algebra only.
+
+## Task 02 — core publication and atomic batches
+
+`tests/core_publication.rs` covers:
+
+- reserved-system rejection with no state effects;
+- late deadline failure after staged state and event operations, with no
+  occurrence, state, or sequence effect;
+- one coherent update batch for paired lamp properties;
+- identical-value timestamp and expiry refresh;
+- warned output takeover with changed provenance;
+- instant occurrence delivery without retained payload;
+- warned freeform node-kind replacement; and
+- provisional repeated-target rejection;
+- selection-filtered snapshots; and
+- removal carrying the previous visible state.
+
+Run it with:
+
+```sh
+cargo test --test core_publication
+```

@@ -1,6 +1,6 @@
 # US-07 — Lamp desired state and atomic output
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** atomic output core behavior implemented; input lifecycle, transport, and real-world use not yet verified.
 - **Origin:** User use case and accepted lifetime example.
 - **Last updated:** 2026-10-05.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -32,10 +32,11 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- `tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. Subscription delivery remains task 05; input criteria remain tasks 03 and 07.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-05: Task 02 implemented the atomic hue/brightness core commit boundary; consumer delivery and actual lamp integration remain unverified.

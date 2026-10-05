@@ -10,7 +10,7 @@ does.
 | --- | --- | --- |
 | `server` | bootstrap | Own the process lifecycle and, later, runtime wiring and shutdown |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | planned | Authoritative state, sessions, atomic commits, and subscriptions |
+| `core` | task 02 outputs implemented | Authoritative state, sessions, atomic commits, and subscriptions |
 | `protocol` | planned | Versioned transport DTOs and codec conversion |
 | `transport` | planned | Axum HTTP/WebSocket extraction and response mapping |
 | `persistence` | planned | Versioned coherent snapshots and file operations |
@@ -109,3 +109,24 @@ The accepted kind-change tradeoff favors convenient freeform replacement. The
 warning makes loss of retained payloads, definitions, or claims visible without
 turning an ad hoc topic into a permanently locked type. Denying schemas retain
 the ability to enforce a stable shape where it matters.
+
+## Core mutation implemented in task 02
+
+`Core::apply` is the only state mutation boundary. It validates system and
+duplicate-target rules, clones the current in-memory map into a candidate,
+applies every operation against that candidate, and installs it only when all
+operations succeed. An error discards candidate nodes, event occurrences,
+warnings, and sequence advancement together. Successful output writes return a
+single sequence-numbered `UpdateBatch`; network delivery is not part of this
+transition.
+
+Output ownership is derived from the latest accepted provenance rather than a
+second owner field. Identical state writes still replace the retained wrapper,
+refreshing timestamp and expiry. Event nodes persist publisher metadata but
+never their occurrence payload. Input transitions join this same path in task
+03.
+
+Two implementation defaults remain visibly provisional pending later protocol
+review: one batch may target a canonical topic only once, and instant-output
+metadata remains present in snapshots. These choices avoid ambiguous ordering
+and preserve observable publisher attribution without introducing event replay.

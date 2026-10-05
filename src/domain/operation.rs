@@ -58,6 +58,22 @@ pub enum WriteOperation {
     },
 }
 
+impl WriteOperation {
+    #[must_use]
+    pub fn topic(&self) -> &TopicPath {
+        match self {
+            Self::PublishState { topic, .. }
+            | Self::PublishEvent { topic, .. }
+            | Self::DefineInput { topic, .. }
+            | Self::ClaimInput { topic, .. }
+            | Self::SubmitDesired { topic, .. }
+            | Self::SubmitCommand { topic, .. }
+            | Self::ClearDesired { topic }
+            | Self::RemoveNode { topic } => topic,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WriteBatch {
     operations: Vec<WriteOperation>,
