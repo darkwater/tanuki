@@ -6,22 +6,32 @@ that does not turn the provisional choice into an accepted requirement.
 
 ## Actually important — please answer
 
-1. **Checkpoint B subscription contract.** Should a successful initial
+1. **Checkpoint C schema installation and overlap.** May I use the recommended
+   rule that installing/replacing a direct schema is atomic and rejected when
+   current matching values violate it, without casting stored data; every
+   matching constraint must pass, and overlapping casting rules are rejected
+   to avoid order-dependent conversion?
+2. **Checkpoint C and the system namespace.** Should broad schema selectors
+   such as `/**` apply only to ordinary topics while explicit `$`-rooted schema
+   branches are rejected? The stricter alternative rejects any selector that
+   could intersect system paths, which would make `/**` unusable for an
+   ordinary catch-all.
+3. **Checkpoint B subscription contract.** Should a successful initial
    `snapshot` double as the reply to `subscribe`, followed only by `update`
    messages, with request-correlated `reply`/`error` for other operations?
    The provisional implementation will use this simpler ordering and full-node
    upserts inside atomic delta batches.
-2. **Slow-consumer contract and limits.** Is disconnect-and-resnapshot the
+4. **Slow-consumer contract and limits.** Is disconnect-and-resnapshot the
    desired policy when a connection exceeds a 1 MiB outgoing-byte budget, with
    no dropped/coalesced occurrences? Also confirm 1 MiB as the initial maximum
    individual snapshot/message size. The transport now enforces the individual
    limit and uses a 64-complete-batch core queue; total queued-byte accounting
    remains unimplemented.
-3. **Repeated same-topic operations.** Should checkpoint B freeze the current
+5. **Repeated same-topic operations.** Should checkpoint B freeze the current
    rule: one definition, one claim, and one submission slot may compose in
    operation order, while repeats in a slot and all same-topic output/removal
    combinations are rejected?
-4. **Corrupt persistence at startup.** Should Tanuki refuse to start with a
+6. **Corrupt persistence at startup.** Should Tanuki refuse to start with a
    typed/logged error when its configured snapshot is malformed or unsupported,
    rather than silently treating it as empty? My provisional implementation
    will fail startup and leave the file untouched; an explicit quarantine/
