@@ -1,11 +1,11 @@
 # Toolchain
 
-Tanuki uses `nightly-2026-07-01` with rustfmt and Clippy, pinned in
+Tanuki uses `nightly-2026-10-01` with rustfmt and Clippy, pinned in
 `rust-toolchain.toml`. The pin was verified on 2026-10-05 with:
 
 ```text
-rustc 1.98.0-nightly (f46ec5218 2026-06-30)
-cargo 1.98.0-nightly (a335d47ff 2026-06-26)
+rustc 1.101.0-nightly (21b707e3f 2026-09-30)
+cargo 1.101.0-nightly (f3865b2a4 2026-09-29)
 ```
 
 The initial dependency is Tokio 1.53.2 with only the macro, multi-threaded

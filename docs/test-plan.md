@@ -5,6 +5,16 @@ internal invariants and interactions; do not settle for snapshots of whatever
 the code currently does. Scenario identifiers below are acceptance requirements
 as their features land, subject to the explicitly open policies.
 
+## Story traceability
+
+The [user-story index](user-stories/USER-STORIES.md) connects these scenarios
+to user goals. Reference stable story criterion IDs in test names/comments or a
+small mapping in `docs/testing.md`. Add focused scenarios where the existing
+contracts do not cover a story, such as voice indicators, clipboard propagation,
+and independent desktop publishers. Document implemented versus
+manual/deferred criteria. Mock-client success does not establish verified
+real-world use, and stories must not be weakened to make tests pass.
+
 ## Test layers
 
 | Layer       | What is real                                                               | What is controlled                         | Main evidence                               |

@@ -139,3 +139,16 @@ selected.
 For task completion report behaviour delivered, tests run and their results,
 any chosen provisional defaults, and remaining limitations. Do not mark an
 entire milestone done because only its happy path works.
+
+## Living user stories
+
+Read `docs/user-stories/USER-STORIES.md` and the relevant individual stories
+before designing application behaviour or system tests. Keep them updated from
+implementation conversations and actual usage, alongside code and tests.
+Preserve stable story and criterion IDs and user intent; distinguish proposed
+workflows, tested implementation, and verified deployment. Record concrete
+clients, paths, schemas, configuration, and limitations as they become known.
+Do not rewrite an unmet acceptance criterion merely to match current code.
+Reconcile semantic changes with `docs/spec.md` and `docs/test-plan.md`. Story
+updates are part of task completion when a task affects a story; they are not a
+separate approval ceremony.
