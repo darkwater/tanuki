@@ -183,3 +183,10 @@ filesystem directories. `/` is an accepted virtual root and is not writable.
 - MessagePack replaces earlier postcard suggestions as the intended binary wire format.
 - Best-effort persistence does not imply replay or durable acknowledgements.
 - Old assistant recommendations remain recommendations until accepted; this review does not silently settle them.
+
+Task 08 provisionally implements the persistence recommendation as readable
+versioned JSON, a 30-second periodic attempt, atomic same-directory replacement,
+and a final orderly-shutdown attempt. Corrupt/unsupported configured data fails
+startup visibly. The default `tanuki.snapshot.json` path and
+`TANUKI_SNAPSHOT` override remain reviewable operational defaults rather than
+new product requirements.

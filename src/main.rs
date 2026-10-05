@@ -1,5 +1,5 @@
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let address = std::env::var("TANUKI_LISTEN").unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
     let listener = tokio::net::TcpListener::bind(&address).await?;
@@ -9,5 +9,6 @@ async fn main() -> std::io::Result<()> {
             tracing::error!(%error, "failed to listen for Ctrl-C");
         }
     })
-    .await
+    .await?;
+    Ok(())
 }

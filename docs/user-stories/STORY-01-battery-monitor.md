@@ -38,6 +38,7 @@ Percentage representation, charging state, publication intervals, freshness thre
 - `tests/core_subscriptions.rs::snapshot_then_newer_update_has_no_registration_gap` verifies the core snapshot-plus-live-update portion of US-01.A1.
 - `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies laptop WebSocket plus phone HTTP publication reaching a live dashboard. `same_name_http_is_stateless_but_duplicate_websocket_replaces_session` covers US-01.A2 and managed replacement on real loopback sockets.
 - `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` verifies US-01.A4 with controlled wall/monotonic time and an observed removal batch. Refresh/stale-timer guards are covered by `tests/core_expiry.rs` and `tests/scheduler.rs`.
+- `tests/persistence_server.rs` verifies a retained battery value survives an orderly save and production restart path; actual deployment persistence remains unverified.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -49,3 +50,4 @@ Percentage representation, charging state, publication intervals, freshness thre
 - 2026-10-06: Task 05 added coherent selected core snapshots and newer update delivery; no WebSocket or actual widget has been verified yet.
 - 2026-10-06: Task 06 added real loopback JSON/MessagePack WebSockets and simulated laptop/phone-to-dashboard delivery. No deployed widget or device has been verified.
 - 2026-10-06: Task 07 added deterministic retained-value expiry and live removal delivery; expiry durations for actual devices remain unconfigured.
+- 2026-10-06: Task 08 added best-effort retained-state restart coverage.

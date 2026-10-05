@@ -21,6 +21,11 @@ that does not turn the provisional choice into an accepted requirement.
    rule: one definition, one claim, and one submission slot may compose in
    operation order, while repeats in a slot and all same-topic output/removal
    combinations are rejected?
+4. **Corrupt persistence at startup.** Should Tanuki refuse to start with a
+   typed/logged error when its configured snapshot is malformed or unsupported,
+   rather than silently treating it as empty? My provisional implementation
+   will fail startup and leave the file untouched; an explicit quarantine/
+   recovery command can be added if actual operations need it.
 
 ## Consequential, but the likely answer seems clear
 
@@ -41,6 +46,10 @@ that does not turn the provisional choice into an accepted requirement.
    MessagePack binary and require that codec for the rest of the connection.
    This avoids per-message ambiguity and currently returns `codec_changed` for
    a later frame of the other kind.
+6. **Instant-output metadata across restart.** Preserve event-node publisher
+   metadata but never occurrences; preserve command definitions but never
+   command payloads. This keeps the existing snapshot model without inventing
+   replay.
 
 ## Provisional defaults probably worth a quick skim
 
@@ -56,6 +65,10 @@ that does not turn the provisional choice into an accepted requirement.
 6. WebSocket subscriptions buffer 64 complete update batches. A second managed
    connection with the same name closes the old socket with private-use code
    4001; slow consumers use retry-later code 1013.
+7. Persistence will use one readable versioned JSON snapshot, atomic temporary
+   file replacement, a 30-second periodic attempt, and a final orderly-shutdown
+   attempt. The default path is `tanuki.snapshot.json`; `TANUKI_SNAPSHOT`
+   overrides it.
 
 ## Resolved or accepted elsewhere
 

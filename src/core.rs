@@ -31,6 +31,17 @@ impl Core {
         Self::default()
     }
 
+    pub(crate) fn from_restored(
+        sequence: CommitSequence,
+        nodes: BTreeMap<TopicPath, Node>,
+    ) -> Self {
+        Self {
+            sequence,
+            nodes,
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub fn read(&self, selection: &Selection) -> Snapshot {
         Snapshot {
@@ -366,6 +377,10 @@ impl Core {
 pub struct CommitSequence(u64);
 
 impl CommitSequence {
+    pub(crate) const fn from_persisted(value: u64) -> Self {
+        Self(value)
+    }
+
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0

@@ -1,6 +1,6 @@
 # US-08 — Pending intent before a controller starts
 
-- **Status:** pending-intent lifecycle, transport delivery, and expiry implemented; persistence and real-world use not yet verified.
+- **Status:** pending-intent lifecycle, delivery, expiry, and restart persistence implemented; real-world use not yet verified.
 - **Origin:** Illustrative assistant example, lifetime behaviour accepted.
 - **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -35,6 +35,7 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 - `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Network subscription delivery is covered by the task-06 simulated room; restart remains task 08.
 - `tests/http_api.rs::batch_endpoint_composes_unclaimed_input_definition_and_submission` verifies US-08.A1 through the stateless HTTP batch adapter.
 - `tests/core_expiry.rs::equal_deadlines_remove_state_and_clear_only_desired_payload_in_one_commit` verifies US-08.A3's missing-payload state while preserving the definition.
+- `tests/persistence.rs::coherent_save_restore_filters_expired_values_and_clears_live_authority` verifies US-08.A4, and `tests/persistence_server.rs` exercises the production restore path.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -43,3 +44,4 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-05: Task 03 implemented stateless pending-intent creation and later claim without value loss; delivery, expiry, and persistence remain unverified.
 - 2026-10-06: Tasks 06–07 added live delivery and deterministic desired-payload expiry. Persistence remains pending.
+- 2026-10-06: Task 08 added versioned best-effort snapshot restore with retained definitions/values and cleared session authority.

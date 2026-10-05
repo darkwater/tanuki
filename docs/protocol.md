@@ -138,3 +138,12 @@ the open byte-budget decision is tracked in `open-questions.md`.
 MessagePack uses native primitives and binary values. Tanuki extension tag 1
 contains a UTF-8 RFC 3339 timestamp and tag 2 contains a UTF-8 ISO-8601 fixed
 duration. These tag numbers remain provisional pending checkpoint B.
+
+## Persistence format 1
+
+The local snapshot is readable JSON with `format: "tanuki-snapshot"` and
+`version: 1`. It is an internal restart format, not a client transport or an
+acknowledgement log. It contains one coherent commit sequence and retained
+node/definition metadata, but no live sessions, claims, event occurrences, or
+command occurrences. Future incompatible formats must use a new version;
+unknown versions fail startup visibly.

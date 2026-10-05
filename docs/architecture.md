@@ -8,14 +8,14 @@ does.
 
 | Module | Status | Responsibility |
 | --- | --- | --- |
-| `server` | tasks 04–07 implemented | Own process lifecycle, listener wiring, and graceful shutdown |
+| `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–07 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, and deadlines |
 | `protocol` | tasks 04–06 provisional | JSON/MessagePack values and typed snapshot/update/error DTOs pending checkpoint-B approval |
 | `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
-| `persistence` | planned | Versioned coherent snapshots and file operations |
+| `persistence` | task 08 implemented | Versioned coherent snapshots, restore filtering, and atomic file replacement |
 | `schema` | planned | Ordinary-topic validation and freshness policy |
 | `links` | planned | Linked path resolution, visibility, and recovery |
 | `diagnostics` | planned | Structured warnings/errors and logging integration |
@@ -221,3 +221,24 @@ The transport starts one scheduler alongside its shared core. Its clock is the
 same injected wall-clock seam used for writes; Tokio's monotonic timer is only
 used for waiting. Omitted wire expiry provisionally maps to `Preserve`: it
 keeps an existing absolute deadline and yields no deadline on a new value.
+
+## Best-effort persistence implemented in task 08
+
+`SnapshotStore` captures one coherent selected clone while holding the core
+lock, then performs JSON encoding, file writes, fsync, and rename outside that
+lock on a blocking worker. The version-1 file records its format marker,
+sequence, save time, ordinary node data, absolute expiries, and provenance.
+It never stores live sessions or input claims. Event publisher metadata and
+command definitions persist, but occurrence payloads never do.
+
+Restore validates the marker/version and invariant-bearing paths/names through
+their deserializers. Expired state is omitted; an expired desired payload
+restores as its definition without a current value. Provenance retains client
+and timestamp but loses session identity. The persisted commit sequence is
+continued so a post-restart mutation remains newer than restored snapshots.
+
+The production server loads before serving, attempts a snapshot every 30
+seconds, logs periodic failures while keeping the live core available, and
+attempts a final save after graceful network shutdown. Malformed/unsupported
+configured snapshots fail startup visibly and remain untouched. The default
+path is `tanuki.snapshot.json`, overridden by `TANUKI_SNAPSHOT`.

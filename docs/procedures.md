@@ -12,9 +12,9 @@ There is no restore step or persistence background work yet. Later startup
 will restore before accepting requests; later shutdown will request a
 best-effort save after stopping new work.
 
-Restore and link-recovery procedures remain pending their corresponding
-implementation cards. The router starts one deadline scheduler for its shared
-core.
+Link-recovery remains pending its implementation card. The production server
+restores its configured snapshot before serving and starts one deadline
+scheduler for the restored shared core.
 
 ## Output mutation and atomic commit
 
@@ -109,3 +109,23 @@ An omitted expiry maps provisionally to `Preserve`. On an existing retained
 value it retains the old absolute deadline rather than renewing it; on a new
 value it creates no deadline. `clear` explicitly removes a deadline and `set`
 computes a new absolute deadline from server wall time.
+
+## Save, restore, and shutdown
+
+Production startup reads `TANUKI_SNAPSHOT` or `tanuki.snapshot.json`. A missing
+file means first startup. Malformed data, invalid domain values, or an unknown
+format/version returns a typed startup error; Tanuki does not rename or pretend
+the file was empty. Restore drops expired retained values, all sessions and all
+claims before the router becomes available.
+
+Every 30 seconds the server clones one coherent snapshot under the core lock.
+Serialization and disk I/O happen afterward on a blocking worker. The writer
+creates a unique temporary file beside the target, writes and syncs it, renames
+it atomically over the target, then syncs the parent directory. Failure removes
+the temporary file where possible, logs the error, and leaves live authority
+unchanged. Acknowledgements never wait for or promise this periodic save.
+
+On orderly shutdown, new serving stops and in-flight requests drain. The
+periodic worker exits, then a final snapshot is attempted. A final failure is
+returned to the process rather than hidden. Crash recovery may lose writes
+since the last completed replacement; there is no WAL or replay.

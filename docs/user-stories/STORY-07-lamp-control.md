@@ -36,6 +36,7 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 - `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies US-07.A1, and `disconnect_immediately_releases_claim_but_preserves_desired_value` verifies the immediate-release portion of US-07.A5.
 - `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a remote submission reaches the controller and its paired hue/brightness update reaches the dashboard as one WebSocket batch. `disconnect_immediately_releases_an_owned_input_claim` covers socket disconnect cleanup.
 - `tests/core_expiry.rs` and `tests/scheduler.rs` verify US-07.A3–A5, including stale deadline/claim guards. `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` observes submission during disconnect grace and later claim release while retaining the desired value.
+- `tests/persistence.rs::coherent_save_restore_filters_expired_values_and_clears_live_authority` verifies desired definition/value restoration with the old claim cleared.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -46,3 +47,4 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 - 2026-10-05: Task 03 implemented distinct claim and submitter identity, claim-preserving submissions, and immediate claim release. Timer-driven criteria remain pending.
 - 2026-10-06: Task 06 verified the desired-input and atomic actual-output chain with simulated actors over real loopback transports.
 - 2026-10-06: Task 07 implemented and simulated desired-value expiry and guarded disconnect grace. Physical lamp behaviour remains outside Tanuki and unverified.
+- 2026-10-06: Task 08 added restart persistence for desired definitions and unexpired values, with claims deliberately cleared.

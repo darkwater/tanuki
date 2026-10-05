@@ -162,3 +162,18 @@ Run the focused suite with:
 ```sh
 cargo test --test core_expiry --test scheduler --test http_api --test websocket_api
 ```
+
+## Task 08 — best-effort persistence and restart
+
+`tests/persistence.rs` verifies coherent versioned capture, absolute-expiry
+filtering, retained desired definitions/values, absent restored claims and
+sessions, instant metadata without payload replay, sequence continuation,
+missing/corrupt/version handling, and a failed atomic replacement that leaves
+its target intact. `tests/persistence_server.rs` verifies orderly save and
+restart over real HTTP plus a production-binary startup smoke test.
+
+Run the focused suite with:
+
+```sh
+cargo test --test persistence --test persistence_server
+```
