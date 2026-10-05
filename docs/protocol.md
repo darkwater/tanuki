@@ -69,3 +69,7 @@ Integers outside JavaScript's exact range encode with `$int`; unsigned values
 outside signed 64-bit range are rejected. A literal map containing any reserved
 tag key must use `$map`. Encoding is recursive and lossless for the accepted
 initial value profile.
+
+A desired node uses an explicit `current` wrapper. `"current":null` means no
+payload exists; `"current":{"value":null,...}` means `Value::Null` was
+actually submitted. This distinction is preserved in snapshots and updates.

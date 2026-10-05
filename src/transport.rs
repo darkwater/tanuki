@@ -461,9 +461,7 @@ fn node_json(node: &Node) -> RawJson {
         }
         Node::Desired(node) => json!({
             "kind": "desired",
-            "value": node.current().map(|current| encode(current.value())),
-            "last_write": node.current().map(|current| provenance_json(current.last_write())),
-            "expires_at": node.current().and_then(RetainedValue::expires_at).map(|deadline| deadline.get().get().to_string()),
+            "current": node.current().map(current_json),
             "claim": node.claim().map(|claim| json!({"owner": claim.owner(), "session": claim.session().get(), "id": claim.id().get()}))
         }),
         Node::Command(node) => json!({
@@ -476,6 +474,14 @@ fn node_json(node: &Node) -> RawJson {
 fn retained_node_json(kind: &str, retained: &RetainedValue) -> RawJson {
     json!({
         "kind": kind,
+        "value": encode(retained.value()),
+        "last_write": provenance_json(retained.last_write()),
+        "expires_at": retained.expires_at().map(|deadline| deadline.get().get().to_string())
+    })
+}
+
+fn current_json(retained: &RetainedValue) -> RawJson {
+    json!({
         "value": encode(retained.value()),
         "last_write": provenance_json(retained.last_write()),
         "expires_at": retained.expires_at().map(|deadline| deadline.get().get().to_string())

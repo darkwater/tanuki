@@ -156,8 +156,48 @@ async fn batch_endpoint_composes_unclaimed_input_definition_and_submission() {
         .unwrap();
     let body = response_json(response).await;
     assert_eq!(body["data"]["nodes"]["/heating/desired"]["kind"], "desired");
-    assert_eq!(body["data"]["nodes"]["/heating/desired"]["value"], 21);
+    assert_eq!(
+        body["data"]["nodes"]["/heating/desired"]["current"]["value"],
+        21
+    );
     assert!(body["data"]["nodes"]["/heating/desired"]["claim"].is_null());
+}
+
+#[tokio::test]
+async fn snapshot_distinguishes_missing_desired_payload_from_submitted_null() {
+    let (app, _) = test_app();
+    let mut request = json_request(
+        "POST",
+        "/v1/write",
+        json!({
+            "operations": [
+                {"op": "define_input", "topic": "/request/missing", "kind": "desired"},
+                {"op": "define_input", "topic": "/request/null", "kind": "desired"},
+                {"op": "submit_desired", "topic": "/request/null", "value": null, "expiry": {"mode": "clear"}}
+            ]
+        }),
+    );
+    request
+        .headers_mut()
+        .insert("tanuki-client", "test".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/snapshot?select=/request/*")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = response_json(response).await;
+    assert!(body["data"]["nodes"]["/request/missing"]["current"].is_null());
+    assert!(body["data"]["nodes"]["/request/null"]["current"].is_object());
+    assert!(body["data"]["nodes"]["/request/null"]["current"]["value"].is_null());
 }
 
 #[tokio::test]
