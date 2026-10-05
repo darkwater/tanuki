@@ -1,6 +1,6 @@
 # US-07 — Lamp desired state and atomic output
 
-- **Status:** atomic output core behavior implemented; input lifecycle, transport, and real-world use not yet verified.
+- **Status:** atomic output and core input ownership implemented; timers, transport, and real-world use not yet verified.
 - **Origin:** User use case and accepted lifetime example.
 - **Last updated:** 2026-10-05.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -32,7 +32,8 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
-- `tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. Subscription delivery remains task 05; input criteria remain tasks 03 and 07.
+- `tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. Subscription delivery remains task 05.
+- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies US-07.A1, and `disconnect_immediately_releases_claim_but_preserves_desired_value` verifies the immediate-release portion of US-07.A5. Grace and value-expiry execution remain task 07.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -40,3 +41,4 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-05: Task 02 implemented the atomic hue/brightness core commit boundary; consumer delivery and actual lamp integration remain unverified.
+- 2026-10-05: Task 03 implemented distinct claim and submitter identity, claim-preserving submissions, and immediate claim release. Timer-driven criteria remain pending.

@@ -115,9 +115,11 @@ MessagePack should use native primitives and binary data, with an explicit seman
 
 A disconnect after commit but before acknowledgement leaves the caller uncertain. No deduplication/replay subsystem is proposed: retrying a command can execute it twice. Document this rather than imply exactly-once delivery.
 
-Task 02 uses rejection of duplicate canonical targets as a provisional
-implementation default. It is tested and documented but remains open for user
-review before the wire batch contract is frozen.
+Task 03 refines the provisional default so one definition, one claim, and one
+submission step may compose on the same input topic in operation order. A
+repeat in the same lifecycle slot, or any same-topic output/removal combination,
+is rejected. This is tested and documented but remains open for user review
+before the wire batch contract is frozen.
 
 ## D7 — Paths and glob grammar
 

@@ -57,3 +57,27 @@ Run it with:
 ```sh
 cargo test --test core_publication
 ```
+
+## Task 03 — managed sessions and inputs
+
+`tests/core_sessions_inputs.rs` covers the C1 identity boundary and the first
+part of L1:
+
+- stateless define-and-submit creates pending desired intent without a session;
+- claiming preserves a desired value, and later submission preserves its claim;
+- duplicate managed names invalidate old handles and stale cleanup is harmless;
+- matching stateless names cannot claim, displace, or impersonate sessions;
+- live claim replacement succeeds with a warning;
+- commands work without owners and never retain their payload;
+- immediate disconnect releases only the claim;
+- grace disconnect returns claim-ID-guarded timer work; and
+- claimed-definition denial rolls back unrelated staged changes.
+
+Run it with:
+
+```sh
+cargo test --test core_sessions_inputs
+```
+
+Executing grace timers, desired-value expiry, and stale timer guards remains
+task 07 work.

@@ -3,15 +3,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use crate::domain::{
-    ClientName, Deadline, EventNode, EventOccurrence, ExpiryUpdate, Node, NodeKind, RetainedValue,
-    Selection, StateNode, Timestamp, TopicPath, WriteBatch, WriteContext, WriteOperation,
-    WriteProvenance,
+    ClaimId, ClaimRelease, ClientName, CommandNode, CommandOccurrence, Deadline, DesiredNode,
+    EventNode, EventOccurrence, ExpiryUpdate, InputClaim, InputKind, Node, NodeKind, RetainedValue,
+    Selection, SessionHandle, SessionId, StateNode, Timestamp, TopicPath, WriteBatch, WriteContext,
+    WriteOperation, WriteProvenance,
 };
 
 #[derive(Debug, Default)]
 pub struct Core {
     sequence: CommitSequence,
     nodes: BTreeMap<TopicPath, Node>,
+    sessions: BTreeMap<ClientName, SessionId>,
+    next_session_id: u64,
+    next_claim_id: u64,
 }
 
 impl Core {
@@ -39,6 +43,7 @@ impl Core {
         batch: WriteBatch,
         now: Timestamp,
     ) -> Result<CommitOutcome, CoreError> {
+        self.validate_actor(actor)?;
         validate_targets(&batch)?;
 
         let next_sequence = self
@@ -48,6 +53,7 @@ impl Core {
             .map(CommitSequence)
             .ok_or(CoreError::SequenceExhausted)?;
         let mut candidate = self.nodes.clone();
+        let mut next_claim_id = self.next_claim_id;
         let mut changes = Vec::new();
         let mut warnings = Vec::new();
 
@@ -59,11 +65,13 @@ impl Core {
                 actor,
                 operation,
                 now,
+                &mut next_claim_id,
             )?;
         }
 
         debug_assert!(candidate.keys().all(|topic| !topic.is_system()));
         self.nodes = candidate;
+        self.next_claim_id = next_claim_id;
         self.sequence = next_sequence;
         Ok(CommitOutcome {
             update: UpdateBatch {
@@ -72,6 +80,126 @@ impl Core {
             },
             warnings,
         })
+    }
+
+    pub fn open_session(
+        &mut self,
+        client: ClientName,
+        now: Timestamp,
+    ) -> Result<OpenSessionOutcome, CoreError> {
+        let raw_id = self
+            .next_session_id
+            .checked_add(1)
+            .ok_or(CoreError::SessionIdExhausted)?;
+        let id = SessionId::new(raw_id);
+        let previous = self.sessions.get(&client).copied();
+        let mut candidate = self.nodes.clone();
+        let mut warnings = Vec::new();
+        let mut pending_releases = Vec::new();
+        let mut changes = Vec::new();
+
+        if let Some(previous) = previous {
+            warnings.push(Diagnostic::SessionReplaced {
+                client: client.clone(),
+                previous,
+                replacement: id,
+            });
+            collect_session_releases(
+                &mut candidate,
+                previous,
+                now,
+                &mut changes,
+                &mut warnings,
+                &mut pending_releases,
+            );
+        }
+
+        let update = self.install_node_changes(candidate, changes)?;
+        self.sessions.insert(client.clone(), id);
+        self.next_session_id = raw_id;
+        Ok(OpenSessionOutcome {
+            handle: SessionHandle::new(id, client),
+            warnings,
+            update,
+            pending_releases,
+        })
+    }
+
+    pub fn disconnect(
+        &mut self,
+        handle: &SessionHandle,
+        now: Timestamp,
+    ) -> Result<DisconnectOutcome, CoreError> {
+        if self.sessions.get(handle.client()) != Some(&handle.id()) {
+            return Ok(DisconnectOutcome {
+                was_current: false,
+                warnings: Vec::new(),
+                update: None,
+                pending_releases: Vec::new(),
+            });
+        }
+
+        let mut candidate = self.nodes.clone();
+        let mut warnings = Vec::new();
+        let mut pending_releases = Vec::new();
+        let mut changes = Vec::new();
+        collect_session_releases(
+            &mut candidate,
+            handle.id(),
+            now,
+            &mut changes,
+            &mut warnings,
+            &mut pending_releases,
+        );
+        let update = self.install_node_changes(candidate, changes)?;
+        self.sessions.remove(handle.client());
+
+        Ok(DisconnectOutcome {
+            was_current: true,
+            warnings,
+            update,
+            pending_releases,
+        })
+    }
+
+    #[must_use]
+    pub fn managed_session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    fn validate_actor(&self, actor: &WriteContext) -> Result<(), CoreError> {
+        let WriteContext::Managed(handle) = actor else {
+            return Ok(());
+        };
+        if self.sessions.get(handle.client()) == Some(&handle.id()) {
+            Ok(())
+        } else {
+            Err(CoreError::SessionExpired {
+                session: handle.id(),
+            })
+        }
+    }
+
+    fn install_node_changes(
+        &mut self,
+        candidate: BTreeMap<TopicPath, Node>,
+        changes: Vec<Change>,
+    ) -> Result<Option<UpdateBatch>, CoreError> {
+        if changes.is_empty() {
+            return Ok(None);
+        }
+        let next = self
+            .sequence
+            .0
+            .checked_add(1)
+            .map(CommitSequence)
+            .ok_or(CoreError::SequenceExhausted)?;
+        self.nodes = candidate;
+        self.sequence = next;
+        Ok(Some(UpdateBatch {
+            sequence: next,
+            changes,
+        }))
     }
 }
 
@@ -154,6 +282,10 @@ pub enum Change {
         topic: TopicPath,
         event: EventOccurrence,
     },
+    Command {
+        topic: TopicPath,
+        command: CommandOccurrence,
+    },
     Removed {
         topic: TopicPath,
         previous: Node,
@@ -175,6 +307,103 @@ pub enum Diagnostic {
     NodeAlreadyAbsent {
         topic: TopicPath,
     },
+    SessionReplaced {
+        client: ClientName,
+        previous: SessionId,
+        replacement: SessionId,
+    },
+    InputClaimReplaced {
+        topic: TopicPath,
+        previous: ClientName,
+        replacement: ClientName,
+    },
+    ClaimGraceOutOfRange {
+        topic: TopicPath,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenSessionOutcome {
+    handle: SessionHandle,
+    warnings: Vec<Diagnostic>,
+    update: Option<UpdateBatch>,
+    pending_releases: Vec<PendingClaimRelease>,
+}
+
+impl OpenSessionOutcome {
+    #[must_use]
+    pub fn handle(&self) -> &SessionHandle {
+        &self.handle
+    }
+
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.warnings
+    }
+
+    #[must_use]
+    pub fn update(&self) -> Option<&UpdateBatch> {
+        self.update.as_ref()
+    }
+
+    #[must_use]
+    pub fn pending_releases(&self) -> &[PendingClaimRelease] {
+        &self.pending_releases
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisconnectOutcome {
+    was_current: bool,
+    warnings: Vec<Diagnostic>,
+    update: Option<UpdateBatch>,
+    pending_releases: Vec<PendingClaimRelease>,
+}
+
+impl DisconnectOutcome {
+    #[must_use]
+    pub const fn was_current(&self) -> bool {
+        self.was_current
+    }
+
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.warnings
+    }
+
+    #[must_use]
+    pub fn update(&self) -> Option<&UpdateBatch> {
+        self.update.as_ref()
+    }
+
+    #[must_use]
+    pub fn pending_releases(&self) -> &[PendingClaimRelease] {
+        &self.pending_releases
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingClaimRelease {
+    topic: TopicPath,
+    claim: ClaimId,
+    deadline: Deadline,
+}
+
+impl PendingClaimRelease {
+    #[must_use]
+    pub fn topic(&self) -> &TopicPath {
+        &self.topic
+    }
+
+    #[must_use]
+    pub const fn claim(&self) -> ClaimId {
+        self.claim
+    }
+
+    #[must_use]
+    pub const fn deadline(&self) -> Deadline {
+        self.deadline
+    }
 }
 
 #[derive(Debug, Error)]
@@ -193,10 +422,30 @@ pub enum CoreError {
     },
     #[error("the in-memory commit sequence is exhausted")]
     SequenceExhausted,
+    #[error("managed session identifiers are exhausted")]
+    SessionIdExhausted,
+    #[error("input claim identifiers are exhausted")]
+    ClaimIdExhausted,
+    #[error("managed session {session:?} is no longer current")]
+    SessionExpired { session: SessionId },
+    #[error("operation `{operation}` requires a managed session")]
+    SessionRequired { operation: &'static str },
+    #[error("input `{topic}` is not defined")]
+    InputNotDefined { topic: TopicPath },
+    #[error("node `{topic}` has non-input kind {actual:?}")]
+    NotAnInput { topic: TopicPath, actual: NodeKind },
+    #[error("input `{topic}` has kind {actual:?}, expected {expected:?}")]
+    WrongInputKind {
+        topic: TopicPath,
+        expected: InputKind,
+        actual: NodeKind,
+    },
+    #[error("input definition `{topic}` is controlled by another claim")]
+    ClaimAuthorityRequired { topic: TopicPath },
 }
 
 fn validate_targets(batch: &WriteBatch) -> Result<(), CoreError> {
-    let mut targets = BTreeSet::new();
+    let mut targets: BTreeMap<TopicPath, BTreeSet<OperationSlot>> = BTreeMap::new();
     for operation in batch.operations() {
         let topic = operation.topic();
         if topic.is_system() {
@@ -204,13 +453,42 @@ fn validate_targets(batch: &WriteBatch) -> Result<(), CoreError> {
                 topic: topic.clone(),
             });
         }
-        if !targets.insert(topic.clone()) {
+        let slot = OperationSlot::of(operation);
+        let slots = targets.entry(topic.clone()).or_default();
+        let conflicts = slots.contains(&slot)
+            || (slot == OperationSlot::Exclusive && !slots.is_empty())
+            || slots.contains(&OperationSlot::Exclusive);
+        if conflicts {
             return Err(CoreError::DuplicateTarget {
                 topic: topic.clone(),
             });
         }
+        slots.insert(slot);
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum OperationSlot {
+    Define,
+    Claim,
+    Submit,
+    Exclusive,
+}
+
+impl OperationSlot {
+    fn of(operation: &WriteOperation) -> Self {
+        match operation {
+            WriteOperation::DefineInput { .. } => Self::Define,
+            WriteOperation::ClaimInput { .. } => Self::Claim,
+            WriteOperation::SubmitDesired { .. }
+            | WriteOperation::SubmitCommand { .. }
+            | WriteOperation::ClearDesired { .. } => Self::Submit,
+            WriteOperation::PublishState { .. }
+            | WriteOperation::PublishEvent { .. }
+            | WriteOperation::RemoveNode { .. } => Self::Exclusive,
+        }
+    }
 }
 
 fn apply_operation(
@@ -220,6 +498,7 @@ fn apply_operation(
     actor: &WriteContext,
     operation: &WriteOperation,
     now: Timestamp,
+    next_claim_id: &mut u64,
 ) -> Result<(), CoreError> {
     match operation {
         WriteOperation::PublishState {
@@ -280,29 +559,176 @@ fn apply_operation(
                 });
             }
         }
-        WriteOperation::DefineInput { .. } => {
-            return Err(CoreError::UnsupportedOperation {
-                operation: "define_input",
+        WriteOperation::DefineInput {
+            topic,
+            kind,
+            definition,
+        } => {
+            let previous = candidate.get(topic);
+            if let Some(claim) = input_claim(previous)
+                && actor.session_id() != Some(claim.session())
+            {
+                return Err(CoreError::ClaimAuthorityRequired {
+                    topic: topic.clone(),
+                });
+            }
+            warn_on_kind_change(previous, topic, node_kind(*kind), warnings);
+            let node = match (kind, previous) {
+                (InputKind::Desired, Some(Node::Desired(previous))) => {
+                    Node::Desired(DesiredNode::from_parts(
+                        definition.clone(),
+                        previous.claim().cloned(),
+                        previous.current().cloned(),
+                    ))
+                }
+                (InputKind::Command, Some(Node::Command(previous))) => Node::Command(
+                    CommandNode::from_parts(definition.clone(), previous.claim().cloned()),
+                ),
+                (InputKind::Desired, _) => Node::Desired(DesiredNode::new(definition.clone())),
+                (InputKind::Command, _) => Node::Command(CommandNode::new(definition.clone())),
+            };
+            candidate.insert(topic.clone(), node.clone());
+            changes.push(Change::Upsert {
+                topic: topic.clone(),
+                node,
             });
         }
-        WriteOperation::ClaimInput { .. } => {
-            return Err(CoreError::UnsupportedOperation {
-                operation: "claim_input",
+        WriteOperation::ClaimInput { topic, release } => {
+            let WriteContext::Managed(handle) = actor else {
+                return Err(CoreError::SessionRequired {
+                    operation: "claim_input",
+                });
+            };
+            let existing =
+                candidate
+                    .get(topic)
+                    .cloned()
+                    .ok_or_else(|| CoreError::InputNotDefined {
+                        topic: topic.clone(),
+                    })?;
+            if let Some(previous) = input_claim(Some(&existing))
+                && previous.session() != handle.id()
+            {
+                warnings.push(Diagnostic::InputClaimReplaced {
+                    topic: topic.clone(),
+                    previous: previous.owner().clone(),
+                    replacement: handle.client().clone(),
+                });
+            }
+            let raw_claim = next_claim_id
+                .checked_add(1)
+                .ok_or(CoreError::ClaimIdExhausted)?;
+            *next_claim_id = raw_claim;
+            let claim = InputClaim::new(
+                ClaimId::new(raw_claim),
+                handle.client().clone(),
+                handle.id(),
+                *release,
+            );
+            let node = match existing {
+                Node::Desired(previous) => Node::Desired(DesiredNode::from_parts(
+                    previous.definition().clone(),
+                    Some(claim),
+                    previous.current().cloned(),
+                )),
+                Node::Command(previous) => Node::Command(CommandNode::from_parts(
+                    previous.definition().clone(),
+                    Some(claim),
+                )),
+                other => {
+                    return Err(CoreError::NotAnInput {
+                        topic: topic.clone(),
+                        actual: other.kind(),
+                    });
+                }
+            };
+            candidate.insert(topic.clone(), node.clone());
+            changes.push(Change::Upsert {
+                topic: topic.clone(),
+                node,
             });
         }
-        WriteOperation::SubmitDesired { .. } => {
-            return Err(CoreError::UnsupportedOperation {
-                operation: "submit_desired",
+        WriteOperation::SubmitDesired {
+            topic,
+            value,
+            expiry,
+        } => {
+            let previous =
+                candidate
+                    .get(topic)
+                    .cloned()
+                    .ok_or_else(|| CoreError::InputNotDefined {
+                        topic: topic.clone(),
+                    })?;
+            let Node::Desired(previous) = previous else {
+                return Err(CoreError::WrongInputKind {
+                    topic: topic.clone(),
+                    expected: InputKind::Desired,
+                    actual: previous.kind(),
+                });
+            };
+            let expires_at = resolve_expiry(candidate.get(topic), topic, *expiry, now)?;
+            let current = RetainedValue::new(
+                value.clone(),
+                WriteProvenance::from_context(actor, now),
+                expires_at,
+            );
+            let node = Node::Desired(DesiredNode::from_parts(
+                previous.definition().clone(),
+                previous.claim().cloned(),
+                Some(current),
+            ));
+            candidate.insert(topic.clone(), node.clone());
+            changes.push(Change::Upsert {
+                topic: topic.clone(),
+                node,
             });
         }
-        WriteOperation::SubmitCommand { .. } => {
-            return Err(CoreError::UnsupportedOperation {
-                operation: "submit_command",
+        WriteOperation::SubmitCommand { topic, value } => {
+            let previous = candidate
+                .get(topic)
+                .ok_or_else(|| CoreError::InputNotDefined {
+                    topic: topic.clone(),
+                })?;
+            if !matches!(previous, Node::Command(_)) {
+                return Err(CoreError::WrongInputKind {
+                    topic: topic.clone(),
+                    expected: InputKind::Command,
+                    actual: previous.kind(),
+                });
+            }
+            changes.push(Change::Command {
+                topic: topic.clone(),
+                command: CommandOccurrence::new(
+                    value.clone(),
+                    WriteProvenance::from_context(actor, now),
+                ),
             });
         }
-        WriteOperation::ClearDesired { .. } => {
-            return Err(CoreError::UnsupportedOperation {
-                operation: "clear_desired",
+        WriteOperation::ClearDesired { topic } => {
+            let previous =
+                candidate
+                    .get(topic)
+                    .cloned()
+                    .ok_or_else(|| CoreError::InputNotDefined {
+                        topic: topic.clone(),
+                    })?;
+            let Node::Desired(previous) = previous else {
+                return Err(CoreError::WrongInputKind {
+                    topic: topic.clone(),
+                    expected: InputKind::Desired,
+                    actual: previous.kind(),
+                });
+            };
+            let node = Node::Desired(DesiredNode::from_parts(
+                previous.definition().clone(),
+                previous.claim().cloned(),
+                None,
+            ));
+            candidate.insert(topic.clone(), node.clone());
+            changes.push(Change::Upsert {
+                topic: topic.clone(),
+                node,
             });
         }
     }
@@ -342,6 +768,36 @@ fn warn_on_output_replacement(
     }
 }
 
+fn warn_on_kind_change(
+    previous: Option<&Node>,
+    topic: &TopicPath,
+    replacement: NodeKind,
+    warnings: &mut Vec<Diagnostic>,
+) {
+    if let Some(previous) = previous.filter(|previous| previous.kind() != replacement) {
+        warnings.push(Diagnostic::NodeKindChanged {
+            topic: topic.clone(),
+            previous: previous.kind(),
+            replacement,
+        });
+    }
+}
+
+const fn node_kind(kind: InputKind) -> NodeKind {
+    match kind {
+        InputKind::Desired => NodeKind::Desired,
+        InputKind::Command => NodeKind::Command,
+    }
+}
+
+fn input_claim(node: Option<&Node>) -> Option<&InputClaim> {
+    match node {
+        Some(Node::Desired(node)) => node.claim(),
+        Some(Node::Command(node)) => node.claim(),
+        Some(Node::State(_) | Node::Event(_)) | None => None,
+    }
+}
+
 fn resolve_expiry(
     previous: Option<&Node>,
     topic: &TopicPath,
@@ -351,6 +807,7 @@ fn resolve_expiry(
     match update {
         ExpiryUpdate::Preserve => Ok(match previous {
             Some(Node::State(state)) => state.current().expires_at(),
+            Some(Node::Desired(desired)) => desired.current().and_then(RetainedValue::expires_at),
             _ => None,
         }),
         ExpiryUpdate::Clear => Ok(None),
@@ -364,5 +821,64 @@ fn resolve_expiry(
                 topic: topic.clone(),
                 source,
             }),
+    }
+}
+
+fn collect_session_releases(
+    nodes: &mut BTreeMap<TopicPath, Node>,
+    session: SessionId,
+    now: Timestamp,
+    changes: &mut Vec<Change>,
+    warnings: &mut Vec<Diagnostic>,
+    pending: &mut Vec<PendingClaimRelease>,
+) {
+    for (topic, node) in nodes.iter_mut() {
+        let Some(claim) = input_claim(Some(node)).filter(|claim| claim.session() == session) else {
+            continue;
+        };
+        let claim_id = claim.id();
+        let release = claim.release();
+        match release {
+            ClaimRelease::Immediate => {
+                clear_claim(node);
+                changes.push(Change::Upsert {
+                    topic: topic.clone(),
+                    node: node.clone(),
+                });
+            }
+            ClaimRelease::After(duration) => match now.get().checked_add(duration.get()) {
+                Ok(deadline) => pending.push(PendingClaimRelease {
+                    topic: topic.clone(),
+                    claim: claim_id,
+                    deadline: Deadline::new(Timestamp::new(deadline)),
+                }),
+                Err(_) => {
+                    warnings.push(Diagnostic::ClaimGraceOutOfRange {
+                        topic: topic.clone(),
+                    });
+                    clear_claim(node);
+                    changes.push(Change::Upsert {
+                        topic: topic.clone(),
+                        node: node.clone(),
+                    });
+                }
+            },
+        }
+    }
+}
+
+fn clear_claim(node: &mut Node) {
+    match node {
+        Node::Desired(previous) => {
+            *previous = DesiredNode::from_parts(
+                previous.definition().clone(),
+                None,
+                previous.current().cloned(),
+            );
+        }
+        Node::Command(previous) => {
+            *previous = CommandNode::from_parts(previous.definition().clone(), None);
+        }
+        Node::State(_) | Node::Event(_) => unreachable!("only input nodes carry claims"),
     }
 }

@@ -15,7 +15,15 @@ Event publications update publisher metadata and emit an occurrence in the
 current batch; occurrence payloads never appear in snapshots. A snapshot is a
 selection-filtered map of current nodes at one commit sequence.
 
-The current core rejects repeated canonical targets in one batch and writes to
-the reserved `$` namespace. The repeated-target rule is provisional until the
-external batch contract is reviewed. No HTTP routes, message envelopes, codec
-tags, correlation identifiers, or persistence format are published yet.
+Input definitions exist independently of claims and payloads. Desired
+submissions retain their latest value and submitter provenance without changing
+the claim. Command submissions emit an occurrence and retain no payload.
+Claiming requires a current managed session, but definition and submission may
+use an attributed stateless context. A batch may atomically define, claim, and
+submit on one input topic in operation order.
+
+The current core rejects duplicate operations in the same input lifecycle slot,
+same-topic output/removal combinations, and writes to the reserved `$`
+namespace. The repeated-target details remain provisional until the external
+batch contract is reviewed. No HTTP routes, message envelopes, codec tags,
+correlation identifiers, or persistence format are published yet.

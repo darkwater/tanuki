@@ -149,6 +149,20 @@ pub struct InputClaim {
 }
 
 impl InputClaim {
+    pub(crate) fn new(
+        id: ClaimId,
+        owner: ClientName,
+        session: SessionId,
+        release: ClaimRelease,
+    ) -> Self {
+        Self {
+            id,
+            owner,
+            session,
+            release,
+        }
+    }
+
     #[must_use]
     pub const fn id(&self) -> ClaimId {
         self.id
@@ -196,6 +210,18 @@ impl DesiredNode {
         }
     }
 
+    pub(crate) fn from_parts(
+        definition: InputDefinition,
+        claim: Option<InputClaim>,
+        current: Option<RetainedValue>,
+    ) -> Self {
+        Self {
+            definition,
+            claim,
+            current,
+        }
+    }
+
     #[must_use]
     pub fn definition(&self) -> &InputDefinition {
         &self.definition
@@ -227,6 +253,10 @@ impl CommandNode {
         }
     }
 
+    pub(crate) fn from_parts(definition: InputDefinition, claim: Option<InputClaim>) -> Self {
+        Self { definition, claim }
+    }
+
     #[must_use]
     pub fn definition(&self) -> &InputDefinition {
         &self.definition
@@ -235,5 +265,28 @@ impl CommandNode {
     #[must_use]
     pub fn claim(&self) -> Option<&InputClaim> {
         self.claim.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandOccurrence {
+    value: Value,
+    submitter: WriteProvenance,
+}
+
+impl CommandOccurrence {
+    #[must_use]
+    pub fn new(value: Value, submitter: WriteProvenance) -> Self {
+        Self { value, submitter }
+    }
+
+    #[must_use]
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+
+    #[must_use]
+    pub fn submitter(&self) -> &WriteProvenance {
+        &self.submitter
     }
 }

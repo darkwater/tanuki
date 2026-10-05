@@ -4,7 +4,7 @@ use jiff::SignedDuration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ClientName(String);
 
 impl ClientName {
@@ -128,8 +128,30 @@ pub struct NegativeDuration;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SessionId(u64);
 
+impl SessionId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ClaimId(u64);
+
+impl ClaimId {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionHandle {
@@ -138,12 +160,17 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    pub fn client(&self) -> &ClientName {
-        &self.client
+    pub(crate) fn new(id: SessionId, client: ClientName) -> Self {
+        Self { id, client }
     }
 
-    pub(crate) const fn id(&self) -> SessionId {
+    #[must_use]
+    pub const fn id(&self) -> SessionId {
         self.id
+    }
+
+    pub fn client(&self) -> &ClientName {
+        &self.client
     }
 }
 
@@ -157,6 +184,11 @@ impl WriteContext {
     #[must_use]
     pub fn stateless(client: ClientName) -> Self {
         Self::Stateless { client }
+    }
+
+    #[must_use]
+    pub fn managed(handle: SessionHandle) -> Self {
+        Self::Managed(handle)
     }
 
     pub fn client(&self) -> &ClientName {
@@ -198,5 +230,10 @@ impl WriteProvenance {
     #[must_use]
     pub const fn at(&self) -> Timestamp {
         self.at
+    }
+
+    #[must_use]
+    pub const fn session(&self) -> Option<SessionId> {
+        self.session
     }
 }

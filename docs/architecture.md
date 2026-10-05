@@ -10,7 +10,7 @@ does.
 | --- | --- | --- |
 | `server` | bootstrap | Own the process lifecycle and, later, runtime wiring and shutdown |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | task 02 outputs implemented | Authoritative state, sessions, atomic commits, and subscriptions |
+| `core` | tasks 02–03 implemented | Authoritative nodes, managed sessions, atomic commits, and input claims |
 | `protocol` | planned | Versioned transport DTOs and codec conversion |
 | `transport` | planned | Axum HTTP/WebSocket extraction and response mapping |
 | `persistence` | planned | Versioned coherent snapshots and file operations |
@@ -68,7 +68,7 @@ struct WriteBatch(NonEmptyVec<WriteOperation>);
 An unclaimed input can be created by placing `DefineInput` and its submission
 in one atomic batch. Submission never claims it. `ClaimInput` accepts only a
 live `Managed` context; matching stateless client names carry no claim
-authority. Claims store an internal session identity and generation so stale
+authority. Claims store an internal session identity and unique claim ID so stale
 disconnect cleanup cannot release a replacement.
 
 Accepted creation policy: each publication operation creates its corresponding
@@ -110,7 +110,7 @@ warning makes loss of retained payloads, definitions, or claims visible without
 turning an ad hoc topic into a permanently locked type. Denying schemas retain
 the ability to enforce a stable shape where it matters.
 
-## Core mutation implemented in task 02
+## Core mutation and sessions implemented in tasks 02–03
 
 `Core::apply` is the only state mutation boundary. It validates system and
 duplicate-target rules, clones the current in-memory map into a candidate,
@@ -123,10 +123,30 @@ transition.
 Output ownership is derived from the latest accepted provenance rather than a
 second owner field. Identical state writes still replace the retained wrapper,
 refreshing timestamp and expiry. Event nodes persist publisher metadata but
-never their occurrence payload. Input transitions join this same path in task
-03.
+never their occurrence payload.
+
+Input definition, claiming, desired submission/clearing, and command submission
+use the same candidate and commit path. Definition, claim, and submission are
+distinct operations and can be composed in that order for one topic in a
+single batch. Other repeated operations in the same lifecycle slot, and any
+same-topic output/removal combination, are rejected as ambiguous.
+
+The core registry maps each managed client name to an opaque session ID. A
+replacement invalidates the old handle before it can write again. Stateless
+contexts carry attribution only and never enter or modify this registry.
+Claims contain both the owner label and session ID: submissions may come from
+any actor without transferring the claim, while definition changes to a
+claimed input require the claiming session.
+
+Disconnect and same-name replacement share one claim-release procedure.
+Immediate release removes only the claim, preserving the input definition and
+desired value in an optional atomic update. Grace release leaves the claim in
+place and returns `(topic, claim ID, deadline)` work for the task 07 scheduler;
+the claim ID is the guard against clearing a later replacement. If a grace
+deadline cannot be represented, the core warns and releases immediately.
 
 Two implementation defaults remain visibly provisional pending later protocol
-review: one batch may target a canonical topic only once, and instant-output
-metadata remains present in snapshots. These choices avoid ambiguous ordering
-and preserve observable publisher attribution without introducing event replay.
+review: same-topic input lifecycle operations may compose once per lifecycle
+slot while ambiguous repeats are rejected, and instant-output metadata remains
+present in snapshots. These choices support atomic input creation without
+introducing implicit last-write-wins or event replay.

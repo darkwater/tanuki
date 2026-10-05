@@ -11,8 +11,8 @@ pub use identity::{
     SessionId, Timestamp, WriteContext, WriteProvenance,
 };
 pub use node::{
-    CommandNode, DesiredNode, EventNode, EventOccurrence, InputClaim, InputDefinition, Node,
-    NodeKind, RetainedValue, StateNode,
+    CommandNode, CommandOccurrence, DesiredNode, EventNode, EventOccurrence, InputClaim,
+    InputDefinition, Node, NodeKind, RetainedValue, StateNode,
 };
 pub use operation::{
     BatchError, ClaimRelease, ExpiryUpdate, InputKind, WriteBatch, WriteOperation,

@@ -1,6 +1,6 @@
 # US-08 — Pending intent before a controller starts
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** pending-intent core lifecycle implemented; expiry, persistence, transport, and real-world use not yet verified.
 - **Origin:** Illustrative assistant example, lifetime behaviour accepted.
 - **Last updated:** 2026-10-05.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -31,10 +31,12 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — L1, P1; E1 restart coverage.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- `tests/core_sessions_inputs.rs::stateless_definition_and_submission_create_unclaimed_pending_intent` verifies US-08.A1.
+- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Subscription delivery remains task 05; expiry and restart criteria remain tasks 07 and 08.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-05: Task 03 implemented stateless pending-intent creation and later claim without value loss; delivery, expiry, and persistence remain unverified.
