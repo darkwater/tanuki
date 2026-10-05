@@ -2,16 +2,15 @@
 
 ## Startup and shutdown
 
-The bootstrap binary starts a Tokio runtime and waits for the process Ctrl-C
-signal through `server::run_until`. Tests inject a one-shot shutdown future
-through the same seam and join the spawned task.
+The binary starts a Tokio runtime, initializes structured tracing, binds
+`TANUKI_LISTEN` (default `127.0.0.1:3000`), constructs one in-memory `Core`, and
+serves the Axum router. Ctrl-C starts graceful HTTP shutdown. Tests bind an
+ephemeral listener and inject state, clock, and a one-shot shutdown future
+through `server::serve_with_core`.
 
-There is no network listener, restore step, or background work yet. The
-authoritative in-memory `Core` is currently exercised directly. As runtime
-wiring arrives, startup will construct dependencies before exposing the
-listener. Shutdown will stop accepting work, close producers, finish the core
-task, request a best-effort save when applicable, and join owned tasks. The
-exact procedure must be updated alongside each implementation card.
+There is no restore step or persistence background work yet. Later startup
+will restore before accepting requests; later shutdown will request a
+best-effort save after stopping new work.
 
 Subscription, expiry execution, restore, and link-recovery procedures remain
 pending their corresponding implementation cards.

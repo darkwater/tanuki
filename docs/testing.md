@@ -81,3 +81,21 @@ cargo test --test core_sessions_inputs
 
 Executing grace timers, desired-value expiry, and stale timer guards remains
 task 07 work.
+
+## Task 04 — JSON and basic HTTP
+
+`tests/protocol_json.rs` verifies exact large signed integers, rejection of
+out-of-range unsigned integers, and escaping literal reserved tag keys.
+`tests/http_api.rs` verifies common extractor/domain/routing errors, the single
+state convenience route, stateless atomic input batches, semantic JSON values,
+anonymous selected reads, and a battery publish/read through a real ephemeral
+TCP listener.
+
+Run the focused suite with:
+
+```sh
+cargo test --test protocol_json --test http_api
+```
+
+The v1 HTTP shape is provisional until checkpoint B. WebSocket and MessagePack
+transport parity remain task 06.

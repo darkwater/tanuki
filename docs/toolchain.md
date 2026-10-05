@@ -8,9 +8,10 @@ rustc 1.101.0-nightly (21b707e3f 2026-09-30)
 cargo 1.101.0-nightly (f3865b2a4 2026-09-29)
 ```
 
-The initial dependency is Tokio 1.53.2 with only the macro, multi-threaded
-runtime, signal, and synchronization features. This is enough for the process
-lifecycle seam without pulling in transport support before its task.
+Runtime dependencies now include Tokio 1.53.2, Axum 0.8.9, Serde/serde_json,
+Jiff 0.2.37, thiserror 2.0.21, base64 0.23.1, tracing 0.1.44, and
+tracing-subscriber 0.3.23. Tower 0.5.3 is used by router integration tests.
+Versions are exact pins in `Cargo.toml`; `Cargo.lock` is committed.
 
 ## Unstable features
 

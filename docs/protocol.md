@@ -1,7 +1,8 @@
 # Protocol
 
-Tanuki does not expose a wire protocol yet. This document records the
-transport-neutral semantics that future JSON and MessagePack DTOs must preserve.
+Protocol version 1 currently exposes JSON over HTTP. The representation remains
+provisional until checkpoint B reviews snapshot/update/error DTOs; incompatible
+changes are allowed before that checkpoint.
 
 ## Current operation boundary
 
@@ -25,5 +26,46 @@ submit on one input topic in operation order.
 The current core rejects duplicate operations in the same input lifecycle slot,
 same-topic output/removal combinations, and writes to the reserved `$`
 namespace. The repeated-target details remain provisional until the external
-batch contract is reviewed. No HTTP routes, message envelopes, codec tags,
-correlation identifiers, or persistence format are published yet.
+batch contract is reviewed. WebSocket message envelopes, request correlation,
+MessagePack extensions, and persistence format are not published yet.
+
+## HTTP version 1
+
+Writes require a validated UTF-8 `tanuki-client` header. This is attribution,
+not authentication, and creates no managed session. Reads are anonymous.
+
+| Method and path | Body/query | Meaning |
+| --- | --- | --- |
+| `POST /v1/state/{topic...}` | `{"value":72,"expiry":{"mode":"clear"}}` | Convenience retained-state write |
+| `POST /v1/write` | `{"operations":[...]}` | One atomic operation batch |
+| `GET /v1/snapshot?select=/battery/*` | one selector | Selection-filtered retained snapshot |
+
+Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
+`define_input`, `claim_input`, `submit_desired`, `submit_command`,
+`clear_desired`, and `remove_node`. Retained writes require an explicit expiry
+object: `{"mode":"preserve"}`, `{"mode":"clear"}`, or
+`{"mode":"set","duration":"PT1H"}`. This avoids choosing the still-open
+omitted-expiry policy accidentally. Claim releases similarly use `immediate`
+or `after` with a nonnegative fixed ISO-8601 duration.
+
+Successes are `{"ok":true,"data":...}`. Every adapter, extractor, routing,
+and core failure uses `{"ok":false,"error":{"code":"...","message":"..."}}`
+with an appropriate HTTP status. A successful write returns its commit sequence
+and structured warning list; it does not promise command execution or durable
+storage.
+
+Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
+arrays, and objects map directly to runtime values. The semantic forms are:
+
+```json
+{"$bytes":"AAEC/w=="}
+{"$timestamp":"2023-11-14T22:13:20Z"}
+{"$duration":"PT1H2M3S"}
+{"$int":"9223372036854775807"}
+{"$map":{"$bytes":"literal, not a tag"}}
+```
+
+Integers outside JavaScript's exact range encode with `$int`; unsigned values
+outside signed 64-bit range are rejected. A literal map containing any reserved
+tag key must use `$map`. Encoding is recursive and lossless for the accepted
+initial value profile.

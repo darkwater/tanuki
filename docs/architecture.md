@@ -11,8 +11,8 @@ does.
 | `server` | bootstrap | Own the process lifecycle and, later, runtime wiring and shutdown |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–03 implemented | Authoritative nodes, managed sessions, atomic commits, and input claims |
-| `protocol` | planned | Versioned transport DTOs and codec conversion |
-| `transport` | planned | Axum HTTP/WebSocket extraction and response mapping |
+| `protocol` | task 04 JSON implemented | Versioned transport DTOs and codec conversion |
+| `transport` | task 04 HTTP implemented | Axum HTTP extraction, routing, and response/error mapping |
 | `persistence` | planned | Versioned coherent snapshots and file operations |
 | `schema` | planned | Ordinary-topic validation and freshness policy |
 | `links` | planned | Linked path resolution, visibility, and recovery |
