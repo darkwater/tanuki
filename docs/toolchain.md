@@ -1,0 +1,34 @@
+# Toolchain
+
+Tanuki uses `nightly-2026-07-01` with rustfmt and Clippy, pinned in
+`rust-toolchain.toml`. The pin was verified on 2026-10-05 with:
+
+```text
+rustc 1.98.0-nightly (f46ec5218 2026-06-30)
+cargo 1.98.0-nightly (a335d47ff 2026-06-26)
+```
+
+The initial dependency is Tokio 1.53.2 with only the macro, multi-threaded
+runtime, signal, and synchronization features. This is enough for the process
+lifecycle seam without pulling in transport support before its task.
+
+## Unstable features
+
+No crate-level unstable features are enabled yet. Nightly is pinned so future
+features can be selected and verified deliberately. When adding one, record
+its feature gate, purpose, and links to the pinned standard-library or
+Unstable Book documentation here.
+
+## Quality gates
+
+Run these commands from the repository root:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo test --workspace --release
+```
+
+The default toolchain selected by each command comes from
+`rust-toolchain.toml`.

@@ -1,0 +1,8 @@
+[package]
+name = "tanuki"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tokio = { version = "=1.53.2", features = ["macros", "rt-multi-thread", "signal", "sync"] }

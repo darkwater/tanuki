@@ -1,0 +1,41 @@
+# US-09 — Dashboard combining unrelated topics
+
+- **Status:** intended use; implementation and real-world use not yet verified.
+- **Origin:** User use case.
+- **Last updated:** 2026-10-05.
+- **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
+
+## User story
+
+I want a dashboard to assemble whatever state is useful, even when its inputs live in unrelated parts of the tree.
+
+## Situation and flow
+
+A dashboard combines batteries, TV, assistant status and desktop workspace. Its business logic treats the selected state as one input and recomputes a view after updates.
+
+Union of arbitrary topic selectors → initial snapshot plus atomic updates → locally maintained input shape → rendered dashboard. A serde metadata/input wrapper is a later ergonomic option.
+
+Topic paths, payload layouts and timing examples are illustrative unless explicitly agreed elsewhere. This is an application story, not a mandatory global topic convention.
+
+## Observable acceptance criteria
+
+- **US-09.A1:** Startup yields a complete selected snapshot, including an explicitly empty result if nothing exists.
+- **US-09.A2:** Updates are applied as whole batches before rendering a new view.
+- **US-09.A3:** A topic matched through overlapping selectors is not duplicated.
+- **US-09.A4:** Removed nodes, missing payloads and actual Null values remain distinguishable.
+- **US-09.A5:** A newly relevant topic matching a wildcard appears without restarting the dashboard.
+
+## Details to learn through use
+
+Actual UI, selections and struct/shape mapping; whether any client needs server-supplied full snapshots on each update.
+
+## Implementation and evidence
+
+- Core test links: [test plan](../test-plan.md) — C2, C3, T1; E1 dashboard; add wildcard membership fixture.
+- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- Real clients, scripts, configuration and deployment: not yet recorded.
+- Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
+
+## Change notes
+
+- 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
