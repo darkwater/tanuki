@@ -6,7 +6,23 @@ that does not turn the provisional choice into an accepted requirement.
 
 ## Actually important — please answer
 
-No unresolved question currently blocks the initial schema/core integration.
+These now block writable links (task 10), but not the completed schema/core
+integration:
+
+1. **Writes through an alias.** Recommended: translate to the canonical topic,
+   run the canonical direct schema (including its explicit cast), then validate
+   the resulting value against the alias view without casting. Reject the
+   whole write if either denying policy fails. A direct canonical write remains
+   allowed when only the alias view rejects; that link disables atomically.
+2. **Repair through a disabled alias.** Recommended: allow a write addressed
+   through a schema-disabled alias to act as a repair attempt. If the translated
+   canonical candidate and alias view both pass, commit the canonical write and
+   re-enable the link atomically. Otherwise reject it and leave the link
+   disabled. A missing canonical target may likewise be recreated this way.
+3. **Instant-event recovery.** Recommended: an invalid canonical event still
+   reaches canonical subscribers, is suppressed through the rejecting view,
+   and disables that link. A later valid event re-enables the link and is
+   delivered through it, without replaying the invalid or any older event.
 
 ## Consequential, but the likely answer seems clear
 
@@ -28,6 +44,10 @@ No unresolved question currently blocks the initial schema/core integration.
 5. **Instant-output metadata across restart.** Preserve event-node publisher
    metadata but never occurrences; preserve command definitions but never
    command payloads.
+6. **Initial link topology.** Reject cycles, overlapping destination mounts,
+   destinations colliding with retained nodes/subtrees, targets reached through
+   another link, and links to or from `$` system branches. This keeps the first
+   forward/reverse indexes unambiguous while leaving link chains as future work.
 
 ## Provisional defaults probably worth a quick skim
 

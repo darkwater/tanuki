@@ -96,6 +96,64 @@ async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
 }
 
 #[tokio::test]
+async fn schema_install_reports_existing_violations_and_force_removes_invalid_state() {
+    let (app, core) = test_app();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/state/battery/phone?client=test",
+            json!({"value": "unknown"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let declaration = json!({
+        "rules": [{
+            "selector": "/battery/*",
+            "enforcement": "deny",
+            "validator": {"type": "integer_range", "minimum": 0, "maximum": 100}
+        }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "PUT",
+            "/v1/schemas/battery",
+            declaration.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error = response_json(response).await;
+    assert_eq!(error["error"]["code"], "existing_schema_violations");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("/battery/phone")
+    );
+
+    let mut forced = declaration;
+    forced["force"] = json!(true);
+    let response = app
+        .oneshot(json_request("PUT", "/v1/schemas/battery", forced))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        core.lock()
+            .unwrap()
+            .read(&tanuki::domain::Selection::new(vec![
+                tanuki::domain::Selector::parse("/battery/phone").unwrap(),
+            ]))
+            .nodes()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn malformed_json_and_missing_attribution_use_the_common_error_shape() {
     let (app, _) = test_app();
     let malformed = Request::builder()

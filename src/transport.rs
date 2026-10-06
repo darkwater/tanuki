@@ -813,10 +813,18 @@ impl ApiError {
                 (StatusCode::CONFLICT, "existing_schema_violations")
             }
         };
+        let message = match &error {
+            CoreError::ExistingSchemaViolations { violations } => violations
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+            _ => error.to_string(),
+        };
         Self {
             status,
             code,
-            message: error.to_string(),
+            message,
         }
     }
 }
