@@ -144,6 +144,7 @@ enum NodeKindRequest {
 async fn install_schema(
     State(state): State<HttpState>,
     Path(name): Path<String>,
+    StatelessActor(actor): StatelessActor,
     Json(request): Json<SchemaRequest>,
 ) -> Result<Json<RawJson>, ApiError> {
     let schema = build_schema(&name, request.rules)?;
@@ -162,7 +163,7 @@ async fn install_schema(
         state.scheduler.rescan();
     }
     for warning in outcome.warnings() {
-        warn!(?warning, schema = %name, "schema installed with diagnostic");
+        warn!(?warning, schema = %name, client = %actor.client(), "schema installed with diagnostic");
     }
     Ok(Json(json!({
         "schema": name,

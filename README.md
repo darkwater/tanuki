@@ -53,6 +53,7 @@ percentages and explicitly casts strings such as `"72"` before revalidation:
 ```sh
 curl -sS -X PUT \
   -H 'content-type: application/json' \
+  -H 'tanuki-client: administrator' \
   --data '{
     "rules": [{
       "selector": "/battery/*",

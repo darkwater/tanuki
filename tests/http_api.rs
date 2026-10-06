@@ -41,11 +41,26 @@ async fn response_json(response: axum::response::Response) -> JsonValue {
 #[tokio::test]
 async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
     let (app, core) = test_app();
-    let response = app
+    let unattributed = app
         .clone()
         .oneshot(json_request(
             "PUT",
             "/v1/schemas/battery",
+            json!({"rules": []}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unattributed.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(unattributed).await["error"]["code"],
+        "missing_client"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "PUT",
+            "/v1/schemas/battery?client=administrator",
             json!({
                 "rules": [{
                     "selector": "/battery/*",
@@ -120,7 +135,7 @@ async fn schema_install_reports_existing_violations_and_force_removes_invalid_st
         .clone()
         .oneshot(json_request(
             "PUT",
-            "/v1/schemas/battery",
+            "/v1/schemas/battery?client=administrator",
             declaration.clone(),
         ))
         .await
@@ -138,7 +153,11 @@ async fn schema_install_reports_existing_violations_and_force_removes_invalid_st
     let mut forced = declaration;
     forced["force"] = json!(true);
     let response = app
-        .oneshot(json_request("PUT", "/v1/schemas/battery", forced))
+        .oneshot(json_request(
+            "PUT",
+            "/v1/schemas/battery?client=administrator",
+            forced,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

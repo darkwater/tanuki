@@ -74,6 +74,8 @@ rejects current deny violations. `force:true` removes deny-invalid state and
 clears deny-invalid desired current values while preserving definitions and
 claims. Warning violations remain and are returned as diagnostics. A complete
 declaration atomically replaces the same schema name.
+Like other HTTP mutations, schema installation requires client attribution by
+`tanuki-client` or `?client=`; this is not authentication or authorization.
 
 Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
 arrays, and objects map directly to runtime values. The semantic forms are:
