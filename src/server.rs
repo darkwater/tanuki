@@ -10,7 +10,6 @@ use tokio::sync::watch;
 use tracing::warn;
 
 use crate::{
-    core::Core,
     domain::Timestamp,
     persistence::{PersistenceError, SnapshotStore},
     transport::{Clock, SharedCore, router_with_clock},
@@ -24,7 +23,7 @@ where
     let clock: Clock = Arc::new(|| Timestamp::new(jiff::Timestamp::now()));
     let path = std::env::var_os("TANUKI_SNAPSHOT")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("tanuki.snapshot.json"));
+        .unwrap_or_else(|| std::path::PathBuf::from("tanuki.db"));
     serve_with_persistence(
         listener,
         SnapshotStore::new(path),
@@ -60,7 +59,15 @@ pub async fn serve_with_persistence<S>(
 where
     S: Future<Output = ()> + Send + 'static,
 {
-    let core = Arc::new(Mutex::new(store.load(clock())?.unwrap_or_else(Core::new)));
+    let loaded = store.load_or_recover(clock())?;
+    if let Some(recovery) = loaded.recovery() {
+        warn!(
+            backup = %recovery.backup().display(),
+            reason = recovery.reason(),
+            "snapshot was invalid; backed it up and started with empty state"
+        );
+    }
+    let core = Arc::new(Mutex::new(loaded.into_core()));
     let (stop, stopped) = watch::channel(false);
     let saver = tokio::spawn(periodic_save(
         store.clone(),

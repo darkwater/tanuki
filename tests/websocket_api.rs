@@ -274,6 +274,35 @@ async fn messagepack_uses_the_same_snapshot_reply_and_update_messages() {
 }
 
 #[tokio::test]
+async fn each_request_frame_selects_its_reply_codec() {
+    let server = TestServer::start().await;
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "mixed codec", &["/battery/*"]).await;
+    let _ = recv_json(&mut socket).await;
+
+    socket
+        .send(Message::Binary(
+            rmp_serde::to_vec_named(&battery_write("binary-request", 54))
+                .unwrap()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        recv_messagepack(&mut socket).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "binary-request"
+    ));
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Update { .. }
+    ));
+
+    socket.close(None).await.unwrap();
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn websocket_core_errors_use_the_common_code_and_request_id() {
     let server = TestServer::start().await;
     let mut socket = server.connect().await;

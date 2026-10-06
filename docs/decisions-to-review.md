@@ -98,9 +98,14 @@ The choices are JSON plus MessagePack, inline bytes, semantic timestamps/duratio
 
 **Accepted first profile:** null, bool, signed 64-bit integer, finite 64-bit float, string, bytes, list, string-keyed map, timestamp, and signed fixed duration. Unsigned integers and calendar-relative spans are excluded initially; a nonnegative schema range expresses ordinary unsigned constraints without adding a second integer representation. Timer parameters use a distinct nonnegative fixed-duration type.
 
-For JSON, a concrete proposal is `{"$timestamp":"..."}`, `{"$duration":"..."}`, `{"$bytes":"<base64>"}`, and `{"$int":"<decimal>"}` for exact large integers. Wrap literal maps containing reserved tag keys as `{"$map":{...}}`. Ordinary JSON objects remain maps. Freeze exact tag recognition/escaping rules and canonical encoding before implementing them. Tagging every value remains an alternative, not a decision.
+For JSON, the accepted first mapping is `{"$timestamp":"..."}`,
+`{"$duration":"..."}`, `{"$bytes":"<base64>"}`, and
+`{"$int":"<decimal>"}` for exact large integers. Literal maps containing
+reserved tag keys use `{"$map":{...}}`; ordinary JSON objects remain maps.
 
-MessagePack should use native primitives and binary data, with an explicit semantic extension mapping for timestamp and duration. Both decoders produce the same runtime values; do not stringify bytes or lose time semantics merely because JSON is less convenient.
+MessagePack uses native primitives and binary data, standard timestamp
+extension type `-1`, and Tanuki application extension type `2` containing the
+fixed-duration text. Both decoders produce the same runtime values.
 
 **Duration ambiguity:** ISO 8601 includes calendar quantities such as months, which do not define a fixed expiry interval without an anchor and calendar policy. Recommended permit calendar spans as values if desired, but restrict expiry/grace/freshness intervals to nonnegative fixed elapsed durations. Decide whether calendar spans belong in the first runtime type at all. These timer policies do not need every capability of a general time library.
 
@@ -125,20 +130,21 @@ repeat in the same lifecycle slot, or any same-topic output/removal combination,
 is rejected. This is tested and documented but remains open for user review
 before the wire batch contract is frozen.
 
-Task 05 provisionally implements delta batches with full-node upserts, distinct
+Task 05 implements the accepted snapshot-then-update stream as delta batches with full-node upserts, distinct
 event/command occurrences, removals carrying previous nodes, and a correlated
 initial snapshot serving as subscribe success. Core queues disconnect only the
-slow subscriber on capacity overflow. Exact connection byte limits and final
-checkpoint-B acceptance remain open in `open-questions.md`; these implemented
-review defaults are not silently promoted to accepted decisions.
+slow subscriber on capacity overflow. Reconnection is an ordinary new
+subscription, not a replay or special recovery operation. Exact queued-byte
+accounting remains open in `open-questions.md`.
 
 Task 06 exposes that shape through JSON-text and MessagePack-binary WebSockets.
-The hello frame selects one codec for the connection, and its correlated
-snapshot is always the first server message. MessagePack provisionally uses
-application extension tag 1 for timestamp text and tag 2 for fixed-duration
-text. Axum enforces 1 MiB inbound messages, the encoder refuses larger
+The hello frame selects the codec for unsolicited messages, and its correlated
+snapshot is always the first server message. Each later frame selects JSON by
+text or MessagePack by binary, and its correlated reply uses that same codec.
+MessagePack uses standard timestamp extension type `-1` and application type
+`2` for fixed-duration text. Axum enforces 1 MiB inbound messages, the encoder refuses larger
 individual outbound messages, and subscriptions buffer 64 complete batches;
-total queued-byte accounting and checkpoint-B acceptance remain open.
+total queued-byte accounting remains open.
 
 ## D7 — Paths and glob grammar
 
@@ -166,7 +172,11 @@ filesystem directories. `/` is an accepted virtual root and is not writable.
 
 - **Slow consumers:** recommend bound queued bytes and disconnect on overflow, reporting the reason. Reconnect obtains a new retained snapshot. Do not silently drop events or split batches.
 - **Limits:** configure maximum message/value/batch size and subscription queue bytes. Specific numbers can be implementation defaults. A snapshot exceeding the budget should fail explicitly; do not return a silent partial snapshot.
-- **Persistence:** recommend in-memory authority plus periodic coherent snapshots, atomic file replacement, and an orderly-shutdown attempt. Include schema/link definitions consistently when implemented. A failed save reports diagnostics; a corrupt snapshot must not silently masquerade as empty state.
+- **Persistence:** use in-memory authority plus periodic coherent snapshots,
+  atomic file replacement, and an orderly-shutdown attempt. Include schema/link
+  definitions consistently when implemented. A failed save reports
+  diagnostics. Invalid startup data is preserved in a backup and logged before
+  starting empty, so corruption does not silently masquerade as a new database.
 - **HTTP:** recommend POST for mutations; GET for reads. A convenience `value=foo` means string; typed values use an explicit JSON body or encoding option, never heuristic coercion. Use the same batch operation path internally.
 - **Exposure:** recommend initial loopback or Unix socket operation, with remote exposure explicitly configured. Full authentication can wait; names are not credentials. Smartphone access still needs a chosen network deployment arrangement.
 - **Diagnostics:** reply to callers with structured errors/warnings and log locally from day one. Add observable system diagnostics without recursively publishing failures of the diagnostic mechanism. A future script runtime is not required for this.
@@ -184,9 +194,8 @@ filesystem directories. `/` is an accepted virtual root and is not writable.
 - Best-effort persistence does not imply replay or durable acknowledgements.
 - Old assistant recommendations remain recommendations until accepted; this review does not silently settle them.
 
-Task 08 provisionally implements the persistence recommendation as readable
-versioned JSON, a 30-second periodic attempt, atomic same-directory replacement,
-and a final orderly-shutdown attempt. Corrupt/unsupported configured data fails
-startup visibly. The default `tanuki.snapshot.json` path and
-`TANUKI_SNAPSHOT` override remain reviewable operational defaults rather than
-new product requirements.
+Task 08 implements persistence as versioned MessagePack, a 30-second periodic
+attempt, atomic same-directory replacement, and a final orderly-shutdown
+attempt. Invalid configured data is copied to a non-overwriting adjacent
+backup, logged, and treated as empty state. The default `tanuki.db` path and
+`TANUKI_SNAPSHOT` override are accepted operational defaults.

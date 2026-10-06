@@ -133,8 +133,8 @@ first snapshot. Restored state cannot contain half an atomic batch.
 Inject a save failure, observe a diagnostic, and verify the live core still
 works. A write acknowledged after the last completed save is allowed to be
 absent after simulated crash; do not accidentally test or promise durable
-acknowledgements. Handle malformed snapshot data according to the documented
-policy, visibly rather than silently pretending it was an empty database.
+acknowledgements. Back up malformed snapshot data, log the recovery, and start
+empty; do not silently discard the evidence or overwrite an earlier backup.
 
 ### S1 — Schema policy
 

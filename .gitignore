@@ -1,2 +1,3 @@
 /target
-/tanuki.snapshot.json
+/tanuki.db
+/tanuki.db.bak*

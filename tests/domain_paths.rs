@@ -75,6 +75,67 @@ fn selector_matcher_covers_exact_single_recursive_choice_union_and_empty() {
 }
 
 #[test]
+fn selector_intersection_detects_shared_possible_topics() {
+    let cases = [
+        ("/battery/*", "/battery/phone", true),
+        ("/battery/*", "/battery/*/level", false),
+        ("/**/status", "/devices/**", true),
+        ("/a/**/z", "/a/b/{y,z}", true),
+        ("/a/{b,c}", "/a/{c,d}", true),
+        ("/a/{b,c}", "/a/{d,e}", false),
+        ("/**", "/$connections/*", true),
+        ("/", "/**", false),
+    ];
+
+    for (left, right, expected) in cases {
+        let left = Selector::parse(left).unwrap();
+        let right = Selector::parse(right).unwrap();
+        assert_eq!(left.intersects(&right), expected, "{left} vs {right}");
+        assert_eq!(
+            right.intersects(&left),
+            expected,
+            "symmetry: {right} vs {left}"
+        );
+    }
+}
+
+#[test]
+fn nonintersecting_selectors_never_match_the_same_topic_in_a_small_corpus() {
+    let selectors = [
+        "/a",
+        "/a/*",
+        "/a/**",
+        "/b/{x,y}",
+        "/**/z",
+        "/$connections/*",
+    ]
+    .map(|value| Selector::parse(value).unwrap());
+    let topics = [
+        "/a",
+        "/a/x",
+        "/a/x/z",
+        "/b/x",
+        "/b/y",
+        "/b/y/z",
+        "/c/z",
+        "/$connections/client",
+    ]
+    .map(topic);
+
+    for left in &selectors {
+        for right in &selectors {
+            if !left.intersects(right) {
+                assert!(
+                    topics
+                        .iter()
+                        .all(|topic| !(left.matches(topic) && right.matches(topic)))
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn malformed_selector_syntax_is_rejected_instead_of_guessed() {
     for invalid in [
         "battery/*",

@@ -66,7 +66,7 @@ async fn request(address: std::net::SocketAddr, request: &str) -> RawJson {
 #[tokio::test]
 async fn orderly_save_and_restart_restore_retained_state_over_http() {
     let directory = TestDirectory::new();
-    let store = SnapshotStore::new(directory.0.join("snapshot.json"));
+    let store = SnapshotStore::new(directory.0.join("snapshot.db"));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (stop, stopped) = oneshot::channel();
@@ -116,7 +116,7 @@ async fn orderly_save_and_restart_restore_retained_state_over_http() {
 #[tokio::test]
 async fn production_binary_restores_configured_snapshot() {
     let directory = TestDirectory::new();
-    let path = directory.0.join("snapshot.json");
+    let path = directory.0.join("snapshot.db");
     let store = SnapshotStore::new(path.clone());
     let core = Arc::new(std::sync::Mutex::new(Core::new()));
     core.lock()
@@ -166,4 +166,41 @@ async fn production_binary_restores_configured_snapshot() {
     );
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+#[tokio::test]
+async fn corrupt_snapshot_is_backed_up_and_server_starts_empty() {
+    let directory = TestDirectory::new();
+    let path = directory.0.join("tanuki.db");
+    fs::write(&path, b"broken snapshot").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = oneshot::channel();
+    let task = tokio::spawn(serve_with_persistence(
+        listener,
+        SnapshotStore::new(path.clone()),
+        clock(),
+        std::time::Duration::from_secs(60),
+        async move {
+            let _ = stopped.await;
+        },
+    ));
+
+    let read = format!(
+        "GET /v1/snapshot?select=/** HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    );
+    assert_eq!(request(address, &read).await["data"]["nodes"], json!({}));
+    assert_eq!(
+        fs::read(path.with_extension("db.bak")).unwrap(),
+        b"broken snapshot"
+    );
+
+    stop.send(()).unwrap();
+    task.await.unwrap().unwrap();
+    assert!(
+        SnapshotStore::new(path)
+            .load(Timestamp::new(JiffTimestamp::now()))
+            .unwrap()
+            .is_some()
+    );
 }

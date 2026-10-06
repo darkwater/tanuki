@@ -9,7 +9,7 @@ use serde_json::{Value as JsonValue, json};
 use tanuki::{
     core::Core,
     domain::{
-        ClientName, ExpiryUpdate, Timestamp, TopicPath, Value, WriteBatch, WriteContext,
+        ClientName, ExpiryUpdate, Node, Timestamp, TopicPath, Value, WriteBatch, WriteContext,
         WriteOperation,
     },
     transport::{Clock, router_with_clock},
@@ -63,6 +63,43 @@ async fn malformed_json_and_missing_attribution_use_the_common_error_shape() {
     assert_eq!(
         response_json(response).await["error"]["code"],
         "missing_client"
+    );
+}
+
+#[tokio::test]
+async fn stateless_attribution_accepts_query_and_rejects_conflicts() {
+    let (app, core) = test_app();
+    let request = json_request(
+        "POST",
+        "/v1/state/battery/phone?client=phone%20task",
+        json!({"value": 72}),
+    );
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .read(&tanuki::domain::Selection::new(vec![
+            tanuki::domain::Selector::parse("/battery/phone").unwrap(),
+        ]));
+    let Node::State(node) = snapshot.nodes().values().next().unwrap() else {
+        panic!("battery topic must be state");
+    };
+    assert_eq!(node.current().last_write().client().as_str(), "phone task");
+
+    let mut request = json_request(
+        "POST",
+        "/v1/state/battery/phone?client=another",
+        json!({"value": 73}),
+    );
+    request
+        .headers_mut()
+        .insert("tanuki-client", "phone task".parse().unwrap());
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(response).await["error"]["code"],
+        "conflicting_client"
     );
 }
 

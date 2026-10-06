@@ -6,83 +6,83 @@ that does not turn the provisional choice into an accepted requirement.
 
 ## Actually important — please answer
 
-1. **Checkpoint C schema installation and overlap.** May I use the recommended
-   rule that installing/replacing a direct schema is atomic and rejected when
-   current matching values violate it, without casting stored data; every
-   matching constraint must pass, and overlapping casting rules are rejected
-   to avoid order-dependent conversion?
-2. **Checkpoint C and the system namespace.** Should broad schema selectors
-   such as `/**` apply only to ordinary topics while explicit `$`-rooted schema
-   branches are rejected? The stricter alternative rejects any selector that
-   could intersect system paths, which would make `/**` unusable for an
-   ordinary catch-all.
-3. **Checkpoint B subscription contract.** Should a successful initial
-   `snapshot` double as the reply to `subscribe`, followed only by `update`
-   messages, with request-correlated `reply`/`error` for other operations?
-   The provisional implementation will use this simpler ordering and full-node
-   upserts inside atomic delta batches.
-4. **Slow-consumer contract and limits.** Is disconnect-and-resnapshot the
-   desired policy when a connection exceeds a 1 MiB outgoing-byte budget, with
-   no dropped/coalesced occurrences? Also confirm 1 MiB as the initial maximum
-   individual snapshot/message size. The transport now enforces the individual
-   limit and uses a 64-complete-batch core queue; total queued-byte accounting
-   remains unimplemented.
-5. **Repeated same-topic operations.** Should checkpoint B freeze the current
-   rule: one definition, one claim, and one submission slot may compose in
-   operation order, while repeats in a slot and all same-topic output/removal
-   combinations are rejected?
-6. **Corrupt persistence at startup.** Should Tanuki refuse to start with a
-   typed/logged error when its configured snapshot is malformed or unsupported,
-   rather than silently treating it as empty? My provisional implementation
-   will fail startup and leave the file untouched; an explicit quarantine/
-   recovery command can be added if actual operations need it.
+1. **Destructive schema activation.** You suggested an explicit “apply anyway”
+   choice when existing values violate a newly installed schema. Should the
+   default attempt reject atomically with a violation report, while an explicit
+   force mode atomically installs the schema and removes deny-violating data?
+   For desired inputs, I recommend clearing only the offending retained value
+   while preserving its definition and claim; for state, removing the node is
+   the only meaningful equivalent. Warning-rule violations would remain and be
+   reported. Also, must rules within one schema be non-overlapping, or is the
+   zero-overlap rule only between separately installed schemas?
+
+2. **Repeated operations on one topic in one batch.** The current rule allows
+   one operation from each distinct input lifecycle stage, so a batch may
+   `define_input`, then `claim_input`, then `submit_desired` for `/lamp/desired`.
+   It rejects two `publish_state` operations for `/lamp/hue`, a publish followed
+   by `remove_node`, two desired submissions, or two events on the same topic.
+   Should these repeats stay invalid, or should Tanuki execute them in order
+   (making the last retained operation win while still delivering each instant
+   occurrence)?
 
 ## Consequential, but the likely answer seems clear
 
-1. **Retained node wire shape.** Normalize both state and desired nodes around a
+1. **Queued-byte limit.** Keep the accepted disconnect-only behavior and 1 MiB
+   individual message limit. Replace the current 64-batch core queue as the
+   primary transport limit with a 1 MiB encoded outgoing-byte budget when the
+   transport queue is introduced. Overflow closes only that client with
+   `slow_consumer`; reconnect is an ordinary new subscription and receives the
+   ordinary initial snapshot, with no special recovery protocol.
+2. **Retained node wire shape.** Normalize both state and desired nodes around a
    `current` object (`value`, `last_write`, `expires_at`). Desired `current:
-   null` then differs cleanly from `current: {value: null, ...}`. The
-   provisional snapshot/update DTOs now use this shape for both kinds.
-2. **Request identifiers.** Use opaque client-supplied strings. An error for a
+   null` then differs cleanly from `current: {value: null, ...}`.
+3. **Request identifiers.** Use opaque client-supplied strings. An error for a
    message that cannot be decoded enough to recover its ID uses `request_id:
    null`.
-3. **Filtered commit sequences.** Keep the global commit sequence in snapshots
+4. **Filtered commit sequences.** Keep the global commit sequence in snapshots
    and updates. Selected streams legitimately skip irrelevant global commits,
    so a gap is informational and not proof of message loss.
-4. **MessagePack semantic extension tags.** Use extension tag `1` for UTF-8
-   RFC 3339 timestamps and tag `2` for UTF-8 ISO-8601 fixed durations. Bytes use
-   MessagePack's native binary type; ordinary values use native primitives.
-5. **Connection codec selection.** Let the hello frame choose JSON text or
-   MessagePack binary and require that codec for the rest of the connection.
-   This avoids per-message ambiguity and currently returns `codec_changed` for
-   a later frame of the other kind.
-6. **Instant-output metadata across restart.** Preserve event-node publisher
+5. **Instant-output metadata across restart.** Preserve event-node publisher
    metadata but never occurrences; preserve command definitions but never
-   command payloads. This keeps the existing snapshot model without inventing
-   replay.
+   command payloads.
 
 ## Provisional defaults probably worth a quick skim
 
-1. HTTP listens on `127.0.0.1:3000` unless `TANUKI_LISTEN` is set.
-2. Stateless writes use the validated `tanuki-client` header; reads are
-   anonymous.
-3. Omitted retained-value expiry provisionally preserves the existing absolute
-   deadline; a new value has no deadline. It does not renew the prior relative
-   duration. Explicit `clear` and `set` remain available.
-4. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
+1. Omitted retained-value expiry preserves the existing absolute deadline; a
+   new value has no deadline. It does not renew the prior relative duration.
+   Explicit `clear` and `set` remain available.
+2. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
    `$map`; literal maps containing reserved tag keys must use `$map`.
-5. Exact current dependency versions are pinned and `Cargo.lock` is committed.
-6. WebSocket subscriptions buffer 64 complete update batches. A second managed
-   connection with the same name closes the old socket with private-use code
-   4001; slow consumers use retry-later code 1013.
-7. Persistence will use one readable versioned JSON snapshot, atomic temporary
-   file replacement, a 30-second periodic attempt, and a final orderly-shutdown
-   attempt. The default path is `tanuki.snapshot.json`; `TANUKI_SNAPSHOT`
-   overrides it.
+3. Exact current dependency versions are pinned and `Cargo.lock` is committed.
+4. A second managed connection with the same name closes the old socket with
+   private-use code 4001. Slow consumers use retry-later code 1013.
+5. Persistence uses a versioned MessagePack snapshot, atomic temporary-file
+   replacement, a 30-second periodic attempt, and a final orderly-shutdown
+   attempt. `TANUKI_SNAPSHOT` overrides the default `tanuki.db` path.
 
-## Resolved or accepted elsewhere
+## Resolved in the 2026-10-06 review
 
-Accepted decisions remain in `docs/architecture.md` and
-`docs/decisions-to-review.md`; this file should not reopen them without a new
-reason. Remove items above when resolved and record the outcome in the
-authoritative document.
+- A subscription yields one complete initial snapshot and then atomic update
+  batches. Reconnection has no special resnapshot/replay state.
+- Schema rules never govern `/$*`. Broad selectors such as `/**` range over
+  ordinary topics for schemas; explicitly system-rooted schema rules are
+  invalid.
+- Separately installed schemas do not have overlapping rules.
+  `Selector::intersects` now provides the pattern-level predicate needed to
+  enforce that invariant; overlap within one schema remains a question above.
+- MessagePack timestamps use the standard extension type `-1`; duration keeps
+  Tanuki application extension type `2`.
+- Every WebSocket text frame is JSON and every binary frame is MessagePack.
+  The hello frame's codec is used for unsolicited snapshots/updates, while a
+  request's reply uses that request frame's codec.
+- Stateless HTTP writes accept either `tanuki-client` or `?client=`. The
+  `X-` prefix is intentionally not used because RFC 6648 deprecated that
+  convention. Conflicting forms are rejected.
+- The default listener is `127.0.0.1:5167`.
+- Persistence is MessagePack. Invalid configured snapshots are copied to an
+  adjacent `.bak` (then `.bak.N` if needed), logged, and startup continues with
+  empty state.
+
+Accepted decisions are recorded in `docs/spec.md`, `docs/architecture.md`, and
+`docs/decisions-to-review.md`. This file should not reopen them without a new
+reason.

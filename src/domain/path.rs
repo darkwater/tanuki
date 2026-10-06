@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{collections::VecDeque, fmt, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
@@ -138,6 +138,57 @@ impl Selector {
 
         matched[0][0]
     }
+
+    /// Returns whether some valid topic can match both selectors.
+    #[must_use]
+    pub fn intersects(&self, other: &Self) -> bool {
+        let left_len = self.segments.len();
+        let right_len = other.segments.len();
+        let mut pending = VecDeque::from([(0, 0, false)]);
+        let mut visited = vec![vec![[false; 2]; right_len + 1]; left_len + 1];
+
+        while let Some((left, right, consumed)) = pending.pop_front() {
+            let consumed_index = usize::from(consumed);
+            if visited[left][right][consumed_index] {
+                continue;
+            }
+            visited[left][right][consumed_index] = true;
+            if left == left_len && right == right_len {
+                if consumed {
+                    return true;
+                }
+                continue;
+            }
+
+            let left_segment = self.segments.get(left);
+            let right_segment = other.segments.get(right);
+            if matches!(left_segment, Some(SelectorSegment::Recursive)) {
+                pending.push_back((left + 1, right, consumed));
+            }
+            if matches!(right_segment, Some(SelectorSegment::Recursive)) {
+                pending.push_back((left, right + 1, consumed));
+            }
+
+            match (left_segment, right_segment) {
+                (Some(SelectorSegment::Recursive), Some(SelectorSegment::Recursive)) => {
+                    pending.push_back((left, right, true));
+                }
+                (Some(SelectorSegment::Recursive), Some(_)) => {
+                    pending.push_back((left, right + 1, true));
+                }
+                (Some(_), Some(SelectorSegment::Recursive)) => {
+                    pending.push_back((left + 1, right, true));
+                }
+                (Some(left_segment), Some(right_segment))
+                    if left_segment.intersects(right_segment) =>
+                {
+                    pending.push_back((left + 1, right + 1, true));
+                }
+                _ => {}
+            }
+        }
+        false
+    }
 }
 
 impl FromStr for Selector {
@@ -251,6 +302,21 @@ impl SelectorSegment {
             Self::One => true,
             Self::Recursive => unreachable!("recursive selectors are handled by the matcher"),
             Self::Choice(choices) => choices.iter().any(|choice| choice == topic_segment),
+        }
+    }
+
+    fn intersects(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::One, _) | (_, Self::One) => true,
+            (Self::Literal(left), Self::Literal(right)) => left == right,
+            (Self::Literal(literal), Self::Choice(choices))
+            | (Self::Choice(choices), Self::Literal(literal)) => choices.contains(literal),
+            (Self::Choice(left), Self::Choice(right)) => {
+                left.iter().any(|choice| right.contains(choice))
+            }
+            (Self::Recursive, _) | (_, Self::Recursive) => {
+                unreachable!("recursive selector segments are handled by Selector::intersects")
+            }
         }
     }
 }

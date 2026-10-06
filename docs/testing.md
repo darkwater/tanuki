@@ -20,6 +20,7 @@ The full quality gates are recorded in `docs/toolchain.md` and CI.
 | Absolute topics; virtual root; empty/dot/trailing-segment rejection | `tests/domain_paths.rs::topic_paths_enforce_boundaries_through_every_public_conversion` |
 | Reserved selector characters and system namespace | `tests/domain_paths.rs::topic_paths_enforce_boundaries_through_every_public_conversion` |
 | Exact, `*`, zero-or-more `**`, brace choice, union, and empty matching | `tests/domain_paths.rs::selector_matcher_covers_exact_single_recursive_choice_union_and_empty` |
+| Selector intersection and nonintersection matching invariant | `tests/domain_paths.rs::selector_intersection_detects_shared_possible_topics` and `nonintersecting_selectors_never_match_the_same_topic_in_a_small_corpus` |
 | Malformed selectors and codec validation | `tests/domain_paths.rs::malformed_selector_syntax_is_rejected_instead_of_guessed` |
 | Maps do not create child topics | `tests/domain_paths.rs::maps_remain_values_instead_of_implicit_child_topics` and `tests/domain_values.rs::a_map_is_one_runtime_value` |
 | Finite floats and missing-versus-null desired payload | `tests/domain_values.rs` |
@@ -165,12 +166,13 @@ cargo test --test core_expiry --test scheduler --test http_api --test websocket_
 
 ## Task 08 — best-effort persistence and restart
 
-`tests/persistence.rs` verifies coherent versioned capture, absolute-expiry
+`tests/persistence.rs` verifies coherent versioned MessagePack capture, absolute-expiry
 filtering, retained desired definitions/values, absent restored claims and
 sessions, instant metadata without payload replay, sequence continuation,
 missing/corrupt/version handling, and a failed atomic replacement that leaves
 its target intact. `tests/persistence_server.rs` verifies orderly save and
-restart over real HTTP plus a production-binary startup smoke test.
+restart over real HTTP, corrupt-file backup with empty startup, plus a
+production-binary startup smoke test.
 
 Run the focused suite with:
 

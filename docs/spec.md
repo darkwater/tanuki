@@ -134,7 +134,7 @@ Consumers should be able to recompute outputs from a coherent selected input sha
 
 Updates are batches. Removal must be a distinct enum variant, preventing accidental use as a current value. A removal carries the last visible state; metadata-only changes and definition-only nodes must also be representable. Exact types remain open.
 
-SSE, when implemented, must preserve atomic batches in one event. No event replay or missed-event log is required. Slow-client policy is not yet selected (D8).
+SSE, when implemented, must preserve atomic batches in one event. No event replay or missed-event log is required. A slow consumer is disconnected without a special recovery state; reconnecting establishes an ordinary new subscription with its initial snapshot.
 
 ## Expiry, freshness, and persistence
 
@@ -146,7 +146,9 @@ Value expiry, input-claim release, connection liveness, and overdue freshness ar
 
 Schemas should eventually express an expected update interval. Becoming overdue reports a status/diagnostic without deleting the value. This requires timed checks, not only validation during writes.
 
-Retained data should survive restarts through best-effort persistence. Acknowledgement does not promise disk durability. No event recovery is required, and sessions cannot restart as live connections. The exact persistence mechanism is open; coherent periodic snapshots are recommended (D8).
+Retained data survives restarts through best-effort, coherent, versioned
+MessagePack snapshots. Acknowledgement does not promise disk durability. No
+event recovery is required, and sessions cannot restart as live connections.
 
 ## Schemas
 
@@ -154,7 +156,13 @@ User schemas govern ordinary topics. Their basic interface asks whether a value 
 
 Direct validation may attempt a cast and validate the result again. A successful direct cast stores the resulting value. Failed validation follows the configured rejection/warning policy. The schema chooses warning (log and allow) or error (deny). Only denying constraints guarantee valid values reach consumers. No global strictness policy overrides that choice (D3).
 
-Schema activation, updates, overlaps, cast ordering, and validation of a batch's candidate state must have deterministic rules. Advanced schema language features can wait; these structural rules cannot be implicit.
+Schema activation and replacement are atomic. A newly installed schema must
+not overlap rules in another installed schema: two patterns conflict when some
+valid topic could match both. Whether rules inside one schema may overlap, and
+the handling of already-stored violations during activation, remain open. Cast
+ordering and validation of a batch's candidate state must be deterministic.
+Advanced schema language features can wait; these structural rules cannot be
+implicit.
 
 Schema management may live under `/$schemas/<name>/...`. The exact declaration format and atomic installation operation are unselected.
 
@@ -172,7 +180,10 @@ A first path segment starting with `$` is reserved for Tanuki, including its des
 
 User schemas do not run on system topics; schemas targeting them are invalid. Built-in validation governs permitted operations and returns distinct errors, such as an attempt to alter another session's properties. A warning schema cannot bypass these checks.
 
-Broad schema selectors and links crossing the system boundary need explicit rules (D3, D4). System topics can otherwise participate in observation where exposed.
+For schema matching, broad selectors such as `/**` range only over ordinary
+topics. An explicitly system-rooted schema rule is invalid. Link behavior when
+crossing the system boundary remains a D4 decision. System topics can otherwise
+participate in observation where exposed.
 
 Central diagnostics and logging are intended. Exact paths are unselected. The future runtime may expose script status, but the initial server must be diagnosable without that runtime.
 

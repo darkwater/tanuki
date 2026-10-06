@@ -46,6 +46,26 @@ impl SnapshotStore {
         SnapshotFile::decode(&bytes)?.restore(now).map(Some)
     }
 
+    pub fn load_or_recover(&self, now: Timestamp) -> Result<LoadOutcome, PersistenceError> {
+        match self.load(now) {
+            Ok(core) => Ok(LoadOutcome {
+                core: core.unwrap_or_else(Core::new),
+                recovery: None,
+            }),
+            Err(error @ PersistenceError::Read { .. }) => Err(error),
+            Err(error) => {
+                let backup = backup_corrupt_snapshot(&self.path)?;
+                Ok(LoadOutcome {
+                    core: Core::new(),
+                    recovery: Some(SnapshotRecovery {
+                        backup,
+                        reason: error.to_string(),
+                    }),
+                })
+            }
+        }
+    }
+
     pub async fn save(
         &self,
         core: Arc<Mutex<Core>>,
@@ -55,13 +75,54 @@ impl SnapshotStore {
             let core = core.lock().map_err(|_| PersistenceError::CorePoisoned)?;
             SnapshotFile::capture(&core, now)?
         };
-        let bytes = serde_json::to_vec_pretty(&snapshot)
+        let bytes = rmp_serde::to_vec_named(&snapshot)
             .map_err(|source| PersistenceError::Encode { source })?;
         let path = self.path.clone();
         tokio::task::spawn_blocking(move || write_atomic(&path, &bytes))
             .await
             .map_err(|source| PersistenceError::Task { source })??;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct LoadOutcome {
+    core: Core,
+    recovery: Option<SnapshotRecovery>,
+}
+
+impl LoadOutcome {
+    #[must_use]
+    pub fn was_recovered(&self) -> bool {
+        self.recovery.is_some()
+    }
+
+    #[must_use]
+    pub fn recovery(&self) -> Option<&SnapshotRecovery> {
+        self.recovery.as_ref()
+    }
+
+    #[must_use]
+    pub fn into_core(self) -> Core {
+        self.core
+    }
+}
+
+#[derive(Debug)]
+pub struct SnapshotRecovery {
+    backup: PathBuf,
+    reason: String,
+}
+
+impl SnapshotRecovery {
+    #[must_use]
+    pub fn backup(&self) -> &Path {
+        &self.backup
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
     }
 }
 
@@ -75,7 +136,7 @@ pub enum PersistenceError {
     #[error("failed to decode the snapshot")]
     Decode {
         #[source]
-        source: serde_json::Error,
+        source: rmp_serde::decode::Error,
     },
     #[error("unsupported snapshot format `{format}` version {version}")]
     Unsupported { format: String, version: u32 },
@@ -88,7 +149,12 @@ pub enum PersistenceError {
     #[error("failed to encode the snapshot")]
     Encode {
         #[source]
-        source: serde_json::Error,
+        source: rmp_serde::encode::Error,
+    },
+    #[error("failed to back up the corrupt snapshot")]
+    Backup {
+        #[source]
+        source: io::Error,
     },
     #[error("failed to write the snapshot")]
     Write {
@@ -135,7 +201,7 @@ impl SnapshotFile {
 
     fn decode(bytes: &[u8]) -> Result<Self, PersistenceError> {
         let snapshot: Self =
-            serde_json::from_slice(bytes).map_err(|source| PersistenceError::Decode { source })?;
+            rmp_serde::from_slice(bytes).map_err(|source| PersistenceError::Decode { source })?;
         if snapshot.format != FORMAT || snapshot.version != VERSION {
             return Err(PersistenceError::Unsupported {
                 format: snapshot.format,
@@ -160,6 +226,40 @@ impl SnapshotFile {
             CommitSequence::from_persisted(self.sequence),
             nodes,
         ))
+    }
+}
+
+fn backup_corrupt_snapshot(path: &Path) -> Result<PathBuf, PersistenceError> {
+    let mut source = File::open(path).map_err(|source| PersistenceError::Backup { source })?;
+    let mut suffix = 0_u64;
+    loop {
+        let mut name = path.as_os_str().to_os_string();
+        if suffix == 0 {
+            name.push(".bak");
+        } else {
+            name.push(format!(".bak.{suffix}"));
+        }
+        let backup = PathBuf::from(name);
+        let mut destination = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                suffix += 1;
+                continue;
+            }
+            Err(source) => return Err(PersistenceError::Backup { source }),
+        };
+        let result = io::copy(&mut source, &mut destination)
+            .and_then(|_| destination.sync_all())
+            .map_err(|source| PersistenceError::Backup { source });
+        if let Err(error) = result {
+            let _ = fs::remove_file(&backup);
+            return Err(error);
+        }
+        return Ok(backup);
     }
 }
 

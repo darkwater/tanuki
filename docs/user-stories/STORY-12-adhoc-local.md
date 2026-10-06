@@ -1,8 +1,8 @@
 # US-12 — Ad hoc local and remote scripts
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** simulated HTTP write/read implemented; real-world use and Unix socket not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-05.
+- **Last updated:** 2026-10-06.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -32,10 +32,16 @@ Actual shell/phone request examples, Unix-socket transport exposure and deployme
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C1, S1, T1; HTTP task 04; add socket parity tests when that adapter lands.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- `tests/http_api.rs::stateless_battery_publish_and_anonymous_read_cross_the_real_router`
+  verifies US-12.A1 and US-12.A2 through the production router.
+- `tests/http_api.rs::stateless_attribution_accepts_query_and_rejects_conflicts`
+  verifies that a small client may use either `tanuki-client` or `?client=` and
+  that ambiguous attribution is rejected.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-06: HTTP attribution gained a query-parameter alternative for clients
+  that cannot conveniently set headers; no actual phone automation is verified.

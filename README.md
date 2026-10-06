@@ -17,9 +17,10 @@ The repository pins `nightly-2026-10-01`, including rustfmt and Clippy.
 cargo run
 ```
 
-The default listener is `127.0.0.1:3000`. Set `TANUKI_LISTEN` to another socket
+The default listener is `127.0.0.1:5167`. Set `TANUKI_LISTEN` to another socket
 address. Retained state is saved every 30 seconds and at orderly shutdown to
-`tanuki.snapshot.json`; set `TANUKI_SNAPSHOT` to choose another path. Client
+`tanuki.db`; set `TANUKI_SNAPSHOT` to choose another path. Invalid snapshot
+data is backed up beside that file and startup continues empty. Client
 names are attribution and session identity, not authentication, so remote
 exposure must be an explicit deployment decision.
 
@@ -30,10 +31,10 @@ curl -sS \
   -H 'content-type: application/json' \
   -H 'tanuki-client: phone task' \
   --data '{"value":72,"expiry":{"mode":"set","duration":"PT1H"}}' \
-  http://127.0.0.1:3000/v1/state/battery/phone
+  http://127.0.0.1:5167/v1/state/battery/phone
 
 curl -sS \
-  'http://127.0.0.1:3000/v1/snapshot?select=/battery/*'
+  'http://127.0.0.1:5167/v1/snapshot?select=/battery/*'
 ```
 
 `POST /v1/write` accepts a nonempty atomic `operations` array. Supported
@@ -44,7 +45,9 @@ Stateless HTTP can define or submit inputs but cannot claim them.
 ## WebSocket
 
 Connect to `/v1/ws`. The first frame is a hello and determines the codec for
-the connection. Text frames contain JSON; binary frames contain MessagePack.
+unsolicited snapshots and updates. Every text frame contains JSON and every
+binary frame contains MessagePack; request frames may mix codecs, and each
+correlated reply uses its request's codec.
 
 ```json
 {"type":"hello","request_id":"h1","client":"laptop","selectors":["/battery/*","/lamp/*"]}

@@ -3,14 +3,10 @@
 ## Startup and shutdown
 
 The binary starts a Tokio runtime, initializes structured tracing, binds
-`TANUKI_LISTEN` (default `127.0.0.1:3000`), constructs one in-memory `Core`, and
+`TANUKI_LISTEN` (default `127.0.0.1:5167`), restores or constructs one in-memory `Core`, and
 serves the Axum router. Ctrl-C starts graceful HTTP shutdown. Tests bind an
 ephemeral listener and inject state, clock, and a one-shot shutdown future
 through `server::serve_with_core`.
-
-There is no restore step or persistence background work yet. Later startup
-will restore before accepting requests; later shutdown will request a
-best-effort save after stopping new work.
 
 Link-recovery remains pending its implementation card. The production server
 restores its configured snapshot before serving and starts one deadline
@@ -112,11 +108,13 @@ computes a new absolute deadline from server wall time.
 
 ## Save, restore, and shutdown
 
-Production startup reads `TANUKI_SNAPSHOT` or `tanuki.snapshot.json`. A missing
-file means first startup. Malformed data, invalid domain values, or an unknown
-format/version returns a typed startup error; Tanuki does not rename or pretend
-the file was empty. Restore drops expired retained values, all sessions and all
-claims before the router becomes available.
+Production startup reads `TANUKI_SNAPSHOT` or `tanuki.db`. A missing file means
+first startup. The snapshot is versioned MessagePack. Malformed data, invalid
+domain values, or an unknown format/version is copied to an adjacent `.bak`
+without replacing an earlier backup, logged, and treated as empty state. A
+failure to read or back up the file remains a typed startup error. A valid
+restore drops expired retained values, all sessions, and all claims before the
+router becomes available.
 
 Every 30 seconds the server clones one coherent snapshot under the core lock.
 Serialization and disk I/O happen afterward on a blocking worker. The writer

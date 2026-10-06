@@ -81,14 +81,11 @@ impl Serialize for BinaryValue<'_> {
                 }
                 map.end()
             }
-            Value::Timestamp(value) => {
-                let text = value.to_string();
-                ExtValue {
-                    tag: 1,
-                    bytes: text.as_bytes(),
-                }
-                .serialize(serializer)
+            Value::Timestamp(value) => ExtValue {
+                tag: -1,
+                bytes: &encode_timestamp(*value),
             }
+            .serialize(serializer),
             Value::Duration(value) => {
                 let text = jiff::fmt::temporal::SpanPrinter::new().duration_to_string(value);
                 ExtValue {
@@ -219,14 +216,13 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
         deserializer: D,
     ) -> Result<Self::Value, D::Error> {
         let ExtOwnedPayload(tag, bytes) = ExtOwnedPayload::deserialize(deserializer)?;
-        let text = String::from_utf8(bytes.0).map_err(de::Error::custom)?;
         match tag {
-            1 => text
-                .parse()
+            -1 => decode_timestamp(&bytes.0)
                 .map(Value::Timestamp)
                 .map(BinaryOwnedValue)
                 .map_err(de::Error::custom),
-            2 => text
+            2 => String::from_utf8(bytes.0)
+                .map_err(de::Error::custom)?
                 .parse()
                 .map(Value::Duration)
                 .map(BinaryOwnedValue)
@@ -236,6 +232,56 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
             ))),
         }
     }
+}
+
+fn encode_timestamp(value: jiff::Timestamp) -> Vec<u8> {
+    let mut seconds = value.as_second();
+    let subsecond = value.subsec_nanosecond();
+    let nanoseconds = if subsecond < 0 {
+        seconds -= 1;
+        (1_000_000_000 + subsecond) as u32
+    } else {
+        subsecond as u32
+    };
+
+    if (0..(1_i64 << 34)).contains(&seconds) {
+        let packed = (u64::from(nanoseconds) << 34) | seconds as u64;
+        if packed <= u64::from(u32::MAX) {
+            return (packed as u32).to_be_bytes().to_vec();
+        }
+        return packed.to_be_bytes().to_vec();
+    }
+
+    let mut bytes = Vec::with_capacity(12);
+    bytes.extend_from_slice(&nanoseconds.to_be_bytes());
+    bytes.extend_from_slice(&seconds.to_be_bytes());
+    bytes
+}
+
+fn decode_timestamp(bytes: &[u8]) -> Result<jiff::Timestamp, CodecError> {
+    let (seconds, nanoseconds) = match bytes {
+        [a, b, c, d] => (i64::from(u32::from_be_bytes([*a, *b, *c, *d])), 0),
+        [a, b, c, d, e, f, g, h] => {
+            let packed = u64::from_be_bytes([*a, *b, *c, *d, *e, *f, *g, *h]);
+            (
+                (packed & 0x0000_0003_ffff_ffff) as i64,
+                (packed >> 34) as i32,
+            )
+        }
+        [a, b, c, d, e, f, g, h, i, j, k, l] => (
+            i64::from_be_bytes([*e, *f, *g, *h, *i, *j, *k, *l]),
+            u32::from_be_bytes([*a, *b, *c, *d]) as i32,
+        ),
+        _ => {
+            return Err(error(
+                "MessagePack timestamp payload must be 4, 8, or 12 bytes",
+            ));
+        }
+    };
+    if !(0..1_000_000_000).contains(&nanoseconds) {
+        return Err(error("MessagePack timestamp nanoseconds are out of range"));
+    }
+    jiff::Timestamp::new(seconds, nanoseconds).map_err(|source| error(source.to_string()))
 }
 
 #[derive(Deserialize)]

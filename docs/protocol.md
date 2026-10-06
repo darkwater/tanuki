@@ -27,12 +27,19 @@ submit on one input topic in operation order.
 The current core rejects duplicate operations in the same input lifecycle slot,
 same-topic output/removal combinations, and writes to the reserved `$`
 namespace. The repeated-target details remain provisional until the external
-batch contract is reviewed. The persistence format is not published yet.
+batch contract is reviewed. The persistence format is internal and not a
+durable API.
 
 ## HTTP version 1
 
-Writes require a validated UTF-8 `tanuki-client` header. This is attribution,
-not authentication, and creates no managed session. Reads are anonymous.
+Writes require a validated client name supplied by either the `tanuki-client`
+header or `client` query parameter. If both are present they must agree. This is
+attribution, not authentication, and creates no managed session. Reads are
+anonymous. The header deliberately has no `X-` prefix; that convention is
+deprecated by RFC 6648.
+
+Reference: [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) for the `X-`
+prefix.
 
 | Method and path | Body/query | Meaning |
 | --- | --- | --- |
@@ -76,10 +83,10 @@ State and desired nodes use an explicit `current` wrapper. Desired
 means `Value::Null` was actually submitted. This distinction is preserved in
 snapshots and updates.
 
-## Provisional subscription messages
+## Subscription messages
 
-Checkpoint B remains open in `open-questions.md`. The implemented review shape
-uses a correlated snapshot as successful subscription acknowledgement:
+The accepted stream uses a correlated snapshot as successful subscription
+acknowledgement:
 
 ```json
 {"type":"snapshot","request_id":"s1","sequence":42,"nodes":{},"warnings":[]}
@@ -102,13 +109,16 @@ from a new snapshot; replay is not promised.
 ## WebSocket version 1
 
 `GET /v1/ws` upgrades to a managed full-duplex session. The first data message
-must be `hello`; its frame kind fixes the codec for the connection:
+must be `hello`; its frame kind selects the codec for unsolicited server
+snapshots and updates:
 
 ```json
 {"type":"hello","request_id":"h1","client":"laptop","selectors":["/battery/*"]}
 ```
 
-Text frames contain JSON and binary frames contain MessagePack. A successful
+Every text frame contains JSON and every binary frame contains MessagePack,
+including when a client mixes them on one connection. A request-correlated
+reply uses the request frame's codec. A successful
 hello receives exactly one correlated `snapshot` before ordinary replies or
 updates. The snapshot's `warnings` include managed-session replacement. Later
 client messages are `write` messages whose `operations` array is identical to
@@ -122,8 +132,7 @@ The write reply is sent before that same connection's resulting selected
 update. Updates from unrelated concurrent writers can already be queued, so
 clients distinguish correlated replies by `request_id` rather than assuming
 every adjacent message is a pair. Decode failures whose ID cannot be recovered
-use `request_id: null`. Switching frame codec after hello returns a
-`codec_changed` error.
+use `request_id: null` and the malformed frame's codec.
 
 Opening another managed WebSocket with the same client replaces the old
 session. The old socket closes with code 4001 and reason `session_replaced`;
@@ -135,15 +144,21 @@ Inbound frames and individually encoded outbound messages are limited to 1
 MiB. Each subscription currently buffers at most 64 complete commit batches;
 the open byte-budget decision is tracked in `open-questions.md`.
 
-MessagePack uses native primitives and binary values. Tanuki extension tag 1
-contains a UTF-8 RFC 3339 timestamp and tag 2 contains a UTF-8 ISO-8601 fixed
-duration. These tag numbers remain provisional pending checkpoint B.
+MessagePack uses native primitives and binary values. Timestamps use the
+standard MessagePack timestamp extension type `-1` and its 32-, 64-, or 96-bit
+payload as appropriate. Tanuki application extension type `2` contains a UTF-8
+ISO-8601 fixed duration.
+
+Reference: the [MessagePack timestamp specification](https://github.com/msgpack/msgpack/blob/master/spec.md#timestamp-extension-type).
 
 ## Persistence format 1
 
-The local snapshot is readable JSON with `format: "tanuki-snapshot"` and
+The local snapshot is MessagePack with `format: "tanuki-snapshot"` and
 `version: 1`. It is an internal restart format, not a client transport or an
 acknowledgement log. It contains one coherent commit sequence and retained
 node/definition metadata, but no live sessions, claims, event occurrences, or
 command occurrences. Future incompatible formats must use a new version;
-unknown versions fail startup visibly.
+unknown versions are treated as invalid snapshots. At startup invalid data is
+copied beside the configured file with a `.bak` suffix (or `.bak.N` without
+overwriting an earlier backup), a warning is logged, and Tanuki starts with
+empty state. Ordinary read or backup I/O failures still fail startup.

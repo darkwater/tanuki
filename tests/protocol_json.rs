@@ -39,7 +39,7 @@ fn messagepack_uses_native_binary_and_semantic_extensions() {
 
     let timestamp: jiff::Timestamp = "2023-11-14T22:13:20Z".parse().unwrap();
     let encoded = rmp_serde::to_vec_named(&JsonValue::new(Value::Timestamp(timestamp))).unwrap();
-    assert_eq!(&encoded[..3], &[0xc7, 20, 1]);
+    assert_eq!(encoded, vec![0xd6, 0xff, 0x65, 0x53, 0xf1, 0x00]);
     assert!(!encoded.windows(10).any(|window| window == b"$timestamp"));
     let decoded: JsonValue = rmp_serde::from_slice(&encoded).unwrap();
     assert_eq!(decoded.into_inner(), Value::Timestamp(timestamp));
@@ -49,6 +49,31 @@ fn messagepack_uses_native_binary_and_semantic_extensions() {
     assert_eq!(&encoded[..2], &[0xd7, 2]);
     let decoded: JsonValue = rmp_serde::from_slice(&encoded).unwrap();
     assert_eq!(decoded.into_inner(), Value::Duration(duration));
+}
+
+#[test]
+fn messagepack_timestamp_uses_all_standard_widths() {
+    let timestamp: jiff::Timestamp = "2023-11-14T22:13:20.123456789Z".parse().unwrap();
+    let encoded = rmp_serde::to_vec_named(&JsonValue::new(Value::Timestamp(timestamp))).unwrap();
+    assert_eq!(&encoded[..2], &[0xd7, 0xff]);
+    assert_eq!(encoded.len(), 10);
+    assert_eq!(
+        rmp_serde::from_slice::<JsonValue>(&encoded)
+            .unwrap()
+            .into_inner(),
+        Value::Timestamp(timestamp)
+    );
+
+    let timestamp: jiff::Timestamp = "1969-12-31T23:59:59.5Z".parse().unwrap();
+    let encoded = rmp_serde::to_vec_named(&JsonValue::new(Value::Timestamp(timestamp))).unwrap();
+    assert_eq!(&encoded[..3], &[0xc7, 12, 0xff]);
+    assert_eq!(encoded.len(), 15);
+    assert_eq!(
+        rmp_serde::from_slice::<JsonValue>(&encoded)
+            .unwrap()
+            .into_inner(),
+        Value::Timestamp(timestamp)
+    );
 }
 
 #[test]

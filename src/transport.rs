@@ -222,7 +222,7 @@ async fn websocket_session(mut socket: WebSocket, state: HttpState) {
 async fn websocket_loop(
     socket: &mut WebSocket,
     state: &HttpState,
-    codec: WireCodec,
+    subscription_codec: WireCodec,
     handle: &SessionHandle,
     subscription: &mut Subscription,
     kicked: &mut watch::Receiver<bool>,
@@ -248,7 +248,7 @@ async fn websocket_loop(
                     }
                     return;
                 };
-                if send_server_message(socket, codec, &ServerMessage::update(&update)).await.is_err() {
+                if send_server_message(socket, subscription_codec, &ServerMessage::update(&update)).await.is_err() {
                     return;
                 }
             }
@@ -262,25 +262,21 @@ async fn websocket_loop(
                     Message::Close(_) => return,
                     Message::Text(_) | Message::Binary(_) => {
                         let decoded = decode_client_message(incoming);
-                        let message = match decoded {
-                            Ok((incoming_codec, message)) if incoming_codec == codec => message,
-                            Ok(_) => {
-                                if send_server_message(socket, codec, &error_message(None, "codec_changed", "a WebSocket connection must keep the codec selected by hello")).await.is_err() { return; }
-                                continue;
-                            }
-                            Err((_, error)) => {
-                                if send_server_message(socket, codec, &error_message(None, "invalid_message", error)).await.is_err() { return; }
+                        let (incoming_codec, message) = match decoded {
+                            Ok(decoded) => decoded,
+                            Err((incoming_codec, error)) => {
+                                if send_server_message(socket, incoming_codec, &error_message(None, "invalid_message", error)).await.is_err() { return; }
                                 continue;
                             }
                         };
                         match message {
                             ClientMessage::Hello { request_id, .. } => {
-                                if send_server_message(socket, codec, &error_message(Some(request_id), "already_initialized", "hello is only valid as the first message")).await.is_err() { return; }
+                                if send_server_message(socket, incoming_codec, &error_message(Some(request_id), "already_initialized", "hello is only valid as the first message")).await.is_err() { return; }
                             }
                             ClientMessage::Write { request_id, operations } => {
                                 let response = apply_websocket_write(state, handle, request_id, operations);
                                 let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == "session_expired");
-                                if send_server_message(socket, codec, &response).await.is_err() { return; }
+                                if send_server_message(socket, incoming_codec, &response).await.is_err() { return; }
                                 if expired { return; }
                             }
                         }
@@ -422,20 +418,50 @@ fn api_server_error(request_id: Option<RequestId>, error: ApiError) -> ServerMes
 
 struct StatelessActor(WriteContext);
 
+#[derive(Deserialize)]
+struct ClientQuery {
+    client: Option<String>,
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for StatelessActor {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let header = parts.headers.get("tanuki-client").ok_or_else(|| {
-            ApiError::bad_request("missing_client", "the tanuki-client header is required")
+        let header = parts
+            .headers
+            .get("tanuki-client")
+            .map(|header| {
+                header.to_str().map_err(|_| {
+                    ApiError::bad_request("invalid_client", "tanuki-client must be valid UTF-8")
+                })
+            })
+            .transpose()?
+            .map(parse_client)
+            .transpose()?;
+        let Query(query) = Query::<ClientQuery>::try_from_uri(&parts.uri)
+            .map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
+        let query = query.client.as_deref().map(parse_client).transpose()?;
+        if let (Some(header), Some(query)) = (&header, &query)
+            && header != query
+        {
+            return Err(ApiError::bad_request(
+                "conflicting_client",
+                "tanuki-client and the client query parameter disagree",
+            ));
+        }
+        let client = header.or(query).ok_or_else(|| {
+            ApiError::bad_request(
+                "missing_client",
+                "the tanuki-client header or client query parameter is required",
+            )
         })?;
-        let text = header.to_str().map_err(|_| {
-            ApiError::bad_request("invalid_client", "tanuki-client must be valid UTF-8")
-        })?;
-        let client = ClientName::parse(text)
-            .map_err(|error| ApiError::bad_request("invalid_client", error.to_string()))?;
         Ok(Self(WriteContext::stateless(client)))
     }
+}
+
+fn parse_client(value: &str) -> Result<ClientName, ApiError> {
+    ClientName::parse(value)
+        .map_err(|error| ApiError::bad_request("invalid_client", error.to_string()))
 }
 
 #[derive(Deserialize)]

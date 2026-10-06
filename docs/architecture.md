@@ -12,7 +12,7 @@ does.
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–07 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, and deadlines |
-| `protocol` | tasks 04–06 provisional | JSON/MessagePack values and typed snapshot/update/error DTOs pending checkpoint-B approval |
+| `protocol` | tasks 04–06 implemented | JSON/MessagePack values and typed snapshot/update/error DTOs |
 | `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | task 08 implemented | Versioned coherent snapshots, restore filtering, and atomic file replacement |
@@ -153,7 +153,7 @@ slot while ambiguous repeats are rejected, and instant-output metadata remains
 present in snapshots. These choices support atomic input creation without
 introducing implicit last-write-wins or event replay.
 
-## Checkpoint B — provisionally implemented, awaiting review
+## Checkpoint B — stream contract accepted, remaining details tracked
 
 `Core::subscribe` registers a selector union and captures its snapshot within
 one exclusive core transition. A concurrent write therefore appears either in
@@ -167,7 +167,7 @@ only that subscription and records `SlowConsumer` through a separate closure
 signal. Byte accounting and the proposed 1 MiB connection budget remain a
 transport-boundary question in `open-questions.md`.
 
-The provisional wire model uses full `NodeView` values in upserts, explicit
+The wire model uses full `NodeView` values in upserts, explicit
 event/command occurrences, and removals carrying the previous node. Both state
 and desired nodes use a `current` wrapper. A successful correlated snapshot is
 the subscription acknowledgement; subsequent updates carry the global commit
@@ -176,14 +176,14 @@ sequence. Filtered streams may skip irrelevant global sequence numbers.
 `SelectedView` is a minimal client-side projection. It stages all node upserts
 and removals in one call before replacing the visible map, returns instant
 occurrences separately, and rejects duplicate or older sequences without
-mutation. These choices are implemented to make review concrete but are not
-recorded as accepted until the user answers checkpoint B.
+mutation. Same-topic batch repetition and exact queued-byte accounting remain
+open separately; they do not change the accepted snapshot-then-update stream.
 
 ## WebSocket transport implemented in task 06
 
 The Axum router owns a small connection registry separate from core state. A
-hello frame chooses JSON text or MessagePack binary for the connection, opens
-the managed core session, and atomically registers its selection. The first
+hello frame chooses JSON text or MessagePack binary for unsolicited messages,
+opens the managed core session, and atomically registers its selection. The first
 server frame is the correlated snapshot. The registry exists only to signal a
 displaced socket; session authority and replacement correctness remain owned
 by `Core` and its opaque session IDs.
@@ -196,8 +196,11 @@ cleanup before conditionally removing only the matching registry entry, so an
 old socket cannot remove its replacement.
 
 JSON retains the explicit semantic tag mapping. MessagePack carries bytes
-natively and uses provisional application extension tags for timestamps and
-durations. Both deserialize to the same transport-independent `Value` enum.
+natively, uses its standard extension type `-1` for timestamps, and uses Tanuki
+application extension type `2` for durations. Each incoming frame selects its
+own decoder and its correlated reply codec; the hello codec remains the codec
+for unsolicited snapshots and updates. Both codecs deserialize to the same
+transport-independent `Value` enum.
 The connection has a 1 MiB per-message limit and its core subscription has a
 64-batch nonblocking queue. A total queued-byte budget remains open.
 
@@ -225,7 +228,7 @@ keeps an existing absolute deadline and yields no deadline on a new value.
 ## Best-effort persistence implemented in task 08
 
 `SnapshotStore` captures one coherent selected clone while holding the core
-lock, then performs JSON encoding, file writes, fsync, and rename outside that
+lock, then performs MessagePack encoding, file writes, fsync, and rename outside that
 lock on a blocking worker. The version-1 file records its format marker,
 sequence, save time, ordinary node data, absolute expiries, and provenance.
 It never stores live sessions or input claims. Event publisher metadata and
@@ -239,6 +242,8 @@ continued so a post-restart mutation remains newer than restored snapshots.
 
 The production server loads before serving, attempts a snapshot every 30
 seconds, logs periodic failures while keeping the live core available, and
-attempts a final save after graceful network shutdown. Malformed/unsupported
-configured snapshots fail startup visibly and remain untouched. The default
-path is `tanuki.snapshot.json`, overridden by `TANUKI_SNAPSHOT`.
+attempts a final save after graceful network shutdown. Malformed, invariant-
+invalid, or unsupported configured snapshots are copied to a non-overwriting
+adjacent `.bak`, logged, and treated as empty state; read/backup I/O errors
+still fail startup. The default path is `tanuki.db`, overridden by
+`TANUKI_SNAPSHOT`.

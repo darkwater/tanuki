@@ -63,7 +63,7 @@ fn all() -> Selection {
 #[tokio::test]
 async fn coherent_save_restore_filters_expired_values_and_clears_live_authority() {
     let directory = TestDirectory::new();
-    let store = SnapshotStore::new(directory.path("snapshot.json"));
+    let store = SnapshotStore::new(directory.path("snapshot.db"));
     let core = Arc::new(Mutex::new(Core::new()));
     let session = core
         .lock()
@@ -117,6 +117,12 @@ async fn coherent_save_restore_filters_expired_values_and_clears_live_authority(
         .unwrap();
 
     store.save(Arc::clone(&core), at(1)).await.unwrap();
+    let bytes = fs::read(directory.path("snapshot.db")).unwrap();
+    assert_ne!(bytes.first(), Some(&b'{'));
+    assert_eq!(
+        rmp_serde::from_slice::<serde_json::Value>(&bytes).unwrap()["format"],
+        "tanuki-snapshot"
+    );
     let mut restored = store.load(at(50)).unwrap().unwrap();
     assert_eq!(restored.managed_session_count(), 0);
     let snapshot = restored.read(&all());
@@ -155,7 +161,7 @@ async fn coherent_save_restore_filters_expired_values_and_clears_live_authority(
 #[test]
 fn missing_is_empty_but_malformed_and_unknown_versions_are_visible_errors() {
     let directory = TestDirectory::new();
-    let path = directory.path("snapshot.json");
+    let path = directory.path("snapshot.db");
     let store = SnapshotStore::new(path.clone());
     assert!(store.load(at(0)).unwrap().is_none());
 
@@ -166,7 +172,14 @@ fn missing_is_empty_but_malformed_and_unknown_versions_are_visible_errors() {
     ));
     fs::write(
         &path,
-        br#"{"format":"tanuki-snapshot","version":99,"sequence":0,"saved_at":"1970-01-01T00:00:00Z","nodes":{}}"#,
+        rmp_serde::to_vec_named(&serde_json::json!({
+            "format": "tanuki-snapshot",
+            "version": 99,
+            "sequence": 0,
+            "saved_at": "1970-01-01T00:00:00Z",
+            "nodes": {}
+        }))
+        .unwrap(),
     )
     .unwrap();
     assert!(matches!(
@@ -175,10 +188,33 @@ fn missing_is_empty_but_malformed_and_unknown_versions_are_visible_errors() {
     ));
 }
 
+#[test]
+fn corrupt_snapshot_is_backed_up_before_recovery_starts_empty() {
+    let directory = TestDirectory::new();
+    let path = directory.path("tanuki.db");
+    fs::write(&path, b"not messagepack").unwrap();
+    let store = SnapshotStore::new(path.clone());
+
+    let recovered = store.load_or_recover(at(0)).unwrap();
+    assert!(recovered.was_recovered());
+    assert!(recovered.into_core().read(&all()).nodes().is_empty());
+    assert_eq!(
+        fs::read(path.with_extension("db.bak")).unwrap(),
+        b"not messagepack"
+    );
+
+    let recovered = store.load_or_recover(at(0)).unwrap();
+    assert!(recovered.was_recovered());
+    assert_eq!(
+        fs::read(directory.path("tanuki.db.bak.1")).unwrap(),
+        b"not messagepack"
+    );
+}
+
 #[tokio::test]
 async fn failed_atomic_replacement_is_returned_without_destroying_target() {
     let directory = TestDirectory::new();
-    let target = directory.path("snapshot.json");
+    let target = directory.path("snapshot.db");
     fs::create_dir(&target).unwrap();
     let store = SnapshotStore::new(target.clone());
     let result = store.save(Arc::new(Mutex::new(Core::new())), at(0)).await;
