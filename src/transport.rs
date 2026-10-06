@@ -1,6 +1,8 @@
 use std::{
     collections::BTreeMap,
+    convert::Infallible,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use axum::{
@@ -11,9 +13,13 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket},
     },
     http::{StatusCode, request::Parts},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response, Sse,
+        sse::{Event, KeepAlive},
+    },
     routing::{get, post, put},
 };
+use futures_util::{Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as RawJson, json};
 use tokio::sync::watch;
@@ -30,7 +36,7 @@ use crate::{
         ValueKind, WriteBatch, WriteContext, WriteOperation,
     },
     link::{LinkDefinition, LinkName},
-    protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView},
+    protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView, UpdateView},
     scheduler::DeadlineScheduler,
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
 };
@@ -63,6 +69,7 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
         .route("/v1/links/{name}", put(install_link).delete(remove_link))
         .route("/v1/schemas/{name}", put(install_schema))
         .route("/v1/snapshot", get(snapshot))
+        .route("/v1/sse", get(sse))
         .route("/v1/ws", get(websocket_upgrade))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
@@ -807,6 +814,62 @@ async fn snapshot(
         .map_err(ApiError::poisoned)?
         .read(&Selection::new(vec![query.select]));
     Ok(Json(ApiResponse::success(SnapshotView::from(&snapshot))))
+}
+
+async fn sse(
+    State(state): State<HttpState>,
+    query: Result<Query<ReadQuery>, QueryRejection>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let Query(query) =
+        query.map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
+    let subscription = state
+        .core
+        .lock()
+        .map_err(ApiError::poisoned)?
+        .subscribe(
+            Selection::new(vec![query.select]),
+            SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
+                .expect("configured subscription capacity is nonzero"),
+        )
+        .map_err(ApiError::from_core)?;
+    let initial = sse_json_event(
+        "snapshot",
+        subscription.snapshot().sequence().get(),
+        &SnapshotView::from(subscription.snapshot()),
+    );
+    let updates = stream::unfold(subscription, |mut subscription| async move {
+        let update = subscription.update().await;
+        match update {
+            Some(update) => {
+                let event = sse_json_event(
+                    "update",
+                    update.sequence().get(),
+                    &UpdateView::from(&update),
+                );
+                Some((Ok(event), subscription))
+            }
+            None => {
+                if subscription.end_reason() == Some(SubscriptionEnd::SlowConsumer) {
+                    warn!("SSE subscription disconnected as a slow consumer");
+                }
+                None
+            }
+        }
+    });
+    let events = stream::once(async { Ok(initial) }).chain(updates);
+    Ok(Sse::new(events).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
+fn sse_json_event<T: Serialize>(name: &'static str, sequence: u64, value: &T) -> Event {
+    let data = serde_json::to_string(value).expect("protocol views always serialize to JSON");
+    Event::default()
+        .event(name)
+        .id(sequence.to_string())
+        .data(data)
 }
 
 #[derive(Serialize)]

@@ -145,6 +145,21 @@ cargo test --test websocket_api --test protocol_json --test core_subscriptions
 The tests use simulated actors on loopback, not deployed devices or a polished
 client SDK. Total outgoing-byte accounting remains unimplemented.
 
+## SSE endpoint
+
+`tests/http_api.rs::sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch`
+verifies the production router's `text/event-stream` response, empty initial
+snapshot, one-event delivery of a two-topic atomic commit, and fresh-snapshot
+reconnection even when `Last-Event-ID` is supplied.
+`tests/http_api.rs::sse_query_failures_use_the_common_error_shape` verifies
+that pre-stream extractor failures retain the common HTTP error envelope.
+
+Run the focused suite with:
+
+```sh
+cargo test --test http_api sse
+```
+
 ## Task 07 — value expiry and claim grace
 
 `tests/core_expiry.rs` verifies that equal due times form one commit, state

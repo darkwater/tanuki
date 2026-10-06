@@ -4,7 +4,7 @@ Tanuki is an early personal automation fabric for named state, events, desired
 inputs, and commands. One transport-independent core supplies atomic writes,
 managed input ownership, coherent subscriptions, expiry, schemas, writable
 linked views, active diagnostics, and best-effort restart persistence to HTTP
-and WebSocket clients.
+snapshot/SSE and WebSocket clients.
 
 Tasks 00–12 of the implementation plan are complete for the initial in-repo
 release. Real-device deployment is not implied; remaining product questions and
@@ -37,7 +37,14 @@ curl -sS \
 
 curl -sS \
   'http://127.0.0.1:5167/v1/snapshot?select=/battery/*'
+
+curl -N \
+  'http://127.0.0.1:5167/v1/sse?select=/battery/*'
 ```
+
+The SSE stream starts with a complete `snapshot` event and then sends atomic
+`update` events. Reconnect always starts from a fresh snapshot; event IDs are
+informational commit sequences, not replay cursors.
 
 `POST /v1/write` accepts a nonempty atomic `operations` array. Supported
 operations are `publish_state`, `publish_event`, `define_input`, `claim_input`,
@@ -155,7 +162,7 @@ documents take precedence when they disagree.
 
 ## Current limitations
 
-TCP/MQTT/SSE adapters, authentication, a Unix-socket listener, large-blob
+TCP/MQTT adapters, authentication, a Unix-socket listener, large-blob
 transfer, event replay, outgoing queued-byte accounting, and a polished client
 SDK are not yet implemented. Link chains are deliberately unsupported.
 Persistence is periodic best effort rather than a WAL: an

@@ -148,6 +148,23 @@ An overflowing core subscription cannot stall other clients and eventually
 closes with `slow_consumer`. A reconnect has no replay cursor and receives a
 fresh snapshot.
 
+## SSE connection lifecycle
+
+1. Parse the required `select` query parameter on `GET /v1/sse` using the same
+   selector type as snapshot reads.
+2. Atomically register an anonymous core subscription and capture its selected
+   snapshot.
+3. Send that snapshot as one `snapshot` event, then map every selected core
+   batch to exactly one `update` event. Send a keep-alive comment after 15 idle
+   seconds.
+4. On response cancellation, drop the subscription receiver. On bounded-queue
+   overflow, drain any already queued batches, log `SlowConsumer`, and end the
+   response without stalling mutation.
+
+SSE event IDs mirror global commit sequences but are not replay cursors.
+`Last-Event-ID` is ignored, so reconnect always starts with a newly captured
+snapshot and never receives historical instant occurrences.
+
 ## Expiry and claim-grace execution
 
 After every accepted retained write, the transport signals the scheduler to

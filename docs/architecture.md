@@ -13,7 +13,7 @@ does.
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–11 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, linked views, and active diagnostics |
 | `protocol` | tasks 04–06 implemented | JSON/MessagePack values and typed snapshot/update/error DTOs |
-| `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
+| `transport` | tasks 04–07 plus SSE implemented | Axum HTTP/SSE/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | tasks 08–10 implemented | Versioned coherent node/schema/link snapshots, restore filtering, and atomic file replacement |
 | `schema` | tasks 09 and 11 implemented | Typed ordinary-topic validators, explicit casts, overlap checks, freshness intervals, and named registry |
@@ -193,6 +193,20 @@ after that call and before the loop can forward the writer's resulting update.
 Core batches remain indivisible across both codecs. Disconnect invokes core
 cleanup before conditionally removing only the matching registry entry, so an
 old socket cannot remove its replacement.
+
+## SSE transport
+
+The read-only `/v1/sse` adapter registers its selector and captures the first
+snapshot through the same atomic `Core::subscribe` call as WebSocket. It maps
+the snapshot and every subsequent `UpdateBatch` directly to one JSON SSE
+event, preserving the core's batch boundary. SSE is anonymous and allocates no
+managed session or connection-registry entry.
+
+Sequence numbers populate both the JSON view and SSE event ID for inspection,
+but the adapter deliberately ignores `Last-Event-ID`. Dropping a response
+drops its receiver. Core queue overflow closes the stream after queued batches
+are drained and logs the slow-consumer reason; reconnect creates a fresh core
+subscription rather than a replay session.
 
 JSON retains the explicit semantic tag mapping. MessagePack carries bytes
 natively, uses its standard extension type `-1` for timestamps, and uses Tanuki

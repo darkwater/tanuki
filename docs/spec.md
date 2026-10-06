@@ -140,7 +140,7 @@ Consumers should be able to recompute outputs from a coherent selected input sha
 
 Updates are batches. Removal must be a distinct enum variant, preventing accidental use as a current value. A removal carries the last visible state; metadata-only changes and definition-only nodes must also be representable. Exact types remain open.
 
-SSE, when implemented, must preserve atomic batches in one event. No event replay or missed-event log is required. A slow consumer is disconnected without a special recovery state; reconnecting establishes an ordinary new subscription with its initial snapshot.
+SSE preserves atomic batches in one event. No event replay or missed-event log is required. A slow consumer is disconnected without a special recovery state; reconnecting establishes an ordinary new subscription with its initial snapshot.
 
 ## Expiry, freshness, and persistence
 
@@ -247,4 +247,4 @@ Start with basic HTTP reads/writes, then quickly build WebSocket as the first co
 
 HTTP should support convenient single writes and reads and multi-topic operations. URL parameters may provide shorthands such as `expire=1h`, but adapters must translate to common values and operations. Exact verbs and string conversion rules remain open (D8).
 
-WebSocket reads are subscriptions; unsubscribe is not an initial priority. HTTP SSE, raw TCP, and MQTT can follow later. TCP framing and protocol detection need not delay WebSocket.
+WebSocket and HTTP SSE reads are subscriptions; unsubscribe is not an initial priority. Raw TCP and MQTT can follow later. TCP framing and protocol detection need not delay WebSocket.

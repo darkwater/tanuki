@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    body::{Body, to_bytes},
+    body::{Body, BodyDataStream, to_bytes},
     http::{Request, StatusCode},
 };
+use futures_util::StreamExt;
 use jiff::Timestamp as JiffTimestamp;
 use serde_json::{Value as JsonValue, json};
 use tanuki::{
@@ -36,6 +37,124 @@ fn json_request(method: &str, uri: &str, body: JsonValue) -> Request<Body> {
 async fn response_json(response: axum::response::Response) -> JsonValue {
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn next_sse_event(stream: &mut BodyDataStream) -> (String, String, JsonValue) {
+    let mut encoded = Vec::new();
+    loop {
+        let chunk = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .expect("SSE event timed out")
+            .expect("SSE stream ended")
+            .expect("SSE body failed");
+        encoded.extend_from_slice(&chunk);
+        if encoded.windows(2).any(|window| window == b"\n\n") {
+            break;
+        }
+    }
+
+    let encoded = String::from_utf8(encoded).unwrap();
+    let mut event = None;
+    let mut id = None;
+    let mut data = None;
+    for line in encoded.lines() {
+        if let Some(value) = line.strip_prefix("event: ") {
+            event = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("id: ") {
+            id = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("data: ") {
+            data = Some(serde_json::from_str(value).unwrap());
+        }
+    }
+    (
+        event.expect("SSE event name"),
+        id.expect("SSE event ID"),
+        data.expect("SSE JSON data"),
+    )
+}
+
+#[tokio::test]
+async fn sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch() {
+    let (app, _) = test_app();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sse?select=/lamp/*")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    let mut stream = response.into_body().into_data_stream();
+
+    let (event, id, data) = next_sse_event(&mut stream).await;
+    assert_eq!(event, "snapshot");
+    assert_eq!(id, "0");
+    assert_eq!(data, json!({"sequence": 0, "nodes": {}}));
+
+    let mut request = json_request(
+        "POST",
+        "/v1/write",
+        json!({
+            "operations": [
+                {"op": "publish_state", "topic": "/lamp/hue", "value": 30, "expiry": {"mode": "clear"}},
+                {"op": "publish_state", "topic": "/lamp/brightness", "value": 80, "expiry": {"mode": "clear"}}
+            ]
+        }),
+    );
+    request
+        .headers_mut()
+        .insert("tanuki-client", "lamp controller".parse().unwrap());
+    let write = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(write.status(), StatusCode::OK);
+
+    let (event, id, data) = next_sse_event(&mut stream).await;
+    assert_eq!(event, "update");
+    assert_eq!(id, "1");
+    assert_eq!(data["sequence"], 1);
+    assert_eq!(data["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(data["changes"][0]["topic"], "/lamp/hue");
+    assert_eq!(data["changes"][1]["topic"], "/lamp/brightness");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sse?select=/lamp/*")
+                .header("last-event-id", "0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut reconnected = response.into_body().into_data_stream();
+    let (event, id, data) = next_sse_event(&mut reconnected).await;
+    assert_eq!(event, "snapshot");
+    assert_eq!(id, "1");
+    assert_eq!(data["sequence"], 1);
+    assert_eq!(data["nodes"].as_object().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn sse_query_failures_use_the_common_error_shape() {
+    let (app, _) = test_app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sse")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(response).await["error"]["code"],
+        "invalid_query"
+    );
 }
 
 #[tokio::test]

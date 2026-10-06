@@ -48,6 +48,7 @@ prefix.
 | `POST /v1/state/{topic...}` | `{"value":72,"expiry":{"mode":"clear"}}` | Convenience retained-state write |
 | `POST /v1/write` | `{"operations":[...]}` | One atomic operation batch |
 | `GET /v1/snapshot?select=/battery/*` | one selector | Selection-filtered retained snapshot |
+| `GET /v1/sse?select=/battery/*` | one selector | Snapshot followed by live atomic update events |
 | `PUT /v1/schemas/{name}` | complete schema declaration | Atomically install or replace one named schema |
 | `PUT /v1/links/{name}` | `{"mount":"/view","target":"/canonical"}` | Atomically install or replace a writable subtree link |
 | `DELETE /v1/links/{name}` | none | Remove a link and retract its projected nodes |
@@ -148,6 +149,31 @@ The sequence is the global in-memory commit sequence, not a replay cursor.
 Filtered subscriptions legitimately skip commits that affect no selected
 topic, so a numeric gap alone does not prove message loss. Reconnection starts
 from a new snapshot; replay is not promised.
+
+## Server-sent events version 1
+
+`GET /v1/sse?select=<selector>` opens an anonymous read-only subscription. Its
+first event is always `snapshot`; later `update` events each contain one
+complete selected commit batch. The SSE `data` field is the JSON encoding of
+`SnapshotView` or `UpdateView` respectively, without the WebSocket message
+type or request ID. The SSE `id` is the same global sequence carried in the
+JSON body:
+
+```text
+event: snapshot
+id: 42
+data: {"sequence":42,"nodes":{}}
+
+event: update
+id: 43
+data: {"sequence":43,"changes":[]}
+```
+
+The server emits a keep-alive comment after 15 seconds without data. It does
+not interpret `Last-Event-ID`: reconnecting creates an ordinary new
+subscription and sends its current snapshot, with no missed-event replay. A
+subscriber that exhausts the core's 64-batch queue is disconnected; it does
+not block writers or split/coalesce a batch.
 
 ## WebSocket version 1
 
