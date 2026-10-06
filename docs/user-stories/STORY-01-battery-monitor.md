@@ -32,8 +32,13 @@ Percentage representation, charging state, publication intervals, freshness thre
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C1, C3, L2, S1, T1; E1 steps 1 and 4.
-- `tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry` verifies the core portion of US-01.A3. Connection distinction and widget observation remain tasks 03–06.
-- `tests/core_publication.rs::snapshot_selection_filters_topics_and_removal_carries_previous_state` verifies selected one-off retained reads; transport-neutral live startup/update handoff is covered by task 05 tests and network delivery remains task 06.
+- `tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry`
+  verifies the refresh portion of US-01.A3. `tests/core_freshness.rs` and the
+  scheduler suite verify observable overdue status and identical-value
+  recovery; connection state remains a distinct concept.
+- `tests/core_publication.rs::snapshot_selection_filters_topics_and_removal_carries_previous_state`
+  verifies selected retained reads; transport-neutral and live WebSocket
+  startup/update handoff are covered by the subscription and socket suites.
 - `tests/http_api.rs::battery_publish_and_read_work_over_a_real_tcp_listener` verifies a stateless phone-style HTTP publication and anonymous selected read through the production router. It is simulated local traffic, not a deployed phone integration.
 - `tests/core_subscriptions.rs::snapshot_then_newer_update_has_no_registration_gap` verifies the core snapshot-plus-live-update portion of US-01.A1.
 - `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies laptop WebSocket plus phone HTTP publication reaching a live dashboard. `same_name_http_is_stateless_but_duplicate_websocket_replaces_session` covers US-01.A2 and managed replacement on real loopback sockets.
@@ -42,7 +47,8 @@ Percentage representation, charging state, publication intervals, freshness thre
 - `tests/http_api.rs::schema_installation_casts_valid_http_writes_and_denies_invalid_ones`
   verifies US-01.A5's denying path and an explicit string-to-integer cast.
   `tests/core_schema.rs::warning_rules_accept_the_original_value_and_return_a_diagnostic`
-  covers its warning path.
+  covers its warning path. The composite room scenario exercises warning
+  acceptance together with a denying linked dashboard view and recovery.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -58,3 +64,5 @@ Percentage representation, charging state, publication intervals, freshness thre
 - 2026-10-06: Task 09 added atomic battery schema installation, warning/deny
   enforcement, explicit casts, and schema persistence; no real device schema
   has been deployed.
+- 2026-10-06: Tasks 10–11 added a schema-governed linked battery view and
+  retained freshness diagnostics; thresholds for actual devices remain unset.

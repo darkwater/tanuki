@@ -507,7 +507,13 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
     send_hello(
         &mut dashboard,
         "dashboard",
-        &["/battery/*", "/lamp/*", "/location"],
+        &[
+            "/battery/*",
+            "/lamp/*",
+            "/location",
+            "/dashboard/**",
+            "/$diagnostics/**",
+        ],
     )
     .await;
     let _ = recv_json(&mut dashboard).await;
@@ -637,6 +643,94 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
     let _ = recv_json(&mut automation).await;
     assert_update_topics(&mut controller, &["/lamp/desired"]).await;
     assert_update_topics(&mut dashboard, &["/lamp/desired"]).await;
+
+    server
+        .core
+        .lock()
+        .unwrap()
+        .install_schema(
+            Schema::new(
+                SchemaName::parse("battery views").unwrap(),
+                vec![
+                    SchemaRule::new(
+                        Selector::parse("/battery/*").unwrap(),
+                        Enforcement::Warn,
+                        ValueValidator::integer_range(0, 100, NullPolicy::Deny).unwrap(),
+                    )
+                    .unwrap(),
+                    SchemaRule::new(
+                        Selector::parse("/dashboard/battery/*").unwrap(),
+                        Enforcement::Deny,
+                        ValueValidator::integer_range(0, 100, NullPolicy::Deny).unwrap(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+            SchemaInstallMode::RejectInvalid,
+            Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()),
+        )
+        .unwrap();
+    server
+        .core
+        .lock()
+        .unwrap()
+        .install_link(
+            LinkDefinition::new(
+                LinkName::parse("dashboard-battery").unwrap(),
+                TopicPath::parse("/dashboard/battery").unwrap(),
+                TopicPath::parse("/battery").unwrap(),
+            )
+            .unwrap(),
+            Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()),
+        )
+        .unwrap();
+    assert_update_topics(
+        &mut dashboard,
+        &["/dashboard/battery/laptop", "/dashboard/battery/phone"],
+    )
+    .await;
+
+    let unusual = server
+        .post_json(
+            "/v1/state/battery/phone",
+            "phone task",
+            json!({"value": 101, "expiry": {"mode": "clear"}}),
+        )
+        .await;
+    assert_eq!(unusual["ok"], true);
+    assert_eq!(unusual["data"]["warnings"][0]["code"], "schema_warning");
+    assert_eq!(unusual["data"]["warnings"][1]["code"], "link_disabled");
+    assert_update_topics(
+        &mut dashboard,
+        &[
+            "/$diagnostics/links/dashboard-battery",
+            "/battery/phone",
+            "/dashboard/battery/laptop",
+            "/dashboard/battery/phone",
+        ],
+    )
+    .await;
+
+    let repaired = server
+        .post_json(
+            "/v1/state/battery/phone",
+            "phone task",
+            json!({"value": 60, "expiry": {"mode": "clear"}}),
+        )
+        .await;
+    assert_eq!(repaired["ok"], true);
+    assert_eq!(repaired["data"]["warnings"][0]["code"], "link_enabled");
+    assert_update_topics(
+        &mut dashboard,
+        &[
+            "/$diagnostics/links/dashboard-battery",
+            "/battery/phone",
+            "/dashboard/battery/laptop",
+            "/dashboard/battery/phone",
+        ],
+    )
+    .await;
 
     for socket in [
         &mut automation,

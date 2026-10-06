@@ -2,14 +2,14 @@
 
 Tanuki is an early personal automation fabric for named state, events, desired
 inputs, and commands. One transport-independent core supplies atomic writes,
-managed input ownership, coherent subscriptions, expiry, schemas, and
-best-effort restart persistence to HTTP and WebSocket clients.
+managed input ownership, coherent subscriptions, expiry, schemas, writable
+linked views, active diagnostics, and best-effort restart persistence to HTTP
+and WebSocket clients.
 
-Tasks 00–09 of the implementation plan are implemented. Writable linked views
-are at architecture checkpoint C; the concrete questions that block them are
-in [docs/open-questions.md](docs/open-questions.md). Freshness/shared
-diagnostics can proceed independently once its observable system interface is
-selected.
+Tasks 00–12 of the implementation plan are complete for the initial in-repo
+release. Real-device deployment is not implied; remaining product questions and
+provisional limits are listed in
+[docs/open-questions.md](docs/open-questions.md).
 
 ## Run it
 
@@ -60,7 +60,8 @@ curl -sS -X PUT \
       "enforcement": "deny",
       "node_kind": "state",
       "validator": {"type": "integer_range", "minimum": 0, "maximum": 100},
-      "cast": "string_to_integer"
+      "cast": "string_to_integer",
+      "expected_update_interval": "PT5M"
     }]
   }' \
   http://127.0.0.1:5167/v1/schemas/battery
@@ -72,6 +73,29 @@ current value while preserving its definition and claim. Warning rules accept
 the operation and return diagnostics. Installed schemas survive snapshots and
 restart. See [docs/protocol.md](docs/protocol.md) for the complete initial
 validator and cast vocabulary.
+
+## Writable links and diagnostics
+
+Install a writable subtree view with an attributed request:
+
+```sh
+curl -sS -X PUT \
+  -H 'content-type: application/json' \
+  -H 'tanuki-client: administrator' \
+  --data '{"mount":"/dashboard/battery","target":"/battery"}' \
+  http://127.0.0.1:5167/v1/links/dashboard-battery
+```
+
+Readers and writers can then use `/dashboard/battery/...`; canonical storage
+remains under `/battery/...`. Alias schemas run before canonical schemas. A
+canonical value rejected by the alias view commits canonically but disables the
+whole link until data or policy repairs it. `DELETE /v1/links/{name}` removes a
+definition. Links and schemas survive restart.
+
+Select `/$diagnostics/**` to observe retained active conditions. Overdue values
+appear below `/$diagnostics/freshness/...`; disabled links appear below
+`/$diagnostics/links/...`. Recovery removes the condition. These paths are
+read-only and are never governed by user schemas.
 
 ## WebSocket
 
@@ -109,8 +133,9 @@ cargo test --release --all-targets --all-features
 ```
 
 The suites include real loopback HTTP/WebSocket clients, a simulated room with
-downstream actors, controlled-time expiry/grace checks, atomic-save failure
-coverage, orderly restart, and a production-binary restore smoke test.
+downstream actors, linked-view invalidation/recovery, controlled-time
+expiry/freshness/grace checks, atomic-save failure coverage, orderly restart,
+and a production-binary restore smoke test.
 
 ## Documentation map
 
@@ -130,9 +155,9 @@ documents take precedence when they disagree.
 
 ## Current limitations
 
-Linked views, freshness diagnostics, TCP/MQTT/SSE, authentication, large-blob
-transfer, event replay, and a polished client SDK are not yet implemented.
+TCP/MQTT/SSE adapters, authentication, a Unix-socket listener, large-blob
+transfer, event replay, outgoing queued-byte accounting, and a polished client
+SDK are not yet implemented. Link chains are deliberately unsupported.
 Persistence is periodic best effort rather than a WAL: an
 acknowledged write can be lost if the process crashes before the next completed
-snapshot. Wire shapes remain versioned but provisional until the initial
-release review.
+snapshot. Wire shapes are versioned and remain pre-1.0.

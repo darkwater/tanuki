@@ -99,7 +99,8 @@ Run the focused suite with:
 cargo test --test protocol_json --test http_api
 ```
 
-The v1 HTTP shape is provisional until checkpoint B.
+The v1 HTTP shape follows the accepted checkpoint-B stream/error contract;
+incompatible changes remain possible during the initial release review.
 
 ## Task 05 — coherent core subscriptions and checkpoint-B DTOs
 
@@ -117,8 +118,8 @@ Run the focused suite with:
 cargo test --test core_subscriptions --test protocol_subscription --test client_view
 ```
 
-The core queue is bounded by batch count. Proposed connection byte limits and
-the wire shapes remain provisional pending the user's checkpoint-B answers.
+The core queue is bounded by batch count. Total outgoing-byte accounting remains
+the tracked transport limitation.
 
 ## Task 06 — WebSocket codecs and mixed-client simulation
 
@@ -198,4 +199,55 @@ Run the focused suite with:
 ```sh
 cargo test --test domain_paths --test schema_validation --test core_schema \
   --test http_api --test websocket_api --test persistence
+```
+
+## Task 10 — writable linked views
+
+`tests/core_links.rs` covers subtree projection, alias-first then canonical
+validation/casting, whole-view invalidation, disabled-alias repair, schema
+replacement recovery, instant-event recovery without replay, topology
+rejection, replacement, and deletion. `tests/core_expiry.rs` verifies alias
+removal in the same expiry commit. HTTP and WebSocket tests exercise management
+and alias writes through real adapters; persistence rebuilds definitions and
+status without storing alias copies.
+
+Run the focused suite with:
+
+```sh
+cargo test --test core_links --test core_expiry --test http_api \
+  --test websocket_api --test persistence
+```
+
+## Task 11 — freshness and active diagnostics
+
+`tests/core_freshness.rs` covers overdue onset, retained source data, identical
+write recovery, desired/instant exclusions, positive intervals, and prevention
+of recursive diagnostics when a diagnostic consumer overflows.
+`tests/scheduler.rs` proves the expected-update interval wakes the real deadline
+scheduler. Link tests cover retained disable/recovery conditions, and
+persistence tests prove policy survival plus startup derivation.
+
+Run the focused suite with:
+
+```sh
+cargo test --test core_freshness --test scheduler --test core_links \
+  --test persistence
+```
+
+## Initial end-to-end release scenario
+
+`tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports`
+covers E1 steps 1–4 and 6 with real loopback HTTP/WebSocket actors, including
+warning acceptance and linked dashboard invalidation/recovery. The same file's
+controlled-time lifecycle case covers step 5. `tests/persistence.rs` and
+`tests/persistence_server.rs` cover step 7: coherent save/restart, cleared
+claims, no instant-payload replay, restored policy, and the production binary.
+
+Run every supported gate with:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+cargo test --release --all-targets --all-features
 ```
