@@ -39,6 +39,63 @@ async fn response_json(response: axum::response::Response) -> JsonValue {
 }
 
 #[tokio::test]
+async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
+    let (app, core) = test_app();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "PUT",
+            "/v1/schemas/battery",
+            json!({
+                "rules": [{
+                    "selector": "/battery/*",
+                    "enforcement": "deny",
+                    "validator": {"type": "integer_range", "minimum": 0, "maximum": 100},
+                    "cast": "string_to_integer"
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/state/battery/phone?client=test",
+            json!({"value": "42"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .read(&tanuki::domain::Selection::new(vec![
+            tanuki::domain::Selector::parse("/battery/phone").unwrap(),
+        ]));
+    let Some(Node::State(state)) = snapshot.nodes().values().next() else {
+        panic!("battery state must exist");
+    };
+    assert_eq!(state.current().value(), &Value::Integer(42));
+
+    let response = app
+        .oneshot(json_request(
+            "POST",
+            "/v1/state/battery/phone?client=test",
+            json!({"value": 101}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response_json(response).await["error"]["code"],
+        "schema_violation"
+    );
+}
+
+#[tokio::test]
 async fn malformed_json_and_missing_attribution_use_the_common_error_shape() {
     let (app, _) = test_app();
     let malformed = Request::builder()

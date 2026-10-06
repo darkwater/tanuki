@@ -11,12 +11,12 @@ does.
 | `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | tasks 02–07 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, and deadlines |
+| `core` | tasks 02–09 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, and schema enforcement |
 | `protocol` | tasks 04–06 implemented | JSON/MessagePack values and typed snapshot/update/error DTOs |
 | `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
-| `persistence` | task 08 implemented | Versioned coherent snapshots, restore filtering, and atomic file replacement |
-| `schema` | task 09 foundation | Typed ordinary-topic validators and structured warning/deny results; installation pending |
+| `persistence` | tasks 08–09 implemented | Versioned coherent node/schema snapshots, restore filtering, and atomic file replacement |
+| `schema` | task 09 implemented | Typed ordinary-topic validators, explicit casts, overlap checks, and named registry |
 | `links` | planned | Linked path resolution, visibility, and recovery |
 | `diagnostics` | planned | Structured warnings/errors and logging integration |
 
@@ -228,8 +228,9 @@ keeps an existing absolute deadline and yields no deadline on a new value.
 
 `SnapshotStore` captures one coherent selected clone while holding the core
 lock, then performs MessagePack encoding, file writes, fsync, and rename outside that
-lock on a blocking worker. The version-1 file records its format marker,
-sequence, save time, ordinary node data, absolute expiries, and provenance.
+lock on a blocking worker. The version-2 file records its format marker,
+sequence, save time, ordinary node data, absolute expiries, provenance, and
+validated installed schemas.
 It never stores live sessions or input claims. Event publisher metadata and
 command definitions persist, but occurrence payloads never do.
 
@@ -247,9 +248,8 @@ adjacent `.bak`, logged, and treated as empty state; read/backup I/O errors
 still fail startup. The default path is `tanuki.db`, overridden by
 `TANUKI_SNAPSHOT`.
 
-## Schema validation foundation
+## Schema policy implemented in task 09
 
-The first task-09 slice is deliberately independent of schema installation.
 `ValueValidator` represents null policy, primitive kind checks, inclusive
 integer/finite-float ranges, and string enums without encoding schemas into the
 runtime `Value` representation. `SchemaRule` restricts broad selectors to
@@ -257,9 +257,15 @@ ordinary topics and rejects selectors that explicitly name a `$` branch.
 Warning enforcement returns a successful diagnostic outcome; deny enforcement
 returns a typed `SchemaViolation`.
 
-`Selector::intersects` computes whether any valid non-root topic could match
-two patterns and is symmetric by construction. The future schema registry will
-use it to reject overlap between separately installed schemas. Registry
-installation, existing-value cleanup, within-schema overlap, casting, transport
-DTOs, persistence, and core mutation-path enforcement remain pending the
-questions in `open-questions.md`.
+`Selector::intersects` lets the registry reject overlap between separately
+installed schemas. Rules within one schema may overlap and all apply, except
+that intersecting casts are rejected. `Core::apply` is the single validation
+site for every value-bearing adapter; a successful explicit cast supplies the
+stored value and every matching validator rechecks it.
+
+`Core::install_schema` stages replacement atomically. Normal installation
+rejects existing deny violations without casting stored values; force mode
+removes invalid state and clears invalid desired current values while retaining
+input metadata. `PUT /v1/schemas/{name}` exposes complete declarations. The
+registry is stored in snapshot format 2 and reconstructed through invariant-
+checking constructors on restore.

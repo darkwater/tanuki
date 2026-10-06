@@ -169,6 +169,11 @@ matching validator must pass, but intersecting casting rules are invalid so
 conversion never depends on rule ordering. Initial casts are explicit string
 to integer, float, or boolean conversions.
 
+A rule may also constrain the node kind. Without an applicable node-kind
+constraint, an implicit kind change retains the ordinary warning behavior.
+Warning constraints allow with a diagnostic; denying constraints reject the
+whole batch.
+
 Normal installation rejects and reports existing deny violations. An explicit
 force installation removes deny-invalid state nodes and clears only the
 deny-invalid current value of desired inputs, preserving their definitions and
@@ -176,7 +181,9 @@ claims. Warning violations remain and are reported. Existing stored data is
 never silently cast during installation. Advanced schema language features can
 wait; these structural rules cannot be implicit.
 
-Schema management may live under `/$schemas/<name>/...`. The exact declaration format and atomic installation operation are unselected.
+The initial management operation is an atomic complete declaration at
+`PUT /v1/schemas/{name}`. A future readable projection may also live under
+`/$schemas/<name>/...`; that projection is not selected yet.
 
 ## Links
 

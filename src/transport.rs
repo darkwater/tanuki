@@ -12,7 +12,7 @@ use axum::{
     },
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as RawJson, json};
@@ -21,16 +21,17 @@ use tracing::warn;
 
 use crate::{
     core::{
-        CommitOutcome, Core, CoreError, Diagnostic, Subscription, SubscriptionCapacity,
-        SubscriptionEnd,
+        CommitOutcome, Core, CoreError, Diagnostic, SchemaInstallMode, Subscription,
+        SubscriptionCapacity, SubscriptionEnd,
     },
     domain::{
-        ClaimRelease, ClientName, ExpiryUpdate, InputDefinition, InputKind, NonNegativeDuration,
-        Selection, Selector, SessionHandle, SessionId, Timestamp, TopicPath, WriteBatch,
-        WriteContext, WriteOperation,
+        ClaimRelease, ClientName, ExpiryUpdate, FiniteF64, InputDefinition, InputKind, NodeKind,
+        NonNegativeDuration, Selection, Selector, SessionHandle, SessionId, Timestamp, TopicPath,
+        ValueKind, WriteBatch, WriteContext, WriteOperation,
     },
     protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView},
     scheduler::DeadlineScheduler,
+    schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
 };
 
 pub type SharedCore = Arc<Mutex<Core>>;
@@ -58,6 +59,7 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
     Router::new()
         .route("/v1/write", post(batch_write))
         .route("/v1/state/{*topic}", post(single_state_write))
+        .route("/v1/schemas/{name}", put(install_schema))
         .route("/v1/snapshot", get(snapshot))
         .route("/v1/ws", get(websocket_upgrade))
         .fallback(not_found)
@@ -68,6 +70,198 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
             scheduler,
             connections: Arc::new(Mutex::new(BTreeMap::new())),
         })
+}
+
+#[derive(Deserialize)]
+struct SchemaRequest {
+    #[serde(default)]
+    force: bool,
+    rules: Vec<SchemaRuleRequest>,
+}
+
+#[derive(Deserialize)]
+struct SchemaRuleRequest {
+    selector: Selector,
+    enforcement: EnforcementRequest,
+    #[serde(default)]
+    nullable: bool,
+    validator: ValidatorRequest,
+    cast: Option<CastRequest>,
+    node_kind: Option<NodeKindRequest>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EnforcementRequest {
+    Warn,
+    Deny,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ValidatorRequest {
+    Any,
+    Kind { kind: ValueKindRequest },
+    IntegerRange { minimum: i64, maximum: i64 },
+    FloatRange { minimum: f64, maximum: f64 },
+    StringEnum { values: Vec<String> },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ValueKindRequest {
+    Bool,
+    Integer,
+    Float,
+    String,
+    Bytes,
+    List,
+    Map,
+    Timestamp,
+    Duration,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CastRequest {
+    #[serde(rename = "string_to_integer")]
+    Integer,
+    #[serde(rename = "string_to_float")]
+    Float,
+    #[serde(rename = "string_to_bool")]
+    Bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum NodeKindRequest {
+    State,
+    Event,
+    Desired,
+    Command,
+}
+
+async fn install_schema(
+    State(state): State<HttpState>,
+    Path(name): Path<String>,
+    Json(request): Json<SchemaRequest>,
+) -> Result<Json<RawJson>, ApiError> {
+    let schema = build_schema(&name, request.rules)?;
+    let mode = if request.force {
+        SchemaInstallMode::RemoveInvalid
+    } else {
+        SchemaInstallMode::RejectInvalid
+    };
+    let outcome = state
+        .core
+        .lock()
+        .map_err(ApiError::poisoned)?
+        .install_schema(schema, mode)
+        .map_err(ApiError::from_core)?;
+    if outcome.update().is_some() {
+        state.scheduler.rescan();
+    }
+    for warning in outcome.warnings() {
+        warn!(?warning, schema = %name, "schema installed with diagnostic");
+    }
+    Ok(Json(json!({
+        "schema": name,
+        "sequence": outcome.update().map(|update| update.sequence().get()),
+        "warnings": outcome.warnings().iter().map(diagnostic_json).collect::<Vec<_>>(),
+    })))
+}
+
+fn build_schema(name: &str, rules: Vec<SchemaRuleRequest>) -> Result<Schema, ApiError> {
+    let name = SchemaName::parse(name)
+        .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+    let rules = rules
+        .into_iter()
+        .map(build_schema_rule)
+        .collect::<Result<Vec<_>, _>>()?;
+    Schema::new(name, rules)
+        .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))
+}
+
+fn build_schema_rule(request: SchemaRuleRequest) -> Result<SchemaRule, ApiError> {
+    let null_policy = if request.nullable {
+        NullPolicy::Allow
+    } else {
+        NullPolicy::Deny
+    };
+    let validator = match request.validator {
+        ValidatorRequest::Any => Ok(ValueValidator::any(null_policy)),
+        ValidatorRequest::Kind { kind } => ValueValidator::kind(kind.into(), null_policy),
+        ValidatorRequest::IntegerRange { minimum, maximum } => {
+            ValueValidator::integer_range(minimum, maximum, null_policy)
+        }
+        ValidatorRequest::FloatRange { minimum, maximum } => {
+            let minimum = FiniteF64::new(minimum)
+                .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+            let maximum = FiniteF64::new(maximum)
+                .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+            ValueValidator::float_range(minimum, maximum, null_policy)
+        }
+        ValidatorRequest::StringEnum { values } => ValueValidator::string_enum(values, null_policy),
+    }
+    .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+    let rule = SchemaRule::new(request.selector, request.enforcement.into(), validator)
+        .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+    let rule = match request.cast {
+        Some(cast) => rule
+            .with_cast(cast.into())
+            .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string())),
+        None => Ok(rule),
+    }?;
+    Ok(match request.node_kind {
+        Some(node_kind) => rule.with_node_kind(node_kind.into()),
+        None => rule,
+    })
+}
+
+impl From<EnforcementRequest> for Enforcement {
+    fn from(value: EnforcementRequest) -> Self {
+        match value {
+            EnforcementRequest::Warn => Self::Warn,
+            EnforcementRequest::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<ValueKindRequest> for ValueKind {
+    fn from(value: ValueKindRequest) -> Self {
+        match value {
+            ValueKindRequest::Bool => Self::Bool,
+            ValueKindRequest::Integer => Self::Integer,
+            ValueKindRequest::Float => Self::Float,
+            ValueKindRequest::String => Self::String,
+            ValueKindRequest::Bytes => Self::Bytes,
+            ValueKindRequest::List => Self::List,
+            ValueKindRequest::Map => Self::Map,
+            ValueKindRequest::Timestamp => Self::Timestamp,
+            ValueKindRequest::Duration => Self::Duration,
+        }
+    }
+}
+
+impl From<CastRequest> for ValueCast {
+    fn from(value: CastRequest) -> Self {
+        match value {
+            CastRequest::Integer => Self::StringToInteger,
+            CastRequest::Float => Self::StringToFloat,
+            CastRequest::Bool => Self::StringToBool,
+        }
+    }
+}
+
+impl From<NodeKindRequest> for NodeKind {
+    fn from(value: NodeKindRequest) -> Self {
+        match value {
+            NodeKindRequest::State => Self::State,
+            NodeKindRequest::Event => Self::Event,
+            NodeKindRequest::Desired => Self::Desired,
+            NodeKindRequest::Command => Self::Command,
+        }
+    }
 }
 
 async fn not_found() -> ApiError {
@@ -613,6 +807,11 @@ impl ApiError {
             CoreError::NotAnInput { .. } | CoreError::WrongInputKind { .. } => {
                 (StatusCode::CONFLICT, "wrong_node_kind")
             }
+            CoreError::SchemaViolation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "schema_violation"),
+            CoreError::SchemaRegistry(_) => (StatusCode::CONFLICT, "schema_overlap"),
+            CoreError::ExistingSchemaViolations { .. } => {
+                (StatusCode::CONFLICT, "existing_schema_violations")
+            }
         };
         Self {
             status,
@@ -838,6 +1037,9 @@ fn diagnostic_json(diagnostic: &Diagnostic) -> RawJson {
         }
         Diagnostic::ClaimGraceOutOfRange { topic } => {
             json!({"code": "claim_grace_out_of_range", "topic": topic})
+        }
+        Diagnostic::SchemaWarning(issue) => {
+            json!({"code": "schema_warning", "topic": issue.topic(), "message": issue.kind().to_string()})
         }
     }
 }

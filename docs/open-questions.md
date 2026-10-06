@@ -16,21 +16,16 @@ No unresolved question currently blocks the initial schema/core integration.
    transport queue is introduced. Overflow closes only that client with
    `slow_consumer`; reconnect is an ordinary new subscription and receives the
    ordinary initial snapshot, with no special recovery protocol.
-2. **Within-schema overlap.** Allow ordinary validation rules in the same
-   schema to overlap and require every matching validator to pass. Reject
-   intersecting rules that both request casts, even when the requested cast is
-   identical, so conversion never depends on rule ordering. Separately
-   installed schemas remain non-overlapping.
-3. **Retained node wire shape.** Normalize both state and desired nodes around a
+2. **Retained node wire shape.** Normalize both state and desired nodes around a
    `current` object (`value`, `last_write`, `expires_at`). Desired `current:
    null` then differs cleanly from `current: {value: null, ...}`.
-4. **Request identifiers.** Use opaque client-supplied strings. An error for a
+3. **Request identifiers.** Use opaque client-supplied strings. An error for a
    message that cannot be decoded enough to recover its ID uses `request_id:
    null`.
-5. **Filtered commit sequences.** Keep the global commit sequence in snapshots
+4. **Filtered commit sequences.** Keep the global commit sequence in snapshots
    and updates. Selected streams legitimately skip irrelevant global commits,
    so a gap is informational and not proof of message loss.
-6. **Instant-output metadata across restart.** Preserve event-node publisher
+5. **Instant-output metadata across restart.** Preserve event-node publisher
    metadata but never occurrences; preserve command definitions but never
    command payloads.
 
@@ -47,6 +42,10 @@ No unresolved question currently blocks the initial schema/core integration.
 5. Persistence uses a versioned MessagePack snapshot, atomic temporary-file
    replacement, a 30-second periodic attempt, and a final orderly-shutdown
    attempt. `TANUKI_SNAPSHOT` overrides the default `tanuki.db` path.
+6. The initial schema transport is a complete declaration at
+   `PUT /v1/schemas/{name}`. `force:true` removes a structurally wrong-kind
+   node; it preserves desired definition/claim only when the kind is valid and
+   the current payload is the violation.
 
 ## Resolved in the 2026-10-06 review
 
@@ -57,7 +56,8 @@ No unresolved question currently blocks the initial schema/core integration.
   invalid.
 - Separately installed schemas do not have overlapping rules.
   `Selector::intersects` now provides the pattern-level predicate needed to
-  enforce that invariant; overlap within one schema remains a question above.
+  enforce that invariant. Overlap inside one schema is allowed subject to the
+  casting restriction below.
 - MessagePack timestamps use the standard extension type `-1`; duration keeps
   Tanuki application extension type `2`.
 - Every WebSocket text frame is JSON and every binary frame is MessagePack.
@@ -78,6 +78,10 @@ No unresolved question currently blocks the initial schema/core integration.
   instant occurrence remains in operation order.
 - Initial explicit casts are string to integer, float, or boolean. More liberal
   conversions can be added later without implicit inference.
+- Rules inside one schema may overlap and all matching validators apply.
+  Intersecting casting rules are rejected even when their casts are identical.
+- A schema rule may constrain node kind. Without such a constraint, implicit
+  kind changes keep the accepted freeform warning behavior.
 
 Accepted decisions are recorded in `docs/spec.md`, `docs/architecture.md`, and
 `docs/decisions-to-review.md`. This file should not reopen them without a new

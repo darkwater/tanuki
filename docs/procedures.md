@@ -20,7 +20,9 @@ All caller-initiated mutations pass through `Core::apply`:
    operations are allowed and execute in request order.
 2. Clone authoritative nodes into a private candidate and compute the next
    sequence without modifying live state.
-3. Apply operations in request order. Compute provenance from the supplied
+3. Apply operations in request order. For every value-bearing operation, run
+   the installed ordinary-topic schema first, apply at most one explicit cast,
+   and revalidate all matching rules. Compute provenance from the supplied
    actor and explicit timestamp. Accumulate typed warnings and observable
    changes privately.
 4. If any operation fails, discard the candidate, warnings, state changes, and
@@ -33,6 +35,23 @@ All caller-initiated mutations pass through `Core::apply`:
 No network or disk work occurs in this transition. State/event publication,
 removal, input definition/claiming, desired submission/clearing, and command
 submission all use this path.
+
+## Schema installation
+
+`Core::install_schema` first builds a candidate registry and rejects overlap
+with other named schemas. It inspects current stored values without casting
+them. Normal installation reports current denying violations and changes
+nothing. Forced installation removes invalid state nodes and clears invalid
+desired current values while retaining definitions and claims. Warning
+violations remain and are returned as successful diagnostics. Cleanup is one
+ordinary atomic update; sequence exhaustion leaves both nodes and the registry
+unchanged. HTTP installs a complete declaration through
+`PUT /v1/schemas/{name}`.
+
+A denying node-kind constraint rejects an incompatible write before staging.
+On forced installation, a structurally incompatible node is removed because
+retaining that node could not satisfy the new constraint; desired metadata is
+preserved only for payload violations where its kind remains valid.
 
 ## Managed-session replacement and disconnect
 
@@ -115,8 +134,8 @@ first startup. The snapshot is versioned MessagePack. Malformed data, invalid
 domain values, or an unknown format/version is copied to an adjacent `.bak`
 without replacing an earlier backup, logged, and treated as empty state. A
 failure to read or back up the file remains a typed startup error. A valid
-restore drops expired retained values, all sessions, and all claims before the
-router becomes available.
+restore drops expired retained values, all sessions, and all claims, and
+restores validated schema definitions before the router becomes available.
 
 Every 30 seconds the server clones one coherent snapshot under the core lock.
 Serialization and disk I/O happen afterward on a blocking worker. The writer

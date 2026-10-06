@@ -1,8 +1,9 @@
 use tanuki::{
     domain::{FiniteF64, Selector, TopicPath, Value, ValueKind},
     schema::{
-        Enforcement, NullPolicy, RuleOutcome, SchemaRule, SchemaRuleBuildError,
-        ValidatorBuildError, ValueValidator, ViolationKind,
+        Enforcement, NullPolicy, RuleOutcome, Schema, SchemaBuildError, SchemaName, SchemaRegistry,
+        SchemaRegistryError, SchemaRule, SchemaRuleBuildError, ValidatorBuildError, ValueCast,
+        ValueValidator, ViolationKind,
     },
 };
 
@@ -168,4 +169,150 @@ fn schema_rules_ignore_system_topics_and_identify_explicit_system_branches() {
         ),
         Err(SchemaRuleBuildError::SystemSelector { .. })
     ));
+}
+
+fn named_schema(name: &str, rules: Vec<SchemaRule>) -> Schema {
+    Schema::new(SchemaName::parse(name).unwrap(), rules).unwrap()
+}
+
+#[test]
+fn explicit_string_cast_is_applied_once_then_all_matching_rules_revalidate() {
+    let cast = SchemaRule::new(
+        Selector::parse("/battery/*").unwrap(),
+        Enforcement::Deny,
+        ValueValidator::kind(ValueKind::Integer, NullPolicy::Deny).unwrap(),
+    )
+    .unwrap()
+    .with_cast(ValueCast::StringToInteger)
+    .unwrap();
+    let range = SchemaRule::new(
+        Selector::parse("/battery/{phone,laptop}").unwrap(),
+        Enforcement::Deny,
+        ValueValidator::integer_range(0, 100, NullPolicy::Deny).unwrap(),
+    )
+    .unwrap();
+    let schema = named_schema("battery", vec![cast, range]);
+
+    let validated = schema
+        .validate_value(&topic("/battery/phone"), Value::String("42".to_owned()))
+        .unwrap();
+    assert_eq!(validated.value(), &Value::Integer(42));
+    assert!(validated.warnings().is_empty());
+
+    let error = schema
+        .validate_value(&topic("/battery/phone"), Value::String("101".to_owned()))
+        .unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        ViolationKind::IntegerAboveMaximum {
+            maximum: 100,
+            actual: 101
+        }
+    ));
+}
+
+#[test]
+fn failed_cast_obeys_warning_or_deny_enforcement() {
+    let make = |enforcement| {
+        named_schema(
+            "cast",
+            vec![
+                SchemaRule::new(
+                    Selector::parse("/value").unwrap(),
+                    enforcement,
+                    ValueValidator::kind(ValueKind::Bool, NullPolicy::Deny).unwrap(),
+                )
+                .unwrap()
+                .with_cast(ValueCast::StringToBool)
+                .unwrap(),
+            ],
+        )
+    };
+
+    let warned = make(Enforcement::Warn)
+        .validate_value(&topic("/value"), Value::String("yes".to_owned()))
+        .unwrap();
+    assert_eq!(warned.value(), &Value::String("yes".to_owned()));
+    assert!(matches!(
+        warned.warnings()[0].kind(),
+        ViolationKind::CastFailed {
+            target: ValueKind::Bool,
+            ..
+        }
+    ));
+
+    let denied = make(Enforcement::Deny)
+        .validate_value(&topic("/value"), Value::String("yes".to_owned()))
+        .unwrap_err();
+    assert!(matches!(
+        denied.kind(),
+        ViolationKind::CastFailed {
+            target: ValueKind::Bool,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn schema_allows_overlapping_validators_but_rejects_ambiguous_casts() {
+    let validator = |selector: &str| {
+        SchemaRule::new(
+            Selector::parse(selector).unwrap(),
+            Enforcement::Deny,
+            ValueValidator::kind(ValueKind::Integer, NullPolicy::Deny).unwrap(),
+        )
+        .unwrap()
+    };
+    assert!(
+        Schema::new(
+            SchemaName::parse("valid overlap").unwrap(),
+            vec![validator("/battery/*"), validator("/battery/phone")],
+        )
+        .is_ok()
+    );
+
+    let result = Schema::new(
+        SchemaName::parse("ambiguous casts").unwrap(),
+        vec![
+            validator("/battery/*")
+                .with_cast(ValueCast::StringToInteger)
+                .unwrap(),
+            validator("/battery/phone")
+                .with_cast(ValueCast::StringToInteger)
+                .unwrap(),
+        ],
+    );
+    assert!(matches!(
+        result,
+        Err(SchemaBuildError::AmbiguousCasts { .. })
+    ));
+}
+
+#[test]
+fn registry_rejects_cross_schema_overlap_without_replacing_the_old_schema() {
+    let rule = |selector: &str| {
+        SchemaRule::new(
+            Selector::parse(selector).unwrap(),
+            Enforcement::Deny,
+            ValueValidator::any(NullPolicy::Allow),
+        )
+        .unwrap()
+    };
+    let mut registry = SchemaRegistry::new();
+    registry
+        .install(named_schema("battery", vec![rule("/battery/*")]))
+        .unwrap();
+    let result = registry.install(named_schema("phone only", vec![rule("/battery/phone")]));
+    assert!(matches!(result, Err(SchemaRegistryError::Overlap { .. })));
+    assert_eq!(registry.len(), 1);
+
+    registry
+        .install(named_schema("battery", vec![rule("/power/*")]))
+        .unwrap();
+    assert_eq!(registry.len(), 1);
+    assert!(
+        registry
+            .validate_value(&topic("/battery/phone"), Value::Integer(1))
+            .is_ok()
+    );
 }

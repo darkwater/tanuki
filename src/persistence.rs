@@ -15,15 +15,20 @@ use thiserror::Error;
 use crate::{
     core::{CommitSequence, Core},
     domain::{
-        ClientName, CommandNode, Deadline, DesiredNode, EventNode, InputDefinition, Node,
-        RetainedValue, Selection, Selector, StateNode, Timestamp, TopicPath, WriteContext,
-        WriteProvenance,
+        ClientName, CommandNode, Deadline, DesiredNode, EventNode, FiniteF64, InputDefinition,
+        Node, NodeKind, RetainedValue, Selection, Selector, SelectorParseError, StateNode,
+        Timestamp, TopicPath, ValueKind, WriteContext, WriteProvenance,
     },
     protocol::JsonValue,
+    schema::{
+        Enforcement, NullPolicy, Schema, SchemaBuildError, SchemaIssue, SchemaName,
+        SchemaNameParseError, SchemaRegistry, SchemaRegistryError, SchemaRule,
+        SchemaRuleBuildError, ValidatorBuildError, ValidatorShape, ValueCast, ValueValidator,
+    },
 };
 
 const FORMAT: &str = "tanuki-snapshot";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -168,6 +173,31 @@ pub enum PersistenceError {
     },
     #[error("core state lock was poisoned")]
     CorePoisoned,
+    #[error("invalid schema in snapshot")]
+    Schema {
+        #[source]
+        source: SchemaPersistenceError,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum SchemaPersistenceError {
+    #[error(transparent)]
+    Name(#[from] SchemaNameParseError),
+    #[error(transparent)]
+    Selector(#[from] SelectorParseError),
+    #[error(transparent)]
+    Validator(#[from] ValidatorBuildError),
+    #[error(transparent)]
+    Rule(#[from] SchemaRuleBuildError),
+    #[error(transparent)]
+    Schema(#[from] SchemaBuildError),
+    #[error(transparent)]
+    Registry(#[from] SchemaRegistryError),
+    #[error("schema float bound {value} is not finite")]
+    NonFiniteFloat { value: f64 },
+    #[error("restored data violates its installed schema: {issue}")]
+    ExistingValue { issue: SchemaIssue },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -177,6 +207,8 @@ struct SnapshotFile {
     sequence: u64,
     saved_at: String,
     nodes: BTreeMap<TopicPath, StoredNode>,
+    #[serde(default)]
+    schemas: Vec<StoredSchema>,
 }
 
 impl SnapshotFile {
@@ -190,12 +222,18 @@ impl SnapshotFile {
             .iter()
             .map(|(topic, node)| Ok((topic.clone(), StoredNode::capture(node))))
             .collect::<Result<_, PersistenceError>>()?;
+        let schemas = core
+            .schemas()
+            .schemas()
+            .map(StoredSchema::capture)
+            .collect();
         Ok(Self {
             format: FORMAT.to_owned(),
             version: VERSION,
             sequence: snapshot.sequence().get(),
             saved_at: now.get().to_string(),
             nodes,
+            schemas,
         })
     }
 
@@ -213,7 +251,7 @@ impl SnapshotFile {
 
     fn restore(self, now: Timestamp) -> Result<Core, PersistenceError> {
         parse_timestamp(&self.saved_at)?;
-        let nodes = self
+        let nodes: BTreeMap<TopicPath, Node> = self
             .nodes
             .into_iter()
             .filter_map(|(topic, node)| {
@@ -222,10 +260,312 @@ impl SnapshotFile {
                     .map(|node| node.map(|node| (topic, node)))
             })
             .collect::<Result<_, _>>()?;
+        let mut schemas = SchemaRegistry::new();
+        for schema in self.schemas {
+            schemas
+                .install(
+                    schema
+                        .restore()
+                        .map_err(|source| PersistenceError::Schema { source })?,
+                )
+                .map_err(|source| PersistenceError::Schema {
+                    source: source.into(),
+                })?;
+        }
+        for (topic, node) in &nodes {
+            let value = match node {
+                Node::State(state) => Some(state.current().value()),
+                Node::Desired(desired) => desired.current().map(RetainedValue::value),
+                Node::Event(_) | Node::Command(_) => None,
+            };
+            if let Some((_, issue)) = schemas
+                .inspect_existing(topic, node.kind(), value)
+                .into_iter()
+                .find(|(enforcement, _)| *enforcement == Enforcement::Deny)
+            {
+                return Err(PersistenceError::Schema {
+                    source: SchemaPersistenceError::ExistingValue { issue },
+                });
+            }
+        }
         Ok(Core::from_restored(
             CommitSequence::from_persisted(self.sequence),
             nodes,
+            schemas,
         ))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredSchema {
+    name: String,
+    rules: Vec<StoredSchemaRule>,
+}
+
+impl StoredSchema {
+    fn capture(schema: &Schema) -> Self {
+        Self {
+            name: schema.name().as_str().to_owned(),
+            rules: schema
+                .rules()
+                .iter()
+                .map(StoredSchemaRule::capture)
+                .collect(),
+        }
+    }
+
+    fn restore(self) -> Result<Schema, SchemaPersistenceError> {
+        let rules = self
+            .rules
+            .into_iter()
+            .map(StoredSchemaRule::restore)
+            .collect::<Result<_, _>>()?;
+        Ok(Schema::new(SchemaName::parse(&self.name)?, rules)?)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredSchemaRule {
+    selector: String,
+    enforcement: StoredEnforcement,
+    null_policy: StoredNullPolicy,
+    validator: StoredValidator,
+    cast: Option<StoredValueCast>,
+    node_kind: Option<StoredNodeKind>,
+}
+
+impl StoredSchemaRule {
+    fn capture(rule: &SchemaRule) -> Self {
+        Self {
+            selector: rule.selector().to_string(),
+            enforcement: rule.enforcement().into(),
+            null_policy: rule.validator().null_policy().into(),
+            validator: StoredValidator::capture(rule.validator().shape()),
+            cast: rule.cast().map(Into::into),
+            node_kind: rule.node_kind().map(Into::into),
+        }
+    }
+
+    fn restore(self) -> Result<SchemaRule, SchemaPersistenceError> {
+        let validator = self.validator.restore(self.null_policy.into())?;
+        let rule = SchemaRule::new(
+            Selector::parse(&self.selector)?,
+            self.enforcement.into(),
+            validator,
+        )?;
+        let rule = match self.cast {
+            Some(cast) => rule.with_cast(cast.into())?,
+            None => rule,
+        };
+        Ok(match self.node_kind {
+            Some(node_kind) => rule.with_node_kind(node_kind.into()),
+            None => rule,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredEnforcement {
+    Warn,
+    Deny,
+}
+
+impl From<Enforcement> for StoredEnforcement {
+    fn from(value: Enforcement) -> Self {
+        match value {
+            Enforcement::Warn => Self::Warn,
+            Enforcement::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<StoredEnforcement> for Enforcement {
+    fn from(value: StoredEnforcement) -> Self {
+        match value {
+            StoredEnforcement::Warn => Self::Warn,
+            StoredEnforcement::Deny => Self::Deny,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredNullPolicy {
+    Allow,
+    Deny,
+}
+
+impl From<NullPolicy> for StoredNullPolicy {
+    fn from(value: NullPolicy) -> Self {
+        match value {
+            NullPolicy::Allow => Self::Allow,
+            NullPolicy::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<StoredNullPolicy> for NullPolicy {
+    fn from(value: StoredNullPolicy) -> Self {
+        match value {
+            StoredNullPolicy::Allow => Self::Allow,
+            StoredNullPolicy::Deny => Self::Deny,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredValueCast {
+    Integer,
+    Float,
+    Bool,
+}
+
+impl From<ValueCast> for StoredValueCast {
+    fn from(value: ValueCast) -> Self {
+        match value {
+            ValueCast::StringToInteger => Self::Integer,
+            ValueCast::StringToFloat => Self::Float,
+            ValueCast::StringToBool => Self::Bool,
+        }
+    }
+}
+
+impl From<StoredValueCast> for ValueCast {
+    fn from(value: StoredValueCast) -> Self {
+        match value {
+            StoredValueCast::Integer => Self::StringToInteger,
+            StoredValueCast::Float => Self::StringToFloat,
+            StoredValueCast::Bool => Self::StringToBool,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredNodeKind {
+    State,
+    Event,
+    Desired,
+    Command,
+}
+
+impl From<NodeKind> for StoredNodeKind {
+    fn from(value: NodeKind) -> Self {
+        match value {
+            NodeKind::State => Self::State,
+            NodeKind::Event => Self::Event,
+            NodeKind::Desired => Self::Desired,
+            NodeKind::Command => Self::Command,
+        }
+    }
+}
+
+impl From<StoredNodeKind> for NodeKind {
+    fn from(value: StoredNodeKind) -> Self {
+        match value {
+            StoredNodeKind::State => Self::State,
+            StoredNodeKind::Event => Self::Event,
+            StoredNodeKind::Desired => Self::Desired,
+            StoredNodeKind::Command => Self::Command,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum StoredValidator {
+    Any,
+    ValueKind { value_kind: StoredValueKind },
+    IntegerRange { minimum: i64, maximum: i64 },
+    FloatRange { minimum: f64, maximum: f64 },
+    StringEnum { values: Vec<String> },
+}
+
+impl StoredValidator {
+    fn capture(value: ValidatorShape<'_>) -> Self {
+        match value {
+            ValidatorShape::Any => Self::Any,
+            ValidatorShape::Kind(value_kind) => Self::ValueKind {
+                value_kind: value_kind.into(),
+            },
+            ValidatorShape::IntegerRange { minimum, maximum } => {
+                Self::IntegerRange { minimum, maximum }
+            }
+            ValidatorShape::FloatRange { minimum, maximum } => Self::FloatRange {
+                minimum: minimum.get(),
+                maximum: maximum.get(),
+            },
+            ValidatorShape::StringEnum(values) => Self::StringEnum {
+                values: values.iter().cloned().collect(),
+            },
+        }
+    }
+
+    fn restore(self, null_policy: NullPolicy) -> Result<ValueValidator, SchemaPersistenceError> {
+        Ok(match self {
+            Self::Any => ValueValidator::any(null_policy),
+            Self::ValueKind { value_kind } => ValueValidator::kind(value_kind.into(), null_policy)?,
+            Self::IntegerRange { minimum, maximum } => {
+                ValueValidator::integer_range(minimum, maximum, null_policy)?
+            }
+            Self::FloatRange { minimum, maximum } => ValueValidator::float_range(
+                FiniteF64::new(minimum)
+                    .map_err(|_| SchemaPersistenceError::NonFiniteFloat { value: minimum })?,
+                FiniteF64::new(maximum)
+                    .map_err(|_| SchemaPersistenceError::NonFiniteFloat { value: maximum })?,
+                null_policy,
+            )?,
+            Self::StringEnum { values } => ValueValidator::string_enum(values, null_policy)?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredValueKind {
+    Bool,
+    Integer,
+    Float,
+    String,
+    Bytes,
+    List,
+    Map,
+    Timestamp,
+    Duration,
+}
+
+impl From<ValueKind> for StoredValueKind {
+    fn from(value: ValueKind) -> Self {
+        match value {
+            ValueKind::Null => unreachable!("null is represented by the null policy"),
+            ValueKind::Bool => Self::Bool,
+            ValueKind::Integer => Self::Integer,
+            ValueKind::Float => Self::Float,
+            ValueKind::String => Self::String,
+            ValueKind::Bytes => Self::Bytes,
+            ValueKind::List => Self::List,
+            ValueKind::Map => Self::Map,
+            ValueKind::Timestamp => Self::Timestamp,
+            ValueKind::Duration => Self::Duration,
+        }
+    }
+}
+
+impl From<StoredValueKind> for ValueKind {
+    fn from(value: StoredValueKind) -> Self {
+        match value {
+            StoredValueKind::Bool => Self::Bool,
+            StoredValueKind::Integer => Self::Integer,
+            StoredValueKind::Float => Self::Float,
+            StoredValueKind::String => Self::String,
+            StoredValueKind::Bytes => Self::Bytes,
+            StoredValueKind::List => Self::List,
+            StoredValueKind::Map => Self::Map,
+            StoredValueKind::Timestamp => Self::Timestamp,
+            StoredValueKind::Duration => Self::Duration,
+        }
     }
 }
 

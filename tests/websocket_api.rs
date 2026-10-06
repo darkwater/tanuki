@@ -5,9 +5,10 @@ use futures_util::{SinkExt, StreamExt};
 use jiff::Timestamp as JiffTimestamp;
 use serde_json::{Value as RawJson, json};
 use tanuki::{
-    core::Core,
+    core::{Core, SchemaInstallMode},
     domain::{Node, Selection, Selector, Timestamp, TopicPath, Value},
     protocol::{DiagnosticView, JsonValue, NodeView, ServerMessage},
+    schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
     server::serve_with_core,
     transport::{Clock, SharedCore},
 };
@@ -132,6 +133,48 @@ fn battery_write(request_id: &str, value: i64) -> RawJson {
             "expiry": {"mode": "clear"}
         }]
     })
+}
+
+#[tokio::test]
+async fn websocket_writes_cannot_bypass_an_installed_schema() {
+    let server = TestServer::start().await;
+    server
+        .core
+        .lock()
+        .unwrap()
+        .install_schema(
+            Schema::new(
+                SchemaName::parse("battery").unwrap(),
+                vec![
+                    SchemaRule::new(
+                        Selector::parse("/battery/*").unwrap(),
+                        Enforcement::Deny,
+                        ValueValidator::integer_range(0, 100, NullPolicy::Deny).unwrap(),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+            SchemaInstallMode::RejectInvalid,
+        )
+        .unwrap();
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "laptop", &["/battery/*"]).await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Snapshot { .. }
+    ));
+
+    send_json(&mut socket, battery_write("invalid", 101)).await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Error { request_id: Some(request_id), error }
+            if request_id.as_str() == "invalid" && error.code == "schema_violation"
+    ));
+
+    socket.close(None).await.unwrap();
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
 }
 
 #[tokio::test]

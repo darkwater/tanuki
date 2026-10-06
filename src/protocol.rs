@@ -766,6 +766,10 @@ pub enum DiagnosticView {
     ClaimGraceOutOfRange {
         topic: String,
     },
+    SchemaWarning {
+        topic: String,
+        message: String,
+    },
 }
 
 impl From<&Diagnostic> for DiagnosticView {
@@ -812,6 +816,10 @@ impl From<&Diagnostic> for DiagnosticView {
             },
             Diagnostic::ClaimGraceOutOfRange { topic } => Self::ClaimGraceOutOfRange {
                 topic: topic.to_string(),
+            },
+            Diagnostic::SchemaWarning(issue) => Self::SchemaWarning {
+                topic: issue.topic().to_string(),
+                message: issue.kind().to_string(),
             },
         }
     }

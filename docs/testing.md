@@ -181,20 +181,21 @@ Run the focused suite with:
 cargo test --test persistence --test persistence_server
 ```
 
-## Task 09 — schema validation foundation
+## Task 09 — schema policy and installation
 
-`tests/schema_validation.rs` covers warning versus deny outcomes, null as a
-policy separate from non-null kind, inclusive integer/float ranges, string
-enums, invalid validator construction, ordinary-only matching, and rejection
-of explicitly system-rooted selectors. `tests/domain_paths.rs` covers selector
-intersection and the nonintersection matching invariant.
-
-Core installation and mutation-path enforcement are not implemented yet; they
-remain behind the explicit activation/casting questions in
-`docs/open-questions.md`.
+`tests/schema_validation.rs` covers warning versus deny outcomes, null policy,
+inclusive integer/float ranges, string enums, explicit casts with
+revalidation, internal overlap, cross-schema overlap, and ordinary-only
+matching. `tests/core_schema.rs` covers mutation-path casts, atomic denial,
+warning diagnostics, installation against existing values, forced
+state/desired cleanup, and denial of a schema-governed node-kind change. HTTP
+and WebSocket tests prove their write adapters
+cannot bypass the same core checks. `tests/persistence.rs` proves installed
+schemas still deny invalid values after restart.
 
 Run the focused suite with:
 
 ```sh
-cargo test --test domain_paths --test schema_validation
+cargo test --test domain_paths --test schema_validation --test core_schema \
+  --test http_api --test websocket_api --test persistence
 ```

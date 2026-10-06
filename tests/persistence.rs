@@ -9,13 +9,14 @@ use std::{
 
 use jiff::{SignedDuration, Timestamp as JiffTimestamp};
 use tanuki::{
-    core::Core,
+    core::{Core, CoreError, SchemaInstallMode},
     domain::{
         ClaimRelease, ClientName, ExpiryUpdate, InputDefinition, InputKind, Node,
         NonNegativeDuration, Selection, Selector, Timestamp, TopicPath, Value, WriteBatch,
         WriteContext, WriteOperation,
     },
     persistence::{PersistenceError, SnapshotStore},
+    schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -156,6 +157,43 @@ async fn coherent_save_restore_filters_expired_values_and_clears_live_authority(
         )
         .unwrap();
     assert_eq!(outcome.update().sequence().get(), sequence + 1);
+}
+
+#[tokio::test]
+async fn installed_schemas_survive_restart_and_still_deny_invalid_writes() {
+    let directory = TestDirectory::new();
+    let store = SnapshotStore::new(directory.path("snapshot.db"));
+    let mut core = Core::new();
+    core.install_schema(
+        Schema::new(
+            SchemaName::parse("battery").unwrap(),
+            vec![
+                SchemaRule::new(
+                    Selector::parse("/battery/*").unwrap(),
+                    Enforcement::Deny,
+                    ValueValidator::integer_range(0, 100, NullPolicy::Deny).unwrap(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
+        SchemaInstallMode::RejectInvalid,
+    )
+    .unwrap();
+    store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
+
+    let mut restored = store.load(at(2)).unwrap().unwrap();
+    let result = restored.apply(
+        &WriteContext::stateless(ClientName::parse("writer").unwrap()),
+        WriteBatch::new(vec![WriteOperation::PublishState {
+            topic: topic("/battery/phone"),
+            value: Value::Integer(101),
+            expiry: ExpiryUpdate::Clear,
+        }])
+        .unwrap(),
+        at(2),
+    );
+    assert!(matches!(result, Err(CoreError::SchemaViolation(_))));
 }
 
 #[test]

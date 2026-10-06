@@ -48,6 +48,7 @@ prefix.
 | `POST /v1/state/{topic...}` | `{"value":72,"expiry":{"mode":"clear"}}` | Convenience retained-state write |
 | `POST /v1/write` | `{"operations":[...]}` | One atomic operation batch |
 | `GET /v1/snapshot?select=/battery/*` | one selector | Selection-filtered retained snapshot |
+| `PUT /v1/schemas/{name}` | complete schema declaration | Atomically install or replace one named schema |
 
 Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
 `define_input`, `claim_input`, `submit_desired`, `submit_command`,
@@ -63,6 +64,16 @@ and core failure uses `{"ok":false,"error":{"code":"...","message":"..."}}`
 with an appropriate HTTP status. A successful write returns its commit sequence
 and structured warning list; it does not promise command execution or durable
 storage.
+
+Schema installation accepts `{"force":false,"rules":[...]}`. Each rule has a
+`selector`, `enforcement` (`warn` or `deny`), optional `nullable`, optional
+`node_kind`, a tagged `validator`, and optional explicit cast. Initial validator types are `any`,
+`kind`, `integer_range`, `float_range`, and `string_enum`; initial casts are
+`string_to_integer`, `string_to_float`, and `string_to_bool`. The default mode
+rejects current deny violations. `force:true` removes deny-invalid state and
+clears deny-invalid desired current values while preserving definitions and
+claims. Warning violations remain and are returned as diagnostics. A complete
+declaration atomically replaces the same schema name.
 
 Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
 arrays, and objects map directly to runtime values. The semantic forms are:
@@ -153,13 +164,13 @@ ISO-8601 fixed duration.
 
 Reference: the [MessagePack timestamp specification](https://github.com/msgpack/msgpack/blob/master/spec.md#timestamp-extension-type).
 
-## Persistence format 1
+## Persistence format 2
 
 The local snapshot is MessagePack with `format: "tanuki-snapshot"` and
-`version: 1`. It is an internal restart format, not a client transport or an
+`version: 2`. It is an internal restart format, not a client transport or an
 acknowledgement log. It contains one coherent commit sequence and retained
-node/definition metadata, but no live sessions, claims, event occurrences, or
-command occurrences. Future incompatible formats must use a new version;
+node/definition metadata and installed schemas, but no live sessions, claims,
+event occurrences, or command occurrences. Future incompatible formats must use a new version;
 unknown versions are treated as invalid snapshots. At startup invalid data is
 copied beside the configured file with a `.bak` suffix (or `.bak.N` without
 overwriting an earlier backup), a warning is logged, and Tanuki starts with

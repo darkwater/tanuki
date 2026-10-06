@@ -10,8 +10,11 @@ use tokio::sync::mpsc;
 use crate::domain::{
     ClaimId, ClaimRelease, ClientName, CommandNode, CommandOccurrence, Deadline, DesiredNode,
     EventNode, EventOccurrence, ExpiryUpdate, InputClaim, InputKind, Node, NodeKind, RetainedValue,
-    Selection, SessionHandle, SessionId, StateNode, Timestamp, TopicPath, WriteBatch, WriteContext,
-    WriteOperation, WriteProvenance,
+    Selection, SessionHandle, SessionId, StateNode, Timestamp, TopicPath, Value, WriteBatch,
+    WriteContext, WriteOperation, WriteProvenance,
+};
+use crate::schema::{
+    Enforcement, Schema, SchemaIssue, SchemaRegistry, SchemaRegistryError, SchemaViolation,
 };
 
 #[derive(Debug, Default)]
@@ -23,6 +26,7 @@ pub struct Core {
     next_claim_id: u64,
     subscribers: BTreeMap<SubscriptionId, SubscriberState>,
     next_subscription_id: u64,
+    schemas: SchemaRegistry,
 }
 
 impl Core {
@@ -34,12 +38,18 @@ impl Core {
     pub(crate) fn from_restored(
         sequence: CommitSequence,
         nodes: BTreeMap<TopicPath, Node>,
+        schemas: SchemaRegistry,
     ) -> Self {
         Self {
             sequence,
             nodes,
+            schemas,
             ..Self::default()
         }
+    }
+
+    pub(crate) fn schemas(&self) -> &SchemaRegistry {
+        &self.schemas
     }
 
     #[must_use]
@@ -77,12 +87,13 @@ impl Core {
         let mut warnings = Vec::new();
 
         for operation in batch.operations() {
+            let operation = validate_operation(&self.schemas, operation, &mut warnings)?;
             apply_operation(
                 &mut candidate,
                 &mut changes,
                 &mut warnings,
                 actor,
-                operation,
+                &operation,
                 now,
                 &mut next_claim_id,
             )?;
@@ -91,6 +102,10 @@ impl Core {
         let changes = coalesce_batch_changes(&previous, &candidate, changes);
 
         debug_assert!(candidate.keys().all(|topic| !topic.is_system()));
+        debug_assert!(nodes_have_no_denying_schema_violations(
+            &self.schemas,
+            &candidate
+        ));
         self.nodes = candidate;
         self.next_claim_id = next_claim_id;
         self.sequence = next_sequence;
@@ -100,6 +115,81 @@ impl Core {
         };
         self.publish_update(&update);
         Ok(CommitOutcome { update, warnings })
+    }
+
+    pub fn install_schema(
+        &mut self,
+        schema: Schema,
+        mode: SchemaInstallMode,
+    ) -> Result<SchemaInstallOutcome, CoreError> {
+        let mut candidate_registry = self.schemas.clone();
+        candidate_registry.install(schema.clone())?;
+
+        let mut warnings = Vec::new();
+        let mut invalid_topics = BTreeSet::new();
+        let mut structurally_invalid_topics = BTreeSet::new();
+        let mut violations = Vec::new();
+        for (topic, node) in &self.nodes {
+            let value = match node {
+                Node::State(state) => Some(state.current().value()),
+                Node::Desired(desired) => desired.current().map(RetainedValue::value),
+                Node::Event(_) | Node::Command(_) => None,
+            };
+            for (enforcement, issue) in schema.inspect_existing(topic, node.kind(), value) {
+                match enforcement {
+                    Enforcement::Warn => warnings.push(Diagnostic::SchemaWarning(issue)),
+                    Enforcement::Deny => {
+                        invalid_topics.insert(topic.clone());
+                        if matches!(
+                            issue.kind(),
+                            crate::schema::ViolationKind::WrongNodeKind { .. }
+                        ) {
+                            structurally_invalid_topics.insert(topic.clone());
+                        }
+                        violations.push(issue);
+                    }
+                }
+            }
+        }
+
+        if !violations.is_empty() && mode == SchemaInstallMode::RejectInvalid {
+            return Err(CoreError::ExistingSchemaViolations { violations });
+        }
+
+        let mut candidate_nodes = self.nodes.clone();
+        let mut changes = Vec::new();
+        if mode == SchemaInstallMode::RemoveInvalid {
+            for topic in invalid_topics {
+                let Some(previous) = candidate_nodes.get(&topic).cloned() else {
+                    continue;
+                };
+                match previous {
+                    Node::State(_) => {
+                        candidate_nodes.remove(&topic);
+                    }
+                    Node::Desired(desired) if !structurally_invalid_topics.contains(&topic) => {
+                        candidate_nodes.insert(
+                            topic.clone(),
+                            Node::Desired(DesiredNode::from_parts(
+                                desired.definition().clone(),
+                                desired.claim().cloned(),
+                                None,
+                            )),
+                        );
+                    }
+                    Node::Desired(_) | Node::Event(_) | Node::Command(_) => {
+                        candidate_nodes.remove(&topic);
+                    }
+                }
+                if let Some(change) = net_node_change(&topic, &self.nodes, &candidate_nodes) {
+                    changes.push(change);
+                }
+            }
+        }
+
+        let update = self.install_node_changes(candidate_nodes, changes)?;
+        self.schemas = candidate_registry;
+        Ok(SchemaInstallOutcome { warnings, update })
     }
 
     pub fn open_session(
@@ -557,7 +647,7 @@ impl Change {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Diagnostic {
     OutputOwnerChanged {
         topic: TopicPath,
@@ -585,6 +675,31 @@ pub enum Diagnostic {
     ClaimGraceOutOfRange {
         topic: TopicPath,
     },
+    SchemaWarning(SchemaIssue),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SchemaInstallMode {
+    RejectInvalid,
+    RemoveInvalid,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaInstallOutcome {
+    warnings: Vec<Diagnostic>,
+    update: Option<UpdateBatch>,
+}
+
+impl SchemaInstallOutcome {
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.warnings
+    }
+
+    #[must_use]
+    pub fn update(&self) -> Option<&UpdateBatch> {
+        self.update.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -707,6 +822,112 @@ pub enum CoreError {
     },
     #[error("input definition `{topic}` is controlled by another claim")]
     ClaimAuthorityRequired { topic: TopicPath },
+    #[error(transparent)]
+    SchemaViolation(#[from] SchemaViolation),
+    #[error(transparent)]
+    SchemaRegistry(#[from] SchemaRegistryError),
+    #[error("existing values violate the proposed schema")]
+    ExistingSchemaViolations { violations: Vec<SchemaIssue> },
+}
+
+fn validate_operation(
+    schemas: &SchemaRegistry,
+    operation: &WriteOperation,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<WriteOperation, CoreError> {
+    let validate = |topic: &TopicPath, value: &Value| {
+        schemas
+            .validate_value(topic, value.clone())
+            .map(|validated| validated.into_parts())
+            .map_err(CoreError::from)
+    };
+    let validate_kind = |topic: &TopicPath, node_kind: NodeKind| {
+        schemas
+            .validate_node_kind(topic, node_kind)
+            .map_err(CoreError::from)
+    };
+    let operation = match operation {
+        WriteOperation::PublishState {
+            topic,
+            value,
+            expiry,
+        } => {
+            warnings.extend(
+                validate_kind(topic, NodeKind::State)?
+                    .into_iter()
+                    .map(Diagnostic::SchemaWarning),
+            );
+            let (value, issues) = validate(topic, value)?;
+            warnings.extend(issues.into_iter().map(Diagnostic::SchemaWarning));
+            WriteOperation::PublishState {
+                topic: topic.clone(),
+                value,
+                expiry: *expiry,
+            }
+        }
+        WriteOperation::PublishEvent { topic, value } => {
+            warnings.extend(
+                validate_kind(topic, NodeKind::Event)?
+                    .into_iter()
+                    .map(Diagnostic::SchemaWarning),
+            );
+            let (value, issues) = validate(topic, value)?;
+            warnings.extend(issues.into_iter().map(Diagnostic::SchemaWarning));
+            WriteOperation::PublishEvent {
+                topic: topic.clone(),
+                value,
+            }
+        }
+        WriteOperation::SubmitDesired {
+            topic,
+            value,
+            expiry,
+        } => {
+            warnings.extend(
+                validate_kind(topic, NodeKind::Desired)?
+                    .into_iter()
+                    .map(Diagnostic::SchemaWarning),
+            );
+            let (value, issues) = validate(topic, value)?;
+            warnings.extend(issues.into_iter().map(Diagnostic::SchemaWarning));
+            WriteOperation::SubmitDesired {
+                topic: topic.clone(),
+                value,
+                expiry: *expiry,
+            }
+        }
+        WriteOperation::SubmitCommand { topic, value } => {
+            warnings.extend(
+                validate_kind(topic, NodeKind::Command)?
+                    .into_iter()
+                    .map(Diagnostic::SchemaWarning),
+            );
+            let (value, issues) = validate(topic, value)?;
+            warnings.extend(issues.into_iter().map(Diagnostic::SchemaWarning));
+            WriteOperation::SubmitCommand {
+                topic: topic.clone(),
+                value,
+            }
+        }
+        WriteOperation::DefineInput {
+            topic,
+            kind,
+            definition,
+        } => {
+            warnings.extend(
+                validate_kind(topic, node_kind(*kind))?
+                    .into_iter()
+                    .map(Diagnostic::SchemaWarning),
+            );
+            WriteOperation::DefineInput {
+                topic: topic.clone(),
+                kind: *kind,
+                definition: definition.clone(),
+            }
+        }
+        operation => operation.clone(),
+    };
+    Ok(operation)
 }
 
 fn validate_topics(batch: &WriteBatch) -> Result<(), CoreError> {
@@ -719,6 +940,23 @@ fn validate_topics(batch: &WriteBatch) -> Result<(), CoreError> {
         }
     }
     Ok(())
+}
+
+fn nodes_have_no_denying_schema_violations(
+    schemas: &SchemaRegistry,
+    nodes: &BTreeMap<TopicPath, Node>,
+) -> bool {
+    nodes.iter().all(|(topic, node)| {
+        let value = match node {
+            Node::State(state) => Some(state.current().value()),
+            Node::Desired(desired) => desired.current().map(RetainedValue::value),
+            Node::Event(_) | Node::Command(_) => None,
+        };
+        schemas
+            .inspect_existing(topic, node.kind(), value)
+            .into_iter()
+            .all(|(enforcement, _)| enforcement != Enforcement::Deny)
+    })
 }
 
 fn coalesce_batch_changes(

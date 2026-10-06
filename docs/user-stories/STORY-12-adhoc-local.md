@@ -37,6 +37,10 @@ Actual shell/phone request examples, Unix-socket transport exposure and deployme
 - `tests/http_api.rs::stateless_attribution_accepts_query_and_rejects_conflicts`
   verifies that a small client may use either `tanuki-client` or `?client=` and
   that ambiguous attribution is rejected.
+- `tests/core_schema.rs`,
+  `tests/http_api.rs::schema_installation_casts_valid_http_writes_and_denies_invalid_ones`,
+  and `tests/websocket_api.rs::websocket_writes_cannot_bypass_an_installed_schema`
+  verify US-12.A4 at the core, HTTP, and WebSocket boundaries.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
@@ -45,3 +49,5 @@ Actual shell/phone request examples, Unix-socket transport exposure and deployme
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-06: HTTP attribution gained a query-parameter alternative for clients
   that cannot conveniently set headers; no actual phone automation is verified.
+- 2026-10-06: Task 09 made denying schemas consistent across the implemented
+  core, HTTP, and WebSocket entrypoints.
