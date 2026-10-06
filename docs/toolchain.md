@@ -40,13 +40,27 @@ The default toolchain selected by each command comes from
 ## Native SDK verification — 2026-10-07
 
 The workspace adds `tanuki-protocol` and `tanuki-client` on the existing nightly
-pin. Protocol has only Serde/JSON, base64, Jiff and thiserror runtime dependencies;
+pin. Protocol has Serde/JSON, MessagePack, base64, Jiff and thiserror runtime dependencies;
 its dependency graph contains no Tokio, sockets, server or filesystem facilities.
 Client reuses pinned Tokio/Tungstenite 0.29.0 and futures-util 0.3.34, with concrete
 native adapters. No async-trait, dynamic transport framework, new feature gates
 or nightly upgrade was needed. Ordinary Serde conversion uses serde-value 0.7.0;
 serde_bytes 0.11.19 is a test/example integration recommendation. The lockfile is
 updated with their resolved dependencies.
+
+The 2026-10-07 API/protocol review enabled serde_json's `float_roundtrip`
+feature in the protocol crate. Cargo feature unification also enables it in
+the client and server; versions and the nightly pin are unchanged. The pinned
+serde_json implementation's feature-gated `f64_from_parts` paths were checked
+locally. A deterministic bit-pattern regression reproduced a one-bit change
+for `2.291712365432881e-9` before enabling the feature. Tests cover signed zero,
+subnormals, maximum finite values, and 10,000 generated bit patterns through
+JSON and MessagePack. No additional crate or unstable feature was needed.
+The already pinned rmp-serde dependency now also serves the protocol crate at
+runtime. Its `Deserializer::new`/`get_ref` APIs were checked in the pinned
+source: the remaining input slice lets `decode_messagepack` reject trailing
+data, which `rmp_serde::from_slice` otherwise silently ignores. This adds no
+transport dependency to the shared crate.
 
 API checks: [Tungstenite connect configuration](https://docs.rs/tokio-tungstenite/0.29.0/tokio_tungstenite/fn.connect_async_with_config.html),
 [Tokio watch receiving/version semantics](https://docs.rs/tokio/1.53.2/tokio/sync/watch/struct.Receiver.html),

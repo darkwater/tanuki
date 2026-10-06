@@ -173,11 +173,12 @@ and desired nodes use a `current` wrapper. A successful correlated snapshot is
 the subscription acknowledgement; subsequent updates carry the global commit
 sequence. Filtered streams may skip irrelevant global sequence numbers.
 
-`SelectedView` is a minimal client-side projection. It stages all node upserts
-and removals in one call before replacing the visible map, returns instant
-occurrences separately, and rejects duplicate or older sequences without
-mutation. Same-topic batch repetition and exact queued-byte accounting remain
-open separately; they do not change the accepted snapshot-then-update stream.
+`SelectedView` is a minimal client-side projection. It rejects duplicate or
+older sequences before mutation, then applies all node upserts and removals
+under exclusive access in one call and returns instant occurrences separately.
+There are no fallible operations after the sequence check, so the client avoids
+cloning the complete retained cache on every delta. Callers can inspect only
+the completed batch. Exact queued-byte accounting remains open separately.
 
 ## WebSocket transport implemented in task 06
 

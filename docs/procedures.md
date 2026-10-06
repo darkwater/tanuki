@@ -123,9 +123,10 @@ commit unaffected. Already queued updates remain readable before closure. A
 transport reconnect will establish a new subscription and snapshot; no replay
 or coalescing is performed.
 
-The minimal client applies upserts/removals to a candidate map, installs it only
-after processing the complete batch, and reports event/command occurrences
-outside retained state. Global sequence jumps are allowed because unrelated
+The minimal client validates sequence order before applying upserts/removals
+under exclusive access and reports event/command occurrences outside retained
+state. Callers see the map only after processing the complete batch; no full
+cache copy is needed. Global sequence jumps are allowed because unrelated
 commits are filtered out.
 
 ## WebSocket connection lifecycle
@@ -237,3 +238,9 @@ timeout or lost connection after transmission may have begun; the latter have
 unknown outcomes. Cancellation is not rollback. There is no automatic mutation
 retry, connection replacement loop or claim recovery in the SDK. Reconnecting
 means explicitly creating a new Session with a fresh baseline.
+
+Shutdown closes command admission and rejects writes still in the driver
+command queue with `SessionGone`: those frames never reached the socket writer.
+Writes already handed to that writer retain unknown-outcome semantics. A stop
+signal observed before the driver runs takes precedence over queued commands.
+Termination is published only after command admission has closed.

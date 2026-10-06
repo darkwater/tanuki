@@ -47,6 +47,12 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
 
 ## Implementation and evidence
 
+- API/protocol review (2026-10-07): real-server codec coverage now includes
+  finite floats that previously changed during JSON round trips. Protocol
+  regression tests check exact float bits. Removing per-update full-cache
+  copying preserves the existing whole-batch and immutable-snapshot criteria;
+  this adds no GUI or deployment claim.
+
 - Native SDK evidence: `tanuki/tests/native_sdk.rs` covers initial empty/current snapshots, overlapping selections, newly present phone state, atomic paired output, immutable history, metadata/removal, null versus absent desired payload and local decode recovery. Deterministic SDK unit tests distinguish latest-output replacement from terminal input lag. The ordinary compiled dashboard example was exercised against the production binary; no GUI, browser or Iced application is claimed.
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, T1; E1 dashboard; add wildcard membership fixture.

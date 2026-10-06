@@ -101,9 +101,14 @@ or background tasks. Send `protocol::ClientMessage` with caller-chosen request I
 receive every `ServerMessage` explicitly. `send_with_codec` supports mixed codec
 frames. Abnormal close codes and transport/codec errors preserve their sources;
 normal close ends receiving. Per-wire-message limit is 1 MiB.
+Each data message must contain exactly one JSON or MessagePack protocol message;
+trailing bytes are a decode error. `protocol::decode_messagepack` provides the
+same framing check for code using the DTOs with its own transport.
 
 `QueueFull`, payload/encoding failures and `UnsentTimeout` indicate local failure
-before transmission. `ReplyTimeout` and `OutcomeUnknown` mean a write may have
+before transmission. `SessionGone` also means the write was not handed to the
+socket writer, including queued requests rejected during shutdown.
+`ReplyTimeout` and `OutcomeUnknown` mean a write may have
 been applied. Dropping a write future does not undo a mutation. Canceled waiters
 release capacity, and late replies cannot resolve another request.
 
@@ -114,6 +119,9 @@ cancels only its projection. Dropping Session signals shutdown; weak topic handl
 cannot keep it alive. `close().await` joins tasks, attempts WebSocket close and
 bounds writer shutdown to one second; a prior abnormal termination is returned.
 There is no library-owned runtime or blocking destructor.
+
+Shutdown rejects requests still in the driver's command queue. Requests already
+handed to the socket writer may still be applied; closing is not rollback.
 
 From the repository root, run the server and use separate terminals:
 

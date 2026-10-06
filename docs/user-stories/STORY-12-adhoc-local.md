@@ -37,6 +37,11 @@ verification remain absent.
 
 ## Implementation and evidence
 
+- API/protocol review (2026-10-07): scripted-peer tests distinguish locally
+  queued requests rejected when a session is dropped from transmitted requests
+  whose outcomes remain unknown. This makes script shutdown diagnostics more
+  precise without adding retries or a rollback guarantee.
+
 - Native SDK evidence: ordinary `publisher`, `dashboard` and `controller` examples were compiled and exercised on loopback against the production binary. `tanuki/tests/native_sdk.rs` covers raw wire control, typed freeform values, warnings, server rejection and mixed codecs. Existing stateless HTTP criteria remain covered by the server suites; the SDK adds no HTTP or Unix-socket transport.
 
 - Core test links: [test plan](../test-plan.md) — C1, S1, T1; HTTP task 04; add socket parity tests when that adapter lands.

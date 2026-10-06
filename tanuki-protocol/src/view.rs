@@ -36,22 +36,22 @@ impl SelectedView {
                 received: update.sequence,
             });
         }
-        let mut candidate = self.nodes.clone();
+        // The sequence check is the only fallible step. Exclusive access keeps
+        // the whole batch atomic to callers without cloning every cached value.
         let mut occurrences = Vec::new();
         for change in update.changes {
             match change {
                 ChangeView::Upsert { topic, node } => {
-                    candidate.insert(topic, node);
+                    self.nodes.insert(topic, node);
                 }
                 ChangeView::Removed { topic, .. } => {
-                    candidate.remove(&topic);
+                    self.nodes.remove(&topic);
                 }
                 occurrence @ (ChangeView::Event { .. } | ChangeView::Command { .. }) => {
                     occurrences.push(occurrence);
                 }
             }
         }
-        self.nodes = candidate;
         self.sequence = update.sequence;
         Ok(AppliedUpdate { occurrences })
     }

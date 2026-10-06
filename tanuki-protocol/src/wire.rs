@@ -13,6 +13,21 @@ use crate::{FiniteF64, Value};
 
 const TAGS: [&str; 5] = ["$bytes", "$timestamp", "$duration", "$int", "$map"];
 
+/// Decode exactly one complete MessagePack value from a transport message.
+/// Trailing bytes are an error, just as they are for JSON message decoding.
+pub fn decode_messagepack<T: de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, rmp_serde::decode::Error> {
+    let mut decoder = rmp_serde::Deserializer::new(bytes);
+    let value = T::deserialize(&mut decoder)?;
+    if !decoder.get_ref().is_empty() {
+        return Err(rmp_serde::decode::Error::Syntax(
+            "trailing bytes after MessagePack message".into(),
+        ));
+    }
+    Ok(value)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct JsonValue(Value);
 
@@ -194,7 +209,9 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
-        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+        // MessagePack's array header is untrusted and may advertise billions
+        // of absent elements in a tiny frame. Allocate only as elements arrive.
+        let mut values = Vec::new();
         while let Some(value) = sequence.next_element::<BinaryOwnedValue>()? {
             values.push(value.0);
         }
@@ -621,4 +638,32 @@ pub enum DiagnosticView {
     LinkEnabled {
         link: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn untrusted_array_length_does_not_allocate_before_reading_elements() {
+        struct TruncatedArray;
+        impl<'de> SeqAccess<'de> for TruncatedArray {
+            type Error = de::value::Error;
+
+            fn size_hint(&self) -> Option<usize> {
+                Some(usize::MAX)
+            }
+
+            fn next_element_seed<T: de::DeserializeSeed<'de>>(
+                &mut self,
+                _: T,
+            ) -> Result<Option<T::Value>, Self::Error> {
+                Err(de::Error::custom("truncated array"))
+            }
+        }
+
+        // A hostile length must produce the decoder error, not a capacity panic
+        // or an allocation proportional to the advertised (but absent) payload.
+        assert!(BinaryValueVisitor.visit_seq(TruncatedArray).is_err());
+    }
 }

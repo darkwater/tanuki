@@ -427,6 +427,11 @@ async fn run_driver(
     let mut pending: HashMap<RequestId, Pending> = HashMap::new();
     let mut listeners: Vec<Listener> = Vec::new();
     let reason = loop {
+        // In particular, honor a Session dropped before this task first runs.
+        // A ready command must not win the select and start a new write then.
+        if *stopped.borrow() {
+            break SessionEnd::Closed;
+        }
         pending.retain(|_, waiter| !waiter.reply.is_closed());
         listeners.retain(|listener| !listener.data.is_closed());
         let next_deadline = pending
@@ -464,7 +469,7 @@ async fn run_driver(
                 use tokio_tungstenite::tungstenite::Message;
                 let message = match frame {
                     Some(Ok(Message::Text(text))) => serde_json::from_str::<ServerMessage>(&text).map_err(ConnectionError::from),
-                    Some(Ok(Message::Binary(bytes))) => rmp_serde::from_slice::<ServerMessage>(&bytes).map_err(ConnectionError::from),
+                    Some(Ok(Message::Binary(bytes))) => decode_messagepack::<ServerMessage>(&bytes).map_err(ConnectionError::from),
                     Some(Ok(Message::Ping(bytes))) => {
                         if outgoing.try_send(Message::Pong(bytes)).is_err() { break SessionEnd::Protocol("writer queue full responding to ping".into()); }
                         continue;
@@ -503,6 +508,14 @@ async fn run_driver(
     };
     if !matches!(reason, SessionEnd::Closed) {
         tracing::warn!(?reason, "Tanuki session terminated abnormally");
+    }
+    // Commands still here were never handed to the writer. Reject them before
+    // publishing termination; subsequent writes also fail locally immediately.
+    commands.close();
+    while let Ok(command) = commands.try_recv() {
+        if let DriverCommand::Write { reply, .. } = command {
+            let _ = reply.send(Err(ClientError::SessionGone));
+        }
     }
     finished.send_replace(Some(reason.clone()));
     for listener in listeners {

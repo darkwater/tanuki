@@ -122,6 +122,12 @@ outside signed 64-bit range are rejected. A literal map containing any reserved
 tag key must use `$map`. Encoding is recursive and lossless for the accepted
 initial value profile.
 
+The shared JSON dependency enables exact float round-trip parsing, preserving
+finite f64 bits (including subnormals and signed zero) across the wire.
+MessagePack array lengths are untrusted: runtime lists allocate as elements
+decode, rather than reserving memory for a potentially truncated array header.
+These checks do not establish a total decoded-memory budget.
+
 State and desired nodes use an explicit `current` wrapper. Desired
 `"current":null` means no payload exists; `"current":{"value":null,...}`
 means `Value::Null` was actually submitted. This distinction is preserved in
@@ -196,6 +202,12 @@ the HTTP batch operation array:
 ```json
 {"type":"write","request_id":"w1","operations":[{"op":"publish_state","topic":"/battery/laptop","value":87,"expiry":{"mode":"clear"}}]}
 ```
+
+A data message must contain exactly one encoded protocol message. Trailing
+JSON or MessagePack data rejects the whole message before applying a write.
+The shared `decode_messagepack` helper enforces this for the server, direct
+Rust connection, and session driver; a malformed incoming server message ends
+the session without delivering its partial update.
 
 The write reply is sent before that same connection's resulting selected
 update. Updates from unrelated concurrent writers can already be queued, so

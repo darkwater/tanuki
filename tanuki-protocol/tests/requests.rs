@@ -45,6 +45,13 @@ fn requests_round_trip_both_codecs_without_losing_tags_or_limits() {
                 .unwrap(),
             request
         );
+        let mut bytes = rmp_serde::to_vec_named(&request).unwrap();
+        assert_eq!(
+            decode_messagepack::<ClientMessage>(&bytes).unwrap(),
+            request
+        );
+        bytes.push(0xc0);
+        assert!(decode_messagepack::<ClientMessage>(&bytes).is_err());
     }
     let bad = r#"{"type":"hello","request_id":"h","client":"bad/name","selectors":[]}"#;
     assert!(serde_json::from_str::<ClientMessage>(bad).is_err());

@@ -406,6 +406,41 @@ async fn each_request_frame_selects_its_reply_codec() {
 }
 
 #[tokio::test]
+async fn trailing_messagepack_data_rejects_the_entire_write_without_mutation() {
+    let server = TestServer::start().await;
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "framing probe", &["/battery/*"]).await;
+    let _ = recv_json(&mut socket).await;
+    let selection = Selection::new(vec![Selector::parse("/battery/*").unwrap()]);
+    let before = server.core.lock().unwrap().read(&selection);
+
+    let mut bytes = rmp_serde::to_vec_named(&battery_write("invalid-frame", 54)).unwrap();
+    bytes.push(0xc0);
+    socket.send(Message::Binary(bytes.into())).await.unwrap();
+    assert!(matches!(
+        recv_messagepack(&mut socket).await,
+        ServerMessage::Error { request_id: None, error } if error.code == "invalid_message"
+    ));
+    let after = server.core.lock().unwrap().read(&selection);
+    assert_eq!(after.sequence(), before.sequence());
+    assert!(after.nodes().is_empty());
+
+    // A malformed request does not prevent a subsequent complete request.
+    send_json(&mut socket, battery_write("valid-frame", 55)).await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Reply { .. }
+    ));
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Update { .. }
+    ));
+    socket.close(None).await.unwrap();
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn websocket_core_errors_use_the_common_code_and_request_id() {
     let server = TestServer::start().await;
     let mut socket = server.connect().await;

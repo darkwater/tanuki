@@ -311,3 +311,45 @@ workspace tests (including documentation checks) passed in both debug and releas
 modes, with no ignored tests. Protocol-only native compilation and package
 dependency direction were checked. The browser-target attempt is accurately
 recorded in [toolchain.md](toolchain.md); it could not compile without target std.
+
+## API/protocol review — 2026-10-07
+
+Behavioral regressions reproduced and corrected:
+
+- `tanuki-protocol/tests/value_roundtrip.rs` checks finite float bits through
+  JSON and MessagePack, including signed zero, subnormals, maximum finite
+  values and deterministic generated samples. Before enabling exact JSON
+  parsing, `2.291712365432881e-9` changed by one bit. The real-server native
+  codec scenario also covers that value and `f64::MAX` in requests, updates
+  and fresh snapshots.
+- `wire::tests::untrusted_array_length_does_not_allocate_before_reading_elements`
+  previously panicked with capacity overflow. The visitor now grows runtime
+  lists only as elements arrive. `truncated_messagepack_array_returns_a_decode_error`
+  also exercises a real maximum-length array32 header with no payload.
+- `session_failures::dropping_session_rejects_queued_writes_as_definitely_unsent`
+  synchronizes admission and drop on the current-thread runtime. Before the fix,
+  the queued request could be sent or classified as unknown. It now returns
+  `SessionGone`, and the peer confirms no write arrived.
+- `shutdown_keeps_transmitted_writes_unknown_and_rejects_new_writes_locally`
+  confirms the opposite boundary: an already received but unacknowledged write
+  retains `OutcomeUnknown`, while writes after termination fail locally.
+- `binary_frame_with_trailing_data_terminates_without_delivering_a_partial_message`
+  previously delivered an update from a malformed binary message. Shared frame
+  decoding now rejects trailing data in direct and session clients and in the
+  server. `websocket_api::trailing_messagepack_data_rejects_the_entire_write_without_mutation`
+  exercises the production server, verifies no sequence or state change, and
+  sends a valid subsequent write to confirm recovery. Shared request fixtures
+  cover exact MessagePack message consumption too.
+
+Existing `client_view` and native SDK observation tests cover sequence rejection,
+whole-batch atomicity and immutable historical snapshots after removing the
+unnecessary per-delta clone from `SelectedView::apply`.
+
+Run the same workspace formatting, all-target Clippy, debug and release gates
+listed above. Real transports require loopback socket access; a sandbox bind
+denial is an environment failure, not an application regression.
+
+Review completion: all 163 workspace tests passed in debug and release, with
+no ignored tests. `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check`
+also passed.

@@ -662,6 +662,8 @@ async fn both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in
     use std::collections::BTreeMap;
     use tanuki_client::{Session, SessionOptions};
     let values = [
+        Value::Float(FiniteF64::new(2.291712365432881e-9).unwrap()),
+        Value::Float(FiniteF64::new(f64::MAX).unwrap()),
         Value::Bytes(vec![0, 255]),
         Value::Timestamp("2023-11-14T22:13:20.123456789Z".parse().unwrap()),
         Value::Duration("-PT5.125S".parse().unwrap()),

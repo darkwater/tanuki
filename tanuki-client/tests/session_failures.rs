@@ -264,3 +264,78 @@ async fn remote_slow_consumer_reason_preempts_a_full_data_queue() {
     assert!(full.recv().await.unwrap().is_none());
     assert!(session.close().await.is_err());
 }
+
+#[tokio::test]
+async fn dropping_session_rejects_queued_writes_as_definitely_unsent() {
+    let mut peer = Peer::start().await;
+    let session = peer.session().await;
+    let topic = session.state::<u8>("/value").unwrap();
+    let mut write = std::pin::pin!(topic.publish(&1, ExpiryUpdate::Clear));
+    // On this current-thread runtime no driver can run between admission and
+    // dropping the session. The operation is still in the command queue.
+    let admitted = std::future::poll_fn(|cx| std::task::Poll::Ready(write.as_mut().poll(cx))).await;
+    assert!(admitted.is_pending());
+    drop(session);
+    assert!(matches!(write.await, Err(ClientError::SessionGone)));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), peer.writes.recv())
+            .await
+            .expect("peer did not close")
+            .is_none(),
+        "queued write was sent after shutdown"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_keeps_transmitted_writes_unknown_and_rejects_new_writes_locally() {
+    let mut peer = Peer::start().await;
+    let session = peer.session().await;
+    let topic = session.state::<u8>("/value").unwrap();
+    let sent = topic.clone();
+    let write = tokio::spawn(async move { sent.publish(&1, ExpiryUpdate::Clear).await });
+    peer.received().await;
+    // The peer has the request but never acknowledges it. Closure cannot prove
+    // whether the mutation was accepted.
+    peer.send(ServerMessage::Error {
+        request_id: None,
+        error: ErrorView {
+            code: "fixture".into(),
+            message: "closing".into(),
+        },
+    })
+    .await;
+    assert!(matches!(
+        write.await.unwrap(),
+        Err(ClientError::OutcomeUnknown(_))
+    ));
+    session.closed().await;
+    assert!(matches!(
+        topic.publish(&2, ExpiryUpdate::Clear).await,
+        Err(ClientError::SessionGone)
+    ));
+    assert!(session.close().await.is_err());
+}
+
+#[tokio::test]
+async fn binary_frame_with_trailing_data_terminates_without_delivering_a_partial_message() {
+    let peer = Peer::start().await;
+    let session = peer.session().await;
+    let mut raw = session.listen_updates().await.unwrap();
+    let mut bytes = rmp_serde::to_vec_named(&ServerMessage::Update {
+        sequence: 1,
+        changes: vec![],
+    })
+    .unwrap();
+    bytes.push(0xc0); // A second MessagePack value is not part of this update.
+    peer.replies
+        .send(Message::Binary(bytes.into()))
+        .await
+        .unwrap();
+    assert!(matches!(
+        raw.recv().await,
+        Err(tanuki_client::SessionEnd::Connection(error))
+            if matches!(&*error, ConnectionError::Decode(_))
+    ));
+    assert!(raw.recv().await.unwrap().is_none());
+    assert!(session.close().await.is_err());
+}

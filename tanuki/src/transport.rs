@@ -621,7 +621,7 @@ fn decode_client_message(
         Message::Text(text) => serde_json::from_str(&text)
             .map(|message| (WireCodec::Json, message))
             .map_err(|error| (WireCodec::Json, error.to_string())),
-        Message::Binary(bytes) => rmp_serde::from_slice(&bytes)
+        Message::Binary(bytes) => crate::protocol::decode_messagepack(&bytes)
             .map(|message| (WireCodec::MessagePack, message))
             .map_err(|error| (WireCodec::MessagePack, error.to_string())),
         _ => Err((

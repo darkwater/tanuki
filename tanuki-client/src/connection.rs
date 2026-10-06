@@ -76,7 +76,9 @@ impl Connection {
             };
             match frame? {
                 Message::Text(text) => return Ok(Some(serde_json::from_str(&text)?)),
-                Message::Binary(bytes) => return Ok(Some(rmp_serde::from_slice(&bytes)?)),
+                Message::Binary(bytes) => {
+                    return Ok(Some(crate::protocol::decode_messagepack(&bytes)?));
+                }
                 Message::Ping(_) => self.socket.flush().await?,
                 Message::Pong(_) | Message::Frame(_) => {}
                 Message::Close(frame) => {
