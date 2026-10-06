@@ -25,6 +25,13 @@ that does not turn the provisional choice into an accepted requirement.
    (making the last retained operation win while still delivering each instant
    occurrence)?
 
+3. **Initial direct casts.** Which conversions should a schema be able to
+   request? My conservative recommendation is string to integer/float/bool only,
+   configured explicitly on a rule; never infer casts merely because a value
+   looks convertible, and never silently narrow float to integer. “No casts in
+   the first schema slice” is also coherent, but the implementation plan's
+   acceptance scenario currently expects one cast-success case.
+
 ## Consequential, but the likely answer seems clear
 
 1. **Queued-byte limit.** Keep the accepted disconnect-only behavior and 1 MiB

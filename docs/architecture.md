@@ -16,7 +16,7 @@ does.
 | `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | task 08 implemented | Versioned coherent snapshots, restore filtering, and atomic file replacement |
-| `schema` | planned | Ordinary-topic validation and freshness policy |
+| `schema` | task 09 foundation | Typed ordinary-topic validators and structured warning/deny results; installation pending |
 | `links` | planned | Linked path resolution, visibility, and recovery |
 | `diagnostics` | planned | Structured warnings/errors and logging integration |
 
@@ -247,3 +247,20 @@ invalid, or unsupported configured snapshots are copied to a non-overwriting
 adjacent `.bak`, logged, and treated as empty state; read/backup I/O errors
 still fail startup. The default path is `tanuki.db`, overridden by
 `TANUKI_SNAPSHOT`.
+
+## Schema validation foundation
+
+The first task-09 slice is deliberately independent of schema installation.
+`ValueValidator` represents null policy, primitive kind checks, inclusive
+integer/finite-float ranges, and string enums without encoding schemas into the
+runtime `Value` representation. `SchemaRule` restricts broad selectors to
+ordinary topics and rejects selectors that explicitly name a `$` branch.
+Warning enforcement returns a successful diagnostic outcome; deny enforcement
+returns a typed `SchemaViolation`.
+
+`Selector::intersects` computes whether any valid non-root topic could match
+two patterns and is symmetric by construction. The future schema registry will
+use it to reject overlap between separately installed schemas. Registry
+installation, existing-value cleanup, within-schema overlap, casting, transport
+DTOs, persistence, and core mutation-path enforcement remain pending the
+questions in `open-questions.md`.

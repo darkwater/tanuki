@@ -179,3 +179,21 @@ Run the focused suite with:
 ```sh
 cargo test --test persistence --test persistence_server
 ```
+
+## Task 09 — schema validation foundation
+
+`tests/schema_validation.rs` covers warning versus deny outcomes, null as a
+policy separate from non-null kind, inclusive integer/float ranges, string
+enums, invalid validator construction, ordinary-only matching, and rejection
+of explicitly system-rooted selectors. `tests/domain_paths.rs` covers selector
+intersection and the nonintersection matching invariant.
+
+Core installation and mutation-path enforcement are not implemented yet; they
+remain behind the explicit activation/casting questions in
+`docs/open-questions.md`.
+
+Run the focused suite with:
+
+```sh
+cargo test --test domain_paths --test schema_validation
+```

@@ -189,6 +189,17 @@ impl Selector {
         }
         false
     }
+
+    /// Returns whether the selector names a reserved system branch explicitly.
+    ///
+    /// Broad wildcards are not explicit: schema matching may restrict them to
+    /// the ordinary-topic domain without making an ordinary catch-all invalid.
+    #[must_use]
+    pub fn explicitly_targets_system(&self) -> bool {
+        self.segments
+            .first()
+            .is_some_and(SelectorSegment::explicitly_targets_system)
+    }
 }
 
 impl FromStr for Selector {
@@ -317,6 +328,14 @@ impl SelectorSegment {
             (Self::Recursive, _) | (_, Self::Recursive) => {
                 unreachable!("recursive selector segments are handled by Selector::intersects")
             }
+        }
+    }
+
+    fn explicitly_targets_system(&self) -> bool {
+        match self {
+            Self::Literal(value) => value.starts_with('$'),
+            Self::Choice(values) => values.iter().any(|value| value.starts_with('$')),
+            Self::One | Self::Recursive => false,
         }
     }
 }
