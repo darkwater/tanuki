@@ -106,7 +106,13 @@ A local Unix-socket entrypoint accessible to permitted local processes is desire
 
 All transports use shared core rules. A write request can affect multiple topics atomically—for example, lamp hue and brightness. Consumers must not observe an intermediate partial result.
 
-A rejected atomic operation must not leave partial state or emit some of its events. Linked-view invalidation must be part of the same observable change as its triggering write. The transaction envelope and handling of repeated/aliased targets need D6.
+A rejected atomic operation must not leave partial state or emit some of its
+events. Repeated same-topic operations execute in request order against the
+private candidate. Subscribers receive only the final retained node change for
+that topic, so a create followed by removal has no visible retained effect;
+instant occurrences remain ordered in the atomic batch. Linked-view
+invalidation must be part of the same observable change as its triggering
+write. Aliased targets through future links still need D6/D4 handling.
 
 Ownership warnings do not themselves reject ordinary output writes. Built-in system restrictions and rejecting schemas do reject prohibited operations. Warning details and error correlation must be available to callers.
 
@@ -158,11 +164,17 @@ Direct validation may attempt a cast and validate the result again. A successful
 
 Schema activation and replacement are atomic. A newly installed schema must
 not overlap rules in another installed schema: two patterns conflict when some
-valid topic could match both. Whether rules inside one schema may overlap, and
-the handling of already-stored violations during activation, remain open. Cast
-ordering and validation of a batch's candidate state must be deterministic.
-Advanced schema language features can wait; these structural rules cannot be
-implicit.
+valid topic could match both. Rules inside one schema may overlap and every
+matching validator must pass, but intersecting casting rules are invalid so
+conversion never depends on rule ordering. Initial casts are explicit string
+to integer, float, or boolean conversions.
+
+Normal installation rejects and reports existing deny violations. An explicit
+force installation removes deny-invalid state nodes and clears only the
+deny-invalid current value of desired inputs, preserving their definitions and
+claims. Warning violations remain and are reported. Existing stored data is
+never silently cast during installation. Advanced schema language features can
+wait; these structural rules cannot be implicit.
 
 Schema management may live under `/$schemas/<name>/...`. The exact declaration format and atomic installation operation are unselected.
 

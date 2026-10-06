@@ -6,31 +6,7 @@ that does not turn the provisional choice into an accepted requirement.
 
 ## Actually important — please answer
 
-1. **Destructive schema activation.** You suggested an explicit “apply anyway”
-   choice when existing values violate a newly installed schema. Should the
-   default attempt reject atomically with a violation report, while an explicit
-   force mode atomically installs the schema and removes deny-violating data?
-   For desired inputs, I recommend clearing only the offending retained value
-   while preserving its definition and claim; for state, removing the node is
-   the only meaningful equivalent. Warning-rule violations would remain and be
-   reported. Also, must rules within one schema be non-overlapping, or is the
-   zero-overlap rule only between separately installed schemas?
-
-2. **Repeated operations on one topic in one batch.** The current rule allows
-   one operation from each distinct input lifecycle stage, so a batch may
-   `define_input`, then `claim_input`, then `submit_desired` for `/lamp/desired`.
-   It rejects two `publish_state` operations for `/lamp/hue`, a publish followed
-   by `remove_node`, two desired submissions, or two events on the same topic.
-   Should these repeats stay invalid, or should Tanuki execute them in order
-   (making the last retained operation win while still delivering each instant
-   occurrence)?
-
-3. **Initial direct casts.** Which conversions should a schema be able to
-   request? My conservative recommendation is string to integer/float/bool only,
-   configured explicitly on a rule; never infer casts merely because a value
-   looks convertible, and never silently narrow float to integer. “No casts in
-   the first schema slice” is also coherent, but the implementation plan's
-   acceptance scenario currently expects one cast-success case.
+No unresolved question currently blocks the initial schema/core integration.
 
 ## Consequential, but the likely answer seems clear
 
@@ -40,16 +16,21 @@ that does not turn the provisional choice into an accepted requirement.
    transport queue is introduced. Overflow closes only that client with
    `slow_consumer`; reconnect is an ordinary new subscription and receives the
    ordinary initial snapshot, with no special recovery protocol.
-2. **Retained node wire shape.** Normalize both state and desired nodes around a
+2. **Within-schema overlap.** Allow ordinary validation rules in the same
+   schema to overlap and require every matching validator to pass. Reject
+   intersecting rules that both request casts, even when the requested cast is
+   identical, so conversion never depends on rule ordering. Separately
+   installed schemas remain non-overlapping.
+3. **Retained node wire shape.** Normalize both state and desired nodes around a
    `current` object (`value`, `last_write`, `expires_at`). Desired `current:
    null` then differs cleanly from `current: {value: null, ...}`.
-3. **Request identifiers.** Use opaque client-supplied strings. An error for a
+4. **Request identifiers.** Use opaque client-supplied strings. An error for a
    message that cannot be decoded enough to recover its ID uses `request_id:
    null`.
-4. **Filtered commit sequences.** Keep the global commit sequence in snapshots
+5. **Filtered commit sequences.** Keep the global commit sequence in snapshots
    and updates. Selected streams legitimately skip irrelevant global commits,
    so a gap is informational and not proof of message loss.
-5. **Instant-output metadata across restart.** Preserve event-node publisher
+6. **Instant-output metadata across restart.** Preserve event-node publisher
    metadata but never occurrences; preserve command definitions but never
    command payloads.
 
@@ -89,6 +70,14 @@ that does not turn the provisional choice into an accepted requirement.
 - Persistence is MessagePack. Invalid configured snapshots are copied to an
   adjacent `.bak` (then `.bak.N` if needed), logged, and startup continues with
   empty state.
+- Normal schema installation rejects existing deny violations. Explicit force
+  installation removes invalid state nodes and clears only invalid desired
+  payloads; warning violations remain and are reported.
+- Repeated same-topic operations execute sequentially inside the candidate
+  state. Subscribers receive only the batch's final retained shape, while every
+  instant occurrence remains in operation order.
+- Initial explicit casts are string to integer, float, or boolean. More liberal
+  conversions can be added later without implicit inference.
 
 Accepted decisions are recorded in `docs/spec.md`, `docs/architecture.md`, and
 `docs/decisions-to-review.md`. This file should not reopen them without a new

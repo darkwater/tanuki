@@ -602,7 +602,6 @@ impl ApiError {
             | CoreError::SubscriptionIdExhausted => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "capacity_exhausted")
             }
-            CoreError::DuplicateTarget { .. } => (StatusCode::BAD_REQUEST, "duplicate_target"),
             CoreError::UnsupportedOperation { .. } => {
                 (StatusCode::NOT_IMPLEMENTED, "unsupported_operation")
             }

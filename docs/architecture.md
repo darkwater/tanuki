@@ -114,8 +114,8 @@ the ability to enforce a stable shape where it matters.
 
 ## Core mutation and sessions implemented in tasks 02–03
 
-`Core::apply` is the only state mutation boundary. It validates system and
-duplicate-target rules, clones the current in-memory map into a candidate,
+`Core::apply` is the only state mutation boundary. It validates system-topic
+rules, clones the current in-memory map into a candidate,
 applies every operation against that candidate, and installs it only when all
 operations succeed. An error discards candidate nodes, event occurrences,
 warnings, and sequence advancement together. Successful output writes return a
@@ -130,8 +130,9 @@ never their occurrence payload.
 Input definition, claiming, desired submission/clearing, and command submission
 use the same candidate and commit path. Definition, claim, and submission are
 distinct operations and can be composed in that order for one topic in a
-single batch. Other repeated operations in the same lifecycle slot, and any
-same-topic output/removal combination, are rejected as ambiguous.
+single batch. Repeated operations in any lifecycle slot and output/removal
+combinations execute in request order. The core coalesces their retained
+effects against the pre-batch state while retaining all instant occurrences.
 
 The core registry maps each managed client name to an opaque session ID. A
 replacement invalidates the old handle before it can write again. Stateless
@@ -147,11 +148,9 @@ place and returns `(topic, claim ID, deadline)` work for the deadline scheduler;
 the claim ID is the guard against clearing a later replacement. If a grace
 deadline cannot be represented, the core warns and releases immediately.
 
-Two implementation defaults remain visibly provisional pending later protocol
-review: same-topic input lifecycle operations may compose once per lifecycle
-slot while ambiguous repeats are rejected, and instant-output metadata remains
-present in snapshots. These choices support atomic input creation without
-introducing implicit last-write-wins or event replay.
+Instant-output metadata remains a visibly provisional persistence default.
+Same-topic batch behavior is accepted: operations execute sequentially, the
+final retained shape is observed atomically, and occurrences are not dropped.
 
 ## Checkpoint B — stream contract accepted, remaining details tracked
 

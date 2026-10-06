@@ -115,7 +115,10 @@ fixed-duration text. Both decoders produce the same runtime values.
 
 **Recommended first contract:** a single serialized commit produces a single update batch per affected subscription. Register subscriptions and capture their snapshot at one commit boundary; then queue newer batches. Events are occurrences inside a batch, not stored snapshot payloads.
 
-- Reject duplicate canonical write targets in one request initially. This avoids accidental last-write-wins and ambiguous event repetition; clients can send separate batches. Revisit if multiple same-topic event occurrences in one transaction are useful.
+- Execute repeated canonical targets in request order against the private
+  candidate. Coalesce retained changes to the pre-batch versus final state and
+  preserve all instant occurrences in order. Consumers still apply the entire
+  batch before exposing a shape.
 - Support state and event operations in one transaction: validate the candidate changes first, then commit and deliver all or none.
 - Deduplicate a topic matched by several selectors. Initially treat all startup selectors as one union subscription; multiple independently shaped groups can be a client-library feature.
 - Deliver deltas and build coherent shapes in the client first. Do not deserialize the whole object between individual changes within a batch.
@@ -124,11 +127,10 @@ fixed-duration text. Both decoders produce the same runtime values.
 
 A disconnect after commit but before acknowledgement leaves the caller uncertain. No deduplication/replay subsystem is proposed: retrying a command can execute it twice. Document this rather than imply exactly-once delivery.
 
-Task 03 refines the provisional default so one definition, one claim, and one
-submission step may compose on the same input topic in operation order. A
-repeat in the same lifecycle slot, or any same-topic output/removal combination,
-is rejected. This is tested and documented but remains open for user review
-before the wire batch contract is frozen.
+Task 03 originally allowed only distinct input lifecycle steps on one topic.
+The 2026-10-06 review replaced that restriction with general sequential
+same-topic execution and final-shape coalescing; no duplicate-target error is
+part of the accepted batch contract.
 
 Task 05 implements the accepted snapshot-then-update stream as delta batches with full-node upserts, distinct
 event/command occurrences, removals carrying previous nodes, and a correlated

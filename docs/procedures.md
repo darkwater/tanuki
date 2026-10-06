@@ -16,8 +16,8 @@ scheduler for the restored shared core.
 
 All caller-initiated mutations pass through `Core::apply`:
 
-1. Reject reserved-system targets and ambiguous repeated operations before
-   staging. Distinct define/claim/submit input steps may share a topic.
+1. Reject reserved-system targets before staging. Repeated same-topic
+   operations are allowed and execute in request order.
 2. Clone authoritative nodes into a private candidate and compute the next
    sequence without modifying live state.
 3. Apply operations in request order. Compute provenance from the supplied
@@ -25,8 +25,10 @@ All caller-initiated mutations pass through `Core::apply`:
    changes privately.
 4. If any operation fails, discard the candidate, warnings, state changes, and
    event occurrences. The live sequence does not advance.
-5. Otherwise install the whole candidate, advance the sequence once, and return
-   one indivisible update batch plus successful-operation warnings.
+5. Otherwise coalesce each topic's retained changes against its pre-batch and
+   final state while preserving all instant occurrences in order. Install the
+   whole candidate, advance the sequence once, and return one indivisible
+   update batch plus successful-operation warnings.
 
 No network or disk work occurs in this transition. State/event publication,
 removal, input definition/claiming, desired submission/clearing, and command

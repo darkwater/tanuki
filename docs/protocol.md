@@ -24,11 +24,13 @@ Claiming requires a current managed session, but definition and submission may
 use an attributed stateless context. A batch may atomically define, claim, and
 submit on one input topic in operation order.
 
-The current core rejects duplicate operations in the same input lifecycle slot,
-same-topic output/removal combinations, and writes to the reserved `$`
-namespace. The repeated-target details remain provisional until the external
-batch contract is reviewed. The persistence format is internal and not a
-durable API.
+The current core executes repeated same-topic operations sequentially against
+one private candidate and rejects writes to the reserved `$` namespace. The
+observable update coalesces retained mutations to the final node shape while
+preserving every event and command occurrence in operation order. Thus a
+create followed by removal can commit successfully with no retained change
+visible to subscribers. The persistence format is internal and not a durable
+API.
 
 ## HTTP version 1
 

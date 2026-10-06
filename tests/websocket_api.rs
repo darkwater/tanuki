@@ -445,8 +445,8 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
         recv_json(&mut controller).await,
         ServerMessage::Reply { request_id, .. } if request_id.as_str() == "own-lamp"
     ));
-    assert_update_topics(&mut controller, &["/lamp/desired", "/lamp/desired"]).await;
-    assert_update_topics(&mut dashboard, &["/lamp/desired", "/lamp/desired"]).await;
+    assert_update_topics(&mut controller, &["/lamp/desired"]).await;
+    assert_update_topics(&mut dashboard, &["/lamp/desired"]).await;
 
     let remote = server
         .post_json(
@@ -580,7 +580,7 @@ async fn explicit_expiry_and_disconnect_grace_flow_through_live_transports() {
         ServerMessage::Reply { request_id, .. } if request_id.as_str() == "claim-with-grace"
     ));
     tokio::task::yield_now().await;
-    assert_update_topics_without_timeout(&mut dashboard, &["/lamp/desired", "/lamp/desired"]).await;
+    assert_update_topics_without_timeout(&mut dashboard, &["/lamp/desired"]).await;
     controller.close(None).await.unwrap();
     wait_for_session_count(&server.core, 1).await;
 

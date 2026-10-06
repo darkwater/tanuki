@@ -228,16 +228,67 @@ fn freeform_kind_change_warns_and_replaces_incompatible_state() {
 }
 
 #[test]
-fn repeated_target_rejects_the_whole_batch() {
+fn repeated_retained_operations_run_in_order_and_publish_only_the_final_shape() {
     let mut core = Core::new();
-    let result = core.apply(
-        &actor("lamp controller"),
-        batch(vec![state("/lamp/hue", 120), state("/lamp/hue", 121)]),
-        at(10),
-    );
+    let outcome = core
+        .apply(
+            &actor("lamp controller"),
+            batch(vec![state("/lamp/hue", 120), state("/lamp/hue", 121)]),
+            at(10),
+        )
+        .unwrap();
 
-    assert!(matches!(result, Err(CoreError::DuplicateTarget { .. })));
+    assert!(matches!(
+        outcome.update().changes(),
+        [Change::Upsert { node: Node::State(node), .. }]
+            if node.current().value() == &Value::Integer(121)
+    ));
+}
+
+#[test]
+fn create_then_remove_in_one_batch_has_no_visible_retained_change() {
+    let mut core = Core::new();
+    let outcome = core
+        .apply(
+            &actor("lamp controller"),
+            batch(vec![
+                state("/lamp/hue", 120),
+                WriteOperation::RemoveNode {
+                    topic: topic("/lamp/hue"),
+                },
+            ]),
+            at(10),
+        )
+        .unwrap();
+
+    assert!(outcome.update().changes().is_empty());
     assert!(core.read(&all()).nodes().is_empty());
+}
+
+#[test]
+fn repeated_instant_operations_preserve_occurrence_order_with_one_final_node() {
+    let mut core = Core::new();
+    let event = |value: &str| WriteOperation::PublishEvent {
+        topic: topic("/doorbell/rang"),
+        value: Value::String(value.to_owned()),
+    };
+    let outcome = core
+        .apply(
+            &actor("doorbell"),
+            batch(vec![event("ding"), event("dong")]),
+            at(10),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        outcome.update().changes(),
+        [
+            Change::Upsert { node: Node::Event(_), .. },
+            Change::Occurrence { event: first, .. },
+            Change::Occurrence { event: second, .. },
+        ] if first.value() == &Value::String("ding".to_owned())
+            && second.value() == &Value::String("dong".to_owned())
+    ));
 }
 
 #[test]

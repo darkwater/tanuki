@@ -49,7 +49,8 @@ JSON/MessagePack runtime-value equivalence coverage.
 - warned output takeover with changed provenance;
 - instant occurrence delivery without retained payload;
 - warned freeform node-kind replacement; and
-- provisional repeated-target rejection;
+- sequential repeated-target execution, final retained-shape coalescing, and
+  ordered repeated occurrences;
 - selection-filtered snapshots; and
 - removal carrying the previous visible state.
 

@@ -62,7 +62,7 @@ impl Core {
         now: Timestamp,
     ) -> Result<CommitOutcome, CoreError> {
         self.validate_actor(actor)?;
-        validate_targets(&batch)?;
+        validate_topics(&batch)?;
 
         let next_sequence = self
             .sequence
@@ -70,7 +70,8 @@ impl Core {
             .checked_add(1)
             .map(CommitSequence)
             .ok_or(CoreError::SequenceExhausted)?;
-        let mut candidate = self.nodes.clone();
+        let previous = self.nodes.clone();
+        let mut candidate = previous.clone();
         let mut next_claim_id = self.next_claim_id;
         let mut changes = Vec::new();
         let mut warnings = Vec::new();
@@ -86,6 +87,8 @@ impl Core {
                 &mut next_claim_id,
             )?;
         }
+
+        let changes = coalesce_batch_changes(&previous, &candidate, changes);
 
         debug_assert!(candidate.keys().all(|topic| !topic.is_system()));
         self.nodes = candidate;
@@ -672,8 +675,6 @@ impl PendingClaimRelease {
 pub enum CoreError {
     #[error("writes to reserved system topic `{topic}` are not permitted")]
     SystemTopic { topic: TopicPath },
-    #[error("write batch targets `{topic}` more than once")]
-    DuplicateTarget { topic: TopicPath },
     #[error("operation `{operation}` is not implemented in the current core phase")]
     UnsupportedOperation { operation: &'static str },
     #[error("deadline for `{topic}` is outside the supported timestamp range")]
@@ -708,8 +709,7 @@ pub enum CoreError {
     ClaimAuthorityRequired { topic: TopicPath },
 }
 
-fn validate_targets(batch: &WriteBatch) -> Result<(), CoreError> {
-    let mut targets: BTreeMap<TopicPath, BTreeSet<OperationSlot>> = BTreeMap::new();
+fn validate_topics(batch: &WriteBatch) -> Result<(), CoreError> {
     for operation in batch.operations() {
         let topic = operation.topic();
         if topic.is_system() {
@@ -717,41 +717,51 @@ fn validate_targets(batch: &WriteBatch) -> Result<(), CoreError> {
                 topic: topic.clone(),
             });
         }
-        let slot = OperationSlot::of(operation);
-        let slots = targets.entry(topic.clone()).or_default();
-        let conflicts = slots.contains(&slot)
-            || (slot == OperationSlot::Exclusive && !slots.is_empty())
-            || slots.contains(&OperationSlot::Exclusive);
-        if conflicts {
-            return Err(CoreError::DuplicateTarget {
-                topic: topic.clone(),
-            });
-        }
-        slots.insert(slot);
     }
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum OperationSlot {
-    Define,
-    Claim,
-    Submit,
-    Exclusive,
+fn coalesce_batch_changes(
+    previous: &BTreeMap<TopicPath, Node>,
+    candidate: &BTreeMap<TopicPath, Node>,
+    staged: Vec<Change>,
+) -> Vec<Change> {
+    let mut emitted_node_topics = BTreeSet::new();
+    let mut changes = Vec::with_capacity(staged.len());
+    for change in staged {
+        match change {
+            Change::Occurrence { .. } | Change::Command { .. } => changes.push(change),
+            Change::Upsert { topic, .. } | Change::Removed { topic, .. } => {
+                if emitted_node_topics.insert(topic.clone())
+                    && let Some(change) = net_node_change(&topic, previous, candidate)
+                {
+                    changes.push(change);
+                }
+            }
+        }
+    }
+    changes
 }
 
-impl OperationSlot {
-    fn of(operation: &WriteOperation) -> Self {
-        match operation {
-            WriteOperation::DefineInput { .. } => Self::Define,
-            WriteOperation::ClaimInput { .. } => Self::Claim,
-            WriteOperation::SubmitDesired { .. }
-            | WriteOperation::SubmitCommand { .. }
-            | WriteOperation::ClearDesired { .. } => Self::Submit,
-            WriteOperation::PublishState { .. }
-            | WriteOperation::PublishEvent { .. }
-            | WriteOperation::RemoveNode { .. } => Self::Exclusive,
-        }
+fn net_node_change(
+    topic: &TopicPath,
+    previous: &BTreeMap<TopicPath, Node>,
+    candidate: &BTreeMap<TopicPath, Node>,
+) -> Option<Change> {
+    match (previous.get(topic), candidate.get(topic)) {
+        (Some(old), Some(new)) if old != new => Some(Change::Upsert {
+            topic: topic.clone(),
+            node: new.clone(),
+        }),
+        (None, Some(new)) => Some(Change::Upsert {
+            topic: topic.clone(),
+            node: new.clone(),
+        }),
+        (Some(old), None) => Some(Change::Removed {
+            topic: topic.clone(),
+            previous: old.clone(),
+        }),
+        _ => None,
     }
 }
 
