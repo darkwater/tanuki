@@ -37,14 +37,14 @@ state; clients needing every command or transition use raw update listeners.
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` verifies explicit ownership, remote desired submission, paired output and rejected mixed-batch rollback; `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` covers desired expiry with the claim intact. The compiled controller accepts `/lamp/desired-brightness` and simulates an atomic `/lamp/hue` + `/lamp/brightness` report; a dashboard observed that report on loopback. No physical lamp action is verified.
+- Native SDK evidence: `tanuki/tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` verifies explicit ownership, remote desired submission, paired output and rejected mixed-batch rollback; `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` covers desired expiry with the claim intact. The compiled controller accepts `/lamp/desired-brightness` and simulates an atomic `/lamp/hue` + `/lamp/brightness` report; a dashboard observed that report on loopback. No physical lamp action is verified.
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
-- `tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. `tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies transport-neutral whole-batch consumption.
-- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies US-07.A1, and `disconnect_immediately_releases_claim_but_preserves_desired_value` verifies the immediate-release portion of US-07.A5.
-- `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a remote submission reaches the controller and its paired hue/brightness update reaches the dashboard as one WebSocket batch. `disconnect_immediately_releases_an_owned_input_claim` covers socket disconnect cleanup.
-- `tests/core_expiry.rs` and `tests/scheduler.rs` verify US-07.A3–A5, including stale deadline/claim guards. `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` observes submission during disconnect grace and later claim release while retaining the desired value.
-- `tests/persistence.rs::coherent_save_restore_filters_expired_values_and_clears_live_authority` verifies desired definition/value restoration with the old claim cleared.
+- `tanuki/tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. `tanuki/tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies transport-neutral whole-batch consumption.
+- `tanuki/tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies US-07.A1, and `disconnect_immediately_releases_claim_but_preserves_desired_value` verifies the immediate-release portion of US-07.A5.
+- `tanuki/tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a remote submission reaches the controller and its paired hue/brightness update reaches the dashboard as one WebSocket batch. `disconnect_immediately_releases_an_owned_input_claim` covers socket disconnect cleanup.
+- `tanuki/tests/core_expiry.rs` and `tanuki/tests/scheduler.rs` verify US-07.A3–A5, including stale deadline/claim guards. `tanuki/tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` observes submission during disconnect grace and later claim release while retaining the desired value.
+- `tanuki/tests/persistence.rs::coherent_save_restore_filters_expired_values_and_clears_live_authority` verifies desired definition/value restoration with the old claim cleared.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

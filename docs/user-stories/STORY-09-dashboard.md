@@ -47,14 +47,14 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tests/native_sdk.rs` covers initial empty/current snapshots, overlapping selections, newly present phone state, atomic paired output, immutable history, metadata/removal, null versus absent desired payload and local decode recovery. Deterministic SDK unit tests distinguish latest-output replacement from terminal input lag. The ordinary compiled dashboard example was exercised against the production binary; no GUI, browser or Iced application is claimed.
+- Native SDK evidence: `tanuki/tests/native_sdk.rs` covers initial empty/current snapshots, overlapping selections, newly present phone state, atomic paired output, immutable history, metadata/removal, null versus absent desired payload and local decode recovery. Deterministic SDK unit tests distinguish latest-output replacement from terminal input lag. The ordinary compiled dashboard example was exercised against the production binary; no GUI, browser or Iced application is claimed.
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, T1; E1 dashboard; add wildcard membership fixture.
-- `tests/core_subscriptions.rs` verifies US-09.A1, A3, and A5 at the core boundary, including explicit empty snapshots and newly matching wildcard topics.
-- `tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies US-09.A2 in the minimal client projection.
-- `tests/client_view.rs::removals_change_shape_and_occurrences_stay_out_of_retained_nodes`, `tests/protocol_subscription.rs::desired_missing_and_submitted_null_have_distinct_node_views`, and the domain value tests cover the transport-neutral portion of US-09.A4.
-- `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a dashboard selection receiving battery, desired lamp, paired actual lamp, and derived location updates over a real loopback WebSocket.
-- `tests/http_api.rs::sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch`
+- `tanuki/tests/core_subscriptions.rs` verifies US-09.A1, A3, and A5 at the core boundary, including explicit empty snapshots and newly matching wildcard topics.
+- `tanuki/tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies US-09.A2 in the minimal client projection.
+- `tanuki/tests/client_view.rs::removals_change_shape_and_occurrences_stay_out_of_retained_nodes`, `tanuki/tests/protocol_subscription.rs::desired_missing_and_submitted_null_have_distinct_node_views`, and the domain value tests cover the transport-neutral portion of US-09.A4.
+- `tanuki/tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies a dashboard selection receiving battery, desired lamp, paired actual lamp, and derived location updates over a real loopback WebSocket.
+- `tanuki/tests/http_api.rs::sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch`
   verifies snapshot-first SSE delivery, whole-batch updates, and fresh-snapshot
   reconnect behavior through the production router.
 - Real clients, scripts, configuration and deployment: not yet recorded.

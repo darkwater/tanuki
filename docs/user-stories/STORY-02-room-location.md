@@ -32,7 +32,7 @@ Actual sensors, inference and timeout rules, confidence/unknown representation, 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C2, C3; E1 step 3; add a story-specific missing-sensor case.
-- `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` covers the basic US-02.A1/A3/A5 chain with one motion state, an external location actor, an automation actor, and a lamp controller. Multi-sensor atomic recomputation and missing/stale sensor handling remain deferred.
+- `tanuki/tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` covers the basic US-02.A1/A3/A5 chain with one motion state, an external location actor, an automation actor, and a lamp controller. Multi-sensor atomic recomputation and missing/stale sensor handling remain deferred.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

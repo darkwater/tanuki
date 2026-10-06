@@ -40,13 +40,13 @@ Existing foundations:
 
 | File | Useful starting point |
 | --- | --- |
-| `src/protocol.rs` | Value codecs, snapshot/update/node/error DTOs; currently imports core types |
-| `src/transport.rs` | Private hello/write request DTOs and operation conversion; current wire behavior |
-| `src/client.rs` | `SelectedView` applies complete batches, separates occurrences and checks sequence order |
-| `src/domain/` | Paths, selection matching, values, identity and operation invariants |
-| `tests/protocol_json.rs`, `tests/protocol_subscription.rs` | Existing codec and stream-shape contracts |
-| `tests/client_view.rs`, `tests/websocket_api.rs` | Atomic local views and real-server socket scenarios |
-| `Cargo.toml`, `rust-toolchain.toml`, `docs/toolchain.md` | Exact dependencies and `nightly-2026-10-01` pin |
+| `tanuki/src/protocol.rs` | Value codecs, snapshot/update/node/error DTOs; currently imports core types |
+| `tanuki/src/transport.rs` | Private hello/write request DTOs and operation conversion; current wire behavior |
+| `tanuki/src/client.rs` | `SelectedView` applies complete batches, separates occurrences and checks sequence order |
+| `tanuki/src/domain/` | Paths, selection matching, values, identity and operation invariants |
+| `tanuki/tests/protocol_json.rs`, `tanuki/tests/protocol_subscription.rs` | Existing codec and stream-shape contracts |
+| `tanuki/tests/client_view.rs`, `tanuki/tests/websocket_api.rs` | Atomic local views and real-server socket scenarios |
+| `Cargo.toml`, `tanuki/Cargo.toml`, `rust-toolchain.toml`, `docs/toolchain.md` | Workspace, exact dependencies and `nightly-2026-10-01` pin |
 
 At handoff, the worktree contains design edits to this document,
 `docs/client-api-design.md`, `docs/implementation-plan.md`, and stories 01, 07,
@@ -234,7 +234,7 @@ add Iced as an SDK dependency just to complete this task. Documentation can show
 an Iced sketch and clearly distinguish it from a compiled/verified example.
 
 Run the full workspace suite and release correctness checks. Use SDK clients in
-real-server integration scenarios for US-01, US-07 and US-09. Root integration
+real-server integration scenarios for US-01, US-07 and US-09. Server integration
 tests can depend on client without making client depend on the server. Preserve
 existing HTTP tests as server regressions. Update architecture, protocol usage,
 procedures, toolchain, testing traceability and relevant stories.
@@ -295,7 +295,7 @@ the implementation session.
 
 The earlier sections preserve the original design handoff. The native sequence
 has now been implemented in order; see
-[the compiled SDK guide](../crates/tanuki-client/README.md) and
+[the compiled SDK guide](../tanuki-client/README.md) and
 [acceptance traceability](testing.md#native-sdk-acceptance--2026-10-07).
 
 | Task | Delivered and checked |
@@ -313,7 +313,7 @@ Single observation uses the same `ObservationSnapshot` type as batches (with one
 selected path). `read` of a path omitted from that projection reports
 `NotObserved`. Clean closure drains admitted deltas and exposes final unseen
 latest output; abnormal reasons preempt buffered data, report once and then end.
-The writer has a one-second shutdown bound. Root server-side message constructors
+The writer has a one-second shutdown bound. Server-side message constructors
 are conversion functions, since shared DTOs cannot depend on core types.
 
 New fixtures found a pre-existing Serde buffering issue: whole MessagePack
@@ -328,3 +328,8 @@ Arbitrary derived semantic-time adapters, total decoded-memory budgets and
 cross-topic Serde shapes remain deferred. Browser std is not installed, so
 browser portability is unverified. No browser bindings, Iced-specific code,
 automatic reconnect/retry, replay, deployment or real hardware claim was added.
+
+On 2026-10-07 the workspace was flattened to the user's usual convention:
+`tanuki/`, `tanuki-protocol/`, and `tanuki-client/` directly at the root. The server
+source/tests moved into its package; shared documentation and Cargo.lock remain
+at the workspace root. References above now point to the current package paths.

@@ -34,10 +34,10 @@ link chains are deliberately deferred.
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — K1; E1 step 6.
-- Story-specific evidence: `tests/core_links.rs` covers projection, alias writes,
+- Story-specific evidence: `tanuki/tests/core_links.rs` covers projection, alias writes,
   invalidation/removal, repair, policy recovery, instant events, topology, and
-  replacement/removal. `tests/http_api.rs`, `tests/websocket_api.rs`, and
-  `tests/persistence.rs` cover adapters and restart.
+  replacement/removal. `tanuki/tests/http_api.rs`, `tanuki/tests/websocket_api.rs`, and
+  `tanuki/tests/persistence.rs` cover adapters and restart.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

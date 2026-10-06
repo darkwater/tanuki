@@ -12,7 +12,7 @@ Runtime dependencies now include Tokio 1.53.2, Axum 0.8.9, Serde/serde_json,
 MessagePack via rmp-serde 1.3.1, Jiff 0.2.37, thiserror 2.0.21, base64 0.23.1,
 tracing 0.1.44, and tracing-subscriber 0.3.23. Tower 0.5.3 is used by router
 integration tests; futures-util 0.3.34 and Tokio Tungstenite 0.29.0 drive real
-WebSocket test clients. Versions are exact pins in `Cargo.toml`; `Cargo.lock`
+WebSocket test clients. Versions are exact pins in the package `Cargo.toml` manifests; `Cargo.lock`
 is committed. Tokio Tungstenite matches Axum's transitive version to avoid a
 duplicate WebSocket stack in the test build.
 

@@ -11,12 +11,25 @@ release. Real-device deployment is not implied; remaining product questions and
 provisional limits are listed in
 [docs/open-questions.md](docs/open-questions.md).
 
+## Workspace layout
+
+The repository root is a virtual Cargo workspace. All packages live directly
+at the root:
+
+- `tanuki/` — authoritative server library, binary and integration tests
+- `tanuki-protocol/` — shared wire types/codecs and validated primitives
+- `tanuki-client/` — native Rust SDK, examples and client tests
+
+Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the
+workspace root. See [the SDK guide](tanuki-client/README.md) for typed publication,
+atomic writes and raw/latest-state observations.
+
 ## Run it
 
 The repository pins `nightly-2026-10-01`, including rustfmt and Clippy.
 
 ```sh
-cargo run
+cargo run -p tanuki
 ```
 
 The default listener is `127.0.0.1:5167`. Set `TANUKI_LISTEN` to another socket
@@ -134,9 +147,9 @@ JSON/MessagePack value mappings.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-cargo test --release --all-targets --all-features
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo test --workspace --release
 ```
 
 The suites include real loopback HTTP/WebSocket clients, a simulated room with
@@ -163,8 +176,8 @@ documents take precedence when they disagree.
 ## Current limitations
 
 TCP/MQTT adapters, authentication, a Unix-socket listener, large-blob
-transfer, event replay, outgoing queued-byte accounting, and a polished client
-SDK are not yet implemented. Link chains are deliberately unsupported.
+transfer, event replay, and outgoing queued-byte accounting are not yet
+implemented. Link chains are deliberately unsupported.
 Persistence is periodic best effort rather than a WAL: an
 acknowledged write can be lost if the process crashes before the next completed
 snapshot. Wire shapes are versioned and remain pre-1.0.

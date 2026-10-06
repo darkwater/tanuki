@@ -38,24 +38,24 @@ browser bindings and real-device use remain unverified.
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` verifies typed `/battery/laptop` publication, complete laptop/phone observations and same-name stateless HTTP coexistence. SDK timer observation covers removal. The compiled `publisher` and `dashboard` examples were exercised against the production binary on loopback. No battery widget/device deployment is claimed.
+- Native SDK evidence: `tanuki/tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` verifies typed `/battery/laptop` publication, complete laptop/phone observations and same-name stateless HTTP coexistence. SDK timer observation covers removal. The compiled `publisher` and `dashboard` examples were exercised against the production binary on loopback. No battery widget/device deployment is claimed.
 
 - Core test links: [test plan](../test-plan.md) — C1, C3, L2, S1, T1; E1 steps 1 and 4.
-- `tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry`
-  verifies the refresh portion of US-01.A3. `tests/core_freshness.rs` and the
+- `tanuki/tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry`
+  verifies the refresh portion of US-01.A3. `tanuki/tests/core_freshness.rs` and the
   scheduler suite verify observable overdue status and identical-value
   recovery; connection state remains a distinct concept.
-- `tests/core_publication.rs::snapshot_selection_filters_topics_and_removal_carries_previous_state`
+- `tanuki/tests/core_publication.rs::snapshot_selection_filters_topics_and_removal_carries_previous_state`
   verifies selected retained reads; transport-neutral and live WebSocket
   startup/update handoff are covered by the subscription and socket suites.
-- `tests/http_api.rs::battery_publish_and_read_work_over_a_real_tcp_listener` verifies a stateless phone-style HTTP publication and anonymous selected read through the production router. It is simulated local traffic, not a deployed phone integration.
-- `tests/core_subscriptions.rs::snapshot_then_newer_update_has_no_registration_gap` verifies the core snapshot-plus-live-update portion of US-01.A1.
-- `tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies laptop WebSocket plus phone HTTP publication reaching a live dashboard. `same_name_http_is_stateless_but_duplicate_websocket_replaces_session` covers US-01.A2 and managed replacement on real loopback sockets.
-- `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` verifies US-01.A4 with controlled wall/monotonic time and an observed removal batch. Refresh/stale-timer guards are covered by `tests/core_expiry.rs` and `tests/scheduler.rs`.
-- `tests/persistence_server.rs` verifies a retained battery value survives an orderly save and production restart path; actual deployment persistence remains unverified.
-- `tests/http_api.rs::schema_installation_casts_valid_http_writes_and_denies_invalid_ones`
+- `tanuki/tests/http_api.rs::battery_publish_and_read_work_over_a_real_tcp_listener` verifies a stateless phone-style HTTP publication and anonymous selected read through the production router. It is simulated local traffic, not a deployed phone integration.
+- `tanuki/tests/core_subscriptions.rs::snapshot_then_newer_update_has_no_registration_gap` verifies the core snapshot-plus-live-update portion of US-01.A1.
+- `tanuki/tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports` verifies laptop WebSocket plus phone HTTP publication reaching a live dashboard. `same_name_http_is_stateless_but_duplicate_websocket_replaces_session` covers US-01.A2 and managed replacement on real loopback sockets.
+- `tanuki/tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports` verifies US-01.A4 with controlled wall/monotonic time and an observed removal batch. Refresh/stale-timer guards are covered by `tanuki/tests/core_expiry.rs` and `tanuki/tests/scheduler.rs`.
+- `tanuki/tests/persistence_server.rs` verifies a retained battery value survives an orderly save and production restart path; actual deployment persistence remains unverified.
+- `tanuki/tests/http_api.rs::schema_installation_casts_valid_http_writes_and_denies_invalid_ones`
   verifies US-01.A5's denying path and an explicit string-to-integer cast.
-  `tests/core_schema.rs::warning_rules_accept_the_original_value_and_return_a_diagnostic`
+  `tanuki/tests/core_schema.rs::warning_rules_accept_the_original_value_and_return_a_diagnostic`
   covers its warning path. The composite room scenario exercises warning
   acceptance together with a denying linked dashboard view and recovery.
 - Real clients, scripts, configuration and deployment: not yet recorded.

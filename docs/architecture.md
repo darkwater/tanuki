@@ -334,7 +334,7 @@ transient conditions that are not retained active state.
 
 ## Native SDK boundary — SDK-01 through SDK-06
 
-The workspace has three packages: the root server, `tanuki-protocol`, and
+The workspace has three packages: the server package, `tanuki-protocol`, and
 `tanuki-client`. Protocol owns validated paths/selectors/client names, values,
 time/timer primitives, bidirectional wire DTOs, value codecs and `SelectedView`.
 Server modules re-export migrated types. Authority-bearing session/claim handles,
@@ -375,3 +375,13 @@ and explicit close joins tasks. Clean termination drains admitted raw batches an
 exposes final unseen latest output; abnormal termination takes precedence over
 queued data and is reported once. No replay, retry, reconnect, schema validation
 or framework-specific integration lives in the SDK.
+
+## Flat package layout — 2026-10-07
+
+All three packages live directly below the repository root: `tanuki/`,
+`tanuki-protocol/`, and `tanuki-client/`. The root manifest is a virtual workspace
+and defaults test/check commands to all members. The server owns its `src/` and
+`tests/` directories inside `tanuki/`; shared docs, toolchain pin, lockfile and CI
+stay at the root. Use `cargo run -p tanuki` to select the server explicitly.
+This matches the user's usual package layout and avoids treating the server as
+structurally special. Runtime dependency direction is unchanged.

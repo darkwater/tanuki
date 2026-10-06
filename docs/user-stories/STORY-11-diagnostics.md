@@ -35,10 +35,10 @@ Log schema, event versus retained status, notifier identity/routing and future s
 
 ## Implementation and evidence
 
-- Automated evidence: `tests/core_freshness.rs` covers overdue/recovery state,
-  exclusions, and recursive-failure prevention; `tests/scheduler.rs` covers the
-  timed wake; `tests/core_links.rs` covers link condition onset/recovery; and
-  `tests/persistence.rs` covers restart derivation.
+- Automated evidence: `tanuki/tests/core_freshness.rs` covers overdue/recovery state,
+  exclusions, and recursive-failure prevention; `tanuki/tests/scheduler.rs` covers the
+  timed wake; `tanuki/tests/core_links.rs` covers link condition onset/recovery; and
+  `tanuki/tests/persistence.rs` covers restart derivation.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

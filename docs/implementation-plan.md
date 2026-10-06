@@ -438,7 +438,7 @@ packages, direct wire control, background sessions, weak typed handles, atomic
 writes and raw/latest-state observation now have compiled implementations and
 real-server acceptance tests. Consumer examples were exercised together against
 the production binary. See [testing.md](testing.md) for task/story coverage and
-[the SDK guide](../crates/tanuki-client/README.md) for exact APIs/defaults.
+[the SDK guide](../tanuki-client/README.md) for exact APIs/defaults.
 Browser transport/bindings and Iced-specific integration remain out of scope.
 The protocol-only browser check could not run because target std is absent;
 TLS and Serde 128-bit methods remain explicit native limitations.

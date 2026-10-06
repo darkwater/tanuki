@@ -2,7 +2,7 @@
 
 ## Bootstrap lifecycle
 
-`tests/server_lifecycle.rs` checks that the production lifecycle seam accepts
+`tanuki/tests/server_lifecycle.rs` checks that the production lifecycle seam accepts
 an injected shutdown request and that its task joins successfully.
 
 Run it with:
@@ -17,16 +17,16 @@ The full quality gates are recorded in `docs/toolchain.md` and CI.
 
 | Contract | Evidence |
 | --- | --- |
-| Absolute topics; virtual root; empty/dot/trailing-segment rejection | `tests/domain_paths.rs::topic_paths_enforce_boundaries_through_every_public_conversion` |
-| Reserved selector characters and system namespace | `tests/domain_paths.rs::topic_paths_enforce_boundaries_through_every_public_conversion` |
-| Exact, `*`, zero-or-more `**`, brace choice, union, and empty matching | `tests/domain_paths.rs::selector_matcher_covers_exact_single_recursive_choice_union_and_empty` |
-| Selector intersection and nonintersection matching invariant | `tests/domain_paths.rs::selector_intersection_detects_shared_possible_topics` and `nonintersecting_selectors_never_match_the_same_topic_in_a_small_corpus` |
-| Malformed selectors and codec validation | `tests/domain_paths.rs::malformed_selector_syntax_is_rejected_instead_of_guessed` |
-| Maps do not create child topics | `tests/domain_paths.rs::maps_remain_values_instead_of_implicit_child_topics` and `tests/domain_values.rs::a_map_is_one_runtime_value` |
-| Finite floats and missing-versus-null desired payload | `tests/domain_values.rs` |
-| Instant nodes cannot retain payloads | `tests/domain_values.rs::instant_nodes_cannot_retain_payloads_or_expiry` |
-| Validated client-name deserialization | `tests/domain_values.rs::client_name_deserialization_cannot_bypass_validation` |
-| Nonnegative timer durations and nonempty batches | `tests/domain_operations.rs` |
+| Absolute topics; virtual root; empty/dot/trailing-segment rejection | `tanuki/tests/domain_paths.rs::topic_paths_enforce_boundaries_through_every_public_conversion` |
+| Reserved selector characters and system namespace | `tanuki/tests/domain_paths.rs::topic_paths_enforce_boundaries_through_every_public_conversion` |
+| Exact, `*`, zero-or-more `**`, brace choice, union, and empty matching | `tanuki/tests/domain_paths.rs::selector_matcher_covers_exact_single_recursive_choice_union_and_empty` |
+| Selector intersection and nonintersection matching invariant | `tanuki/tests/domain_paths.rs::selector_intersection_detects_shared_possible_topics` and `nonintersecting_selectors_never_match_the_same_topic_in_a_small_corpus` |
+| Malformed selectors and codec validation | `tanuki/tests/domain_paths.rs::malformed_selector_syntax_is_rejected_instead_of_guessed` |
+| Maps do not create child topics | `tanuki/tests/domain_paths.rs::maps_remain_values_instead_of_implicit_child_topics` and `tanuki/tests/domain_values.rs::a_map_is_one_runtime_value` |
+| Finite floats and missing-versus-null desired payload | `tanuki/tests/domain_values.rs` |
+| Instant nodes cannot retain payloads | `tanuki/tests/domain_values.rs::instant_nodes_cannot_retain_payloads_or_expiry` |
+| Validated client-name deserialization | `tanuki/tests/domain_values.rs::client_name_deserialization_cannot_bypass_validation` |
+| Nonnegative timer durations and nonempty batches | `tanuki/tests/domain_operations.rs` |
 
 Run the focused domain suite with:
 
@@ -39,7 +39,7 @@ JSON/MessagePack runtime-value equivalence coverage.
 
 ## Task 02 — core publication and atomic batches
 
-`tests/core_publication.rs` covers:
+`tanuki/tests/core_publication.rs` covers:
 
 - reserved-system rejection with no state effects;
 - late deadline failure after staged state and event operations, with no
@@ -62,7 +62,7 @@ cargo test --test core_publication
 
 ## Task 03 — managed sessions and inputs
 
-`tests/core_sessions_inputs.rs` covers the C1 identity boundary and the first
+`tanuki/tests/core_sessions_inputs.rs` covers the C1 identity boundary and the first
 part of L1:
 
 - stateless define-and-submit creates pending desired intent without a session;
@@ -86,9 +86,9 @@ scheduler suite.
 
 ## Task 04 — JSON and basic HTTP
 
-`tests/protocol_json.rs` verifies exact large signed integers, rejection of
+`tanuki/tests/protocol_json.rs` verifies exact large signed integers, rejection of
 out-of-range unsigned integers, and escaping literal reserved tag keys.
-`tests/http_api.rs` verifies common extractor/domain/routing errors, the single
+`tanuki/tests/http_api.rs` verifies common extractor/domain/routing errors, the single
 state convenience route, stateless atomic input batches, semantic JSON values,
 anonymous selected reads, and a battery publish/read through a real ephemeral
 TCP listener.
@@ -104,12 +104,12 @@ incompatible changes remain possible during the initial release review.
 
 ## Task 05 — coherent core subscriptions and checkpoint-B DTOs
 
-`tests/core_subscriptions.rs` covers atomic snapshot registration, an actual
+`tanuki/tests/core_subscriptions.rs` covers atomic snapshot registration, an actual
 concurrent registration/write race, filtered atomic batches, overlapping
 selector deduplication, explicit empty snapshots, live-only occurrences,
 metadata-only upserts, desired clearing, removals, and isolated slow-consumer
-closure. `tests/protocol_subscription.rs` covers the provisional correlated
-snapshot/update shapes. `tests/client_view.rs` verifies whole-batch local shape
+closure. `tanuki/tests/protocol_subscription.rs` covers the provisional correlated
+snapshot/update shapes. `tanuki/tests/client_view.rs` verifies whole-batch local shape
 application, occurrence separation, removals, and stale-update rollback.
 
 Run the focused suite with:
@@ -123,7 +123,7 @@ the tracked transport limitation.
 
 ## Task 06 — WebSocket codecs and mixed-client simulation
 
-`tests/websocket_api.rs` starts the production Axum server on an ephemeral
+`tanuki/tests/websocket_api.rs` starts the production Axum server on an ephemeral
 listener and uses real WebSocket and HTTP clients. It verifies snapshot-first
 hello acknowledgement, reply/update ordering, JSON and MessagePack delivery,
 same-name stateless HTTP isolation, duplicate managed-session closure, and
@@ -132,9 +132,9 @@ laptop, phone, dashboard, lamp controller, motion/location script, and
 automation; assertions follow downstream batches rather than stopping at
 producer acknowledgements.
 
-`tests/protocol_json.rs` pins native MessagePack bytes, timestamp/duration
+`tanuki/tests/protocol_json.rs` pins native MessagePack bytes, timestamp/duration
 extension vectors, nested codec equivalence, and literal JSON tag-map escaping.
-Core slow-consumer isolation remains covered in `tests/core_subscriptions.rs`.
+Core slow-consumer isolation remains covered in `tanuki/tests/core_subscriptions.rs`.
 
 Run the focused suite with:
 
@@ -147,11 +147,11 @@ client SDK. Total outgoing-byte accounting remains unimplemented.
 
 ## SSE endpoint
 
-`tests/http_api.rs::sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch`
+`tanuki/tests/http_api.rs::sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch`
 verifies the production router's `text/event-stream` response, empty initial
 snapshot, one-event delivery of a two-topic atomic commit, and fresh-snapshot
 reconnection even when `Last-Event-ID` is supplied.
-`tests/http_api.rs::sse_query_failures_use_the_common_error_shape` verifies
+`tanuki/tests/http_api.rs::sse_query_failures_use_the_common_error_shape` verifies
 that pre-stream extractor failures retain the common HTTP error envelope.
 
 Run the focused suite with:
@@ -162,17 +162,17 @@ cargo test --test http_api sse
 
 ## Task 07 — value expiry and claim grace
 
-`tests/core_expiry.rs` verifies that equal due times form one commit, state
+`tanuki/tests/core_expiry.rs` verifies that equal due times form one commit, state
 expiry removes a node, desired expiry clears only its payload, a refreshed
 deadline defeats stale work, submissions during grace survive release, and a
 stale claim ID cannot clear a reclaim.
 
-`tests/scheduler.rs` runs with paused Tokio time and an independently controlled
+`tanuki/tests/scheduler.rs` runs with paused Tokio time and an independently controlled
 wall clock. It verifies that moving a deadline earlier wakes the scheduler and
 that queued grace work publishes a claim-only update while retaining submitted
-intent. `tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports`
+intent. `tanuki/tests/websocket_api.rs::explicit_expiry_and_disconnect_grace_flow_through_live_transports`
 extends E1 step 5 across real loopback HTTP/WebSocket traffic.
-`tests/http_api.rs::omitted_expiry_preserves_an_existing_absolute_deadline`
+`tanuki/tests/http_api.rs::omitted_expiry_preserves_an_existing_absolute_deadline`
 pins the provisional omission rule.
 
 Run the focused suite with:
@@ -183,11 +183,11 @@ cargo test --test core_expiry --test scheduler --test http_api --test websocket_
 
 ## Task 08 — best-effort persistence and restart
 
-`tests/persistence.rs` verifies coherent versioned MessagePack capture, absolute-expiry
+`tanuki/tests/persistence.rs` verifies coherent versioned MessagePack capture, absolute-expiry
 filtering, retained desired definitions/values, absent restored claims and
 sessions, instant metadata without payload replay, sequence continuation,
 missing/corrupt/version handling, and a failed atomic replacement that leaves
-its target intact. `tests/persistence_server.rs` verifies orderly save and
+its target intact. `tanuki/tests/persistence_server.rs` verifies orderly save and
 restart over real HTTP, corrupt-file backup with empty startup, plus a
 production-binary startup smoke test.
 
@@ -199,14 +199,14 @@ cargo test --test persistence --test persistence_server
 
 ## Task 09 — schema policy and installation
 
-`tests/schema_validation.rs` covers warning versus deny outcomes, null policy,
+`tanuki/tests/schema_validation.rs` covers warning versus deny outcomes, null policy,
 inclusive integer/float ranges, string enums, explicit casts with
 revalidation, internal overlap, cross-schema overlap, and ordinary-only
-matching. `tests/core_schema.rs` covers mutation-path casts, atomic denial,
+matching. `tanuki/tests/core_schema.rs` covers mutation-path casts, atomic denial,
 warning diagnostics, installation against existing values, forced
 state/desired cleanup, and denial of a schema-governed node-kind change. HTTP
 and WebSocket tests prove their write adapters
-cannot bypass the same core checks. `tests/persistence.rs` proves installed
+cannot bypass the same core checks. `tanuki/tests/persistence.rs` proves installed
 schemas still deny invalid values after restart.
 
 Run the focused suite with:
@@ -218,10 +218,10 @@ cargo test --test domain_paths --test schema_validation --test core_schema \
 
 ## Task 10 — writable linked views
 
-`tests/core_links.rs` covers subtree projection, alias-first then canonical
+`tanuki/tests/core_links.rs` covers subtree projection, alias-first then canonical
 validation/casting, whole-view invalidation, disabled-alias repair, schema
 replacement recovery, instant-event recovery without replay, topology
-rejection, replacement, and deletion. `tests/core_expiry.rs` verifies alias
+rejection, replacement, and deletion. `tanuki/tests/core_expiry.rs` verifies alias
 removal in the same expiry commit. HTTP and WebSocket tests exercise management
 and alias writes through real adapters; persistence rebuilds definitions and
 status without storing alias copies.
@@ -235,10 +235,10 @@ cargo test --test core_links --test core_expiry --test http_api \
 
 ## Task 11 — freshness and active diagnostics
 
-`tests/core_freshness.rs` covers overdue onset, retained source data, identical
+`tanuki/tests/core_freshness.rs` covers overdue onset, retained source data, identical
 write recovery, desired/instant exclusions, positive intervals, and prevention
 of recursive diagnostics when a diagnostic consumer overflows.
-`tests/scheduler.rs` proves the expected-update interval wakes the real deadline
+`tanuki/tests/scheduler.rs` proves the expected-update interval wakes the real deadline
 scheduler. Link tests cover retained disable/recovery conditions, and
 persistence tests prove policy survival plus startup derivation.
 
@@ -251,11 +251,11 @@ cargo test --test core_freshness --test scheduler --test core_links \
 
 ## Initial end-to-end release scenario
 
-`tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports`
+`tanuki/tests/websocket_api.rs::simulated_room_actors_drive_downstream_outputs_across_transports`
 covers E1 steps 1–4 and 6 with real loopback HTTP/WebSocket actors, including
 warning acceptance and linked dashboard invalidation/recovery. The same file's
-controlled-time lifecycle case covers step 5. `tests/persistence.rs` and
-`tests/persistence_server.rs` cover step 7: coherent save/restart, cleared
+controlled-time lifecycle case covers step 5. `tanuki/tests/persistence.rs` and
+`tanuki/tests/persistence_server.rs` cover step 7: coherent save/restart, cleared
 claims, no instant-payload replay, restored policy, and the production binary.
 
 Run every supported gate with:
@@ -276,20 +276,20 @@ injection and do not substitute for production-server acceptance.
 
 | Contract/story | Evidence |
 | --- | --- |
-| SDK-01, U1/T1 | `crates/tanuki-protocol/tests/requests.rs` covers bidirectional request codecs, validated names/paths, null presence and discriminator order; existing protocol/domain/HTTP/socket suites remain regressions |
-| SDK-02, T1 | `tests/native_sdk.rs::direct_connection_receives_hello_reply_update_and_remote_error_in_both_codecs` covers mixed frame codecs and correlated replies/errors; `direct_empty_producer_selection_exposes_replacement_close_reason_once` covers empty hello and direct close 4001 |
+| SDK-01, U1/T1 | `tanuki-protocol/tests/requests.rs` covers bidirectional request codecs, validated names/paths, null presence and discriminator order; existing protocol/domain/HTTP/socket suites remain regressions |
+| SDK-02, T1 | `tanuki/tests/native_sdk.rs::direct_connection_receives_hello_reply_update_and_remote_error_in_both_codecs` covers mixed frame codecs and correlated replies/errors; `direct_empty_producer_selection_exposes_replacement_close_reason_once` covers empty hello and direct close 4001 |
 | SDK-03, C3/US-01.A1 | `session_writes_without_listener_polling_and_registers_current_baselines` and `registration_racing_with_commits_loses_no_retained_update_and_observer_drop_is_independent` exercise current baseline registration, interleaving and two consumers |
 | SDK-03, T1/C1 | `a_full_raw_queue_reports_lag_once_without_stalling_another_listener` and `replacement_and_drop_end_listeners_but_preserve_weak_handle_lifetime` exercise full queues, fresh registration, close 4001, hello warnings, weak handles and drop |
-| SDK-03 failure injection | `crates/tanuki-client/tests/session_failures.rs` covers cancellation/late replies, pending capacity, lost reply/unknown outcome, oversized local failure, uncorrelated errors, duplicate sequences and invalid option limits; `remote_slow_consumer_reason_preempts_a_full_data_queue` injects close 1013 |
-| SDK-04, U1 | `crates/tanuki-client/tests/payload.rs` covers Serde structs/enums/options/bytes, literal reserved keys, i64 limits, unsigned overflow, nonfinite values, map-key rejection and decode errors |
-| SDK-04/05, US-07.A1/A2 | `tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` covers local-only handles, explicit claim/submission, cross-session rejection and rollback of mixed state/event writes |
+| SDK-03 failure injection | `tanuki-client/tests/session_failures.rs` covers cancellation/late replies, pending capacity, lost reply/unknown outcome, oversized local failure, uncorrelated errors, duplicate sequences and invalid option limits; `remote_slow_consumer_reason_preempts_a_full_data_queue` injects close 1013 |
+| SDK-04, U1 | `tanuki-client/tests/payload.rs` covers Serde structs/enums/options/bytes, literal reserved keys, i64 limits, unsigned overflow, nonfinite values, map-key rejection and decode errors |
+| SDK-04/05, US-07.A1/A2 | `tanuki/tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` covers local-only handles, explicit claim/submission, cross-session rejection and rollback of mixed state/event writes |
 | SDK-05, US-09.A1/A2/A4 | `observers_deliver_initial_empty_then_atomic_complete_immutable_snapshots` and `observation_keeps_null_missing_kind_errors_and_metadata_changes_distinct` cover whole snapshots, removal, claim-only metadata, null/absent payload and decode recovery |
 | SDK-05, US-07.A3/US-01.A4 | `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` observes production deadline transitions with explicit controlled wall time and real transport |
 | SDK-05 latest state/lag | `observe::tests::unread_outputs_coalesce_but_each_input_delta_is_applied` synchronizes on private watch version, without sleeps; `projection_input_lag_is_terminal_even_with_unread_output` forces a full input queue before scheduling the projection |
-| SDK-05 clean shutdown | `session::tests::clean_closure_drains_already_admitted_batches` and `observe::tests::clean_projection_closure_delivers_the_last_unseen_snapshot` distinguish clean draining from abnormal termination; `tests/native_sdk.rs::standard_stream_observation_is_native_send_and_ends_after_joined_close` verifies standard Stream polling and native Send ergonomics |
-| SDK-06, US-01.A1/A2/US-09.A3/A5 | `tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` runs a typed laptop, union-selected dashboard and same-name stateless HTTP phone through the production server |
+| SDK-05 clean shutdown | `session::tests::clean_closure_drains_already_admitted_batches` and `observe::tests::clean_projection_closure_delivers_the_last_unseen_snapshot` distinguish clean draining from abnormal termination; `tanuki/tests/native_sdk.rs::standard_stream_observation_is_native_send_and_ends_after_joined_close` verifies standard Stream polling and native Send ergonomics |
+| SDK-06, US-01.A1/A2/US-09.A3/A5 | `tanuki/tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` runs a typed laptop, union-selected dashboard and same-name stateless HTTP phone through the production server |
 | SDK-06, occurrences/T1 | `instant_occurrences_remain_ordered_batches_and_are_not_replayed_to_late_listeners` and `both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in_requests_updates_and_snapshots` verify occurrence order, late baseline and full-message value preservation |
-| Regression found by SDK | `tests/persistence.rs::binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
+| Regression found by SDK | `tanuki/tests/persistence.rs::binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
 
 Behavioral red phases caught missing receive behavior, missing projection
 baseline, incorrect payload conversion, buffered MessagePack byte decoding in

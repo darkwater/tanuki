@@ -254,4 +254,4 @@ MessagePack frame encoding, 1 MiB messages, 64 pending requests, 64 raw batches
 per listener and configurable 10-second connect/hello/write deadlines. There is
 no idle timeout. TLS, browser bindings, Iced integration, automatic reconnect
 and cross-topic Serde shapes are deferred. Full APIs, lifecycle semantics and
-compiled examples are documented in [the client README](../crates/tanuki-client/README.md).
+compiled examples are documented in [the client README](../tanuki-client/README.md).

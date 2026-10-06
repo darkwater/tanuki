@@ -210,7 +210,7 @@ since the last completed replacement; there is no WAL or replay.
 ## Native SDK operation
 
 Run the ordinary Rust examples with the commands in
-[the client README](../crates/tanuki-client/README.md). They use the production
+[the client README](../tanuki-client/README.md). They use the production
 WebSocket endpoint; HTTP remains available for one-off phone/remote submissions.
 The controller example defines and claims desired brightness explicitly and
 simulates a device report atomically. Its accepted report is not physical-device

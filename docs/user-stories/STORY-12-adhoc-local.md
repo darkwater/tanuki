@@ -37,17 +37,17 @@ verification remain absent.
 
 ## Implementation and evidence
 
-- Native SDK evidence: ordinary `publisher`, `dashboard` and `controller` examples were compiled and exercised on loopback against the production binary. `tests/native_sdk.rs` covers raw wire control, typed freeform values, warnings, server rejection and mixed codecs. Existing stateless HTTP criteria remain covered by the server suites; the SDK adds no HTTP or Unix-socket transport.
+- Native SDK evidence: ordinary `publisher`, `dashboard` and `controller` examples were compiled and exercised on loopback against the production binary. `tanuki/tests/native_sdk.rs` covers raw wire control, typed freeform values, warnings, server rejection and mixed codecs. Existing stateless HTTP criteria remain covered by the server suites; the SDK adds no HTTP or Unix-socket transport.
 
 - Core test links: [test plan](../test-plan.md) — C1, S1, T1; HTTP task 04; add socket parity tests when that adapter lands.
-- `tests/http_api.rs::stateless_battery_publish_and_anonymous_read_cross_the_real_router`
+- `tanuki/tests/http_api.rs::stateless_battery_publish_and_anonymous_read_cross_the_real_router`
   verifies US-12.A1 and US-12.A2 through the production router.
-- `tests/http_api.rs::stateless_attribution_accepts_query_and_rejects_conflicts`
+- `tanuki/tests/http_api.rs::stateless_attribution_accepts_query_and_rejects_conflicts`
   verifies that a small client may use either `tanuki-client` or `?client=` and
   that ambiguous attribution is rejected.
-- `tests/core_schema.rs`,
-  `tests/http_api.rs::schema_installation_casts_valid_http_writes_and_denies_invalid_ones`,
-  and `tests/websocket_api.rs::websocket_writes_cannot_bypass_an_installed_schema`
+- `tanuki/tests/core_schema.rs`,
+  `tanuki/tests/http_api.rs::schema_installation_casts_valid_http_writes_and_denies_invalid_ones`,
+  and `tanuki/tests/websocket_api.rs::websocket_writes_cannot_bypass_an_installed_schema`
   verify US-12.A4 at the core, HTTP, and WebSocket boundaries.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.

@@ -31,7 +31,7 @@ Manual pull versus automatic sync, MIME/format representation, expiry/persistenc
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — U1 and T1; add text/image round-trip and bridge feedback-loop fixtures.
-- `tests/protocol_json.rs::json_and_messagepack_round_trip_the_same_nested_value` and `messagepack_uses_native_binary_and_semantic_extensions` verify byte preservation in both codecs and native MessagePack binary representation. A complete clipboard publish/consume bridge and explicit oversized-payload error remain deferred.
+- `tanuki/tests/protocol_json.rs::json_and_messagepack_round_trip_the_same_nested_value` and `messagepack_uses_native_binary_and_semantic_extensions` verify byte preservation in both codecs and native MessagePack binary representation. A complete clipboard publish/consume bridge and explicit oversized-payload error remain deferred.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

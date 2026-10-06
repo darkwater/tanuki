@@ -43,8 +43,8 @@ claim creation and mutation policy on the server. Shared observed identifiers
 do not grant authority. Avoid moving server-only constructors into a public
 protocol API just to resolve cross-crate visibility.
 
-`src/protocol.rs` currently imports core types for response conversion, and
-request DTOs are private in `src/transport.rs`. Move wire definitions and
+`tanuki/src/protocol.rs` currently imports core types for response conversion, and
+request DTOs are private in `tanuki/src/transport.rs`. Move wire definitions and
 codecs into protocol; keep core-to-wire and wire-to-core conversion on the
 server, using local conversion functions where orphan rules require it.
 Move `SelectedView` to client. Update its tests/imports; do not add a server

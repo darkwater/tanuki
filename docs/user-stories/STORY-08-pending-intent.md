@@ -31,11 +31,11 @@ Whether this is used for heating at all, actual units, controller behaviour and 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — L1, P1; E1 restart coverage.
-- `tests/core_sessions_inputs.rs::stateless_definition_and_submission_create_unclaimed_pending_intent` verifies US-08.A1.
-- `tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Network subscription delivery is covered by the task-06 simulated room; restart remains task 08.
-- `tests/http_api.rs::batch_endpoint_composes_unclaimed_input_definition_and_submission` verifies US-08.A1 through the stateless HTTP batch adapter.
-- `tests/core_expiry.rs::equal_deadlines_remove_state_and_clear_only_desired_payload_in_one_commit` verifies US-08.A3's missing-payload state while preserving the definition.
-- `tests/persistence.rs::coherent_save_restore_filters_expired_values_and_clears_live_authority` verifies US-08.A4, and `tests/persistence_server.rs` exercises the production restore path.
+- `tanuki/tests/core_sessions_inputs.rs::stateless_definition_and_submission_create_unclaimed_pending_intent` verifies US-08.A1.
+- `tanuki/tests/core_sessions_inputs.rs::claiming_preserves_value_and_submission_preserves_claim` verifies the claim-preservation part of US-08.A2. Network subscription delivery is covered by the task-06 simulated room; restart remains task 08.
+- `tanuki/tests/http_api.rs::batch_endpoint_composes_unclaimed_input_definition_and_submission` verifies US-08.A1 through the stateless HTTP batch adapter.
+- `tanuki/tests/core_expiry.rs::equal_deadlines_remove_state_and_clear_only_desired_payload_in_one_commit` verifies US-08.A3's missing-payload state while preserving the definition.
+- `tanuki/tests/persistence.rs::coherent_save_restore_filters_expired_values_and_clears_live_authority` verifies US-08.A4, and `tanuki/tests/persistence_server.rs` exercises the production restore path.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

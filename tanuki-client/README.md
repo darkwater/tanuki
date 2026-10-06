@@ -118,7 +118,7 @@ There is no library-owned runtime or blocking destructor.
 From the repository root, run the server and use separate terminals:
 
 ```sh
-cargo run --bin tanuki
+cargo run -p tanuki --bin tanuki
 cargo run -p tanuki-client --example dashboard
 cargo run -p tanuki-client --example publisher
 cargo run -p tanuki-client --example controller
