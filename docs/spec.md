@@ -150,7 +150,12 @@ Expiry scheduling follows the earliest deadline, wakes when the schedule changes
 
 Value expiry, input-claim release, connection liveness, and overdue freshness are separate mechanisms. Instant payloads have no value expiry. Input expiry clears only its value; claim release clears only its ownership. Omitted-expiry behaviour remains a small policy choice in D1.
 
-Schemas should eventually express an expected update interval. Becoming overdue reports a status/diagnostic without deleting the value. This requires timed checks, not only validation during writes.
+Schema rules may express a fixed expected update interval for retained state and
+present desired values. Missing desired values and instant nodes do not become
+overdue. Becoming overdue reports a retained status and transition diagnostic
+without deleting the value. Any accepted duplicate write refreshes the
+deadline and clears overdue status. This requires timed checks, not only
+validation during writes.
 
 Retained data survives restarts through best-effort, coherent, versioned
 MessagePack snapshots. Acknowledgement does not promise disk durability. No
@@ -189,9 +194,32 @@ The initial management operation is an atomic complete declaration at
 
 Links provide alternative views of the same data, including subtree views. Maintain forward target information for reads and reverse source information for update propagation. Reverse propagation must account for ancestor subtree links, not just exact paths.
 
-If a directly valid source update violates a schema through a link, the link is in violation. The source write remains valid. A violating descendant affects the whole containing link, not just that descendant. Casting through a link is disallowed.
+If a directly valid source update violates a schema through a link, the link is
+in violation. The source write remains valid. A violating descendant affects
+the whole containing link, not just that descendant. Direct source propagation
+does not cast merely to make a linked view valid.
 
-Links support writes. A rejecting linked-schema violation disables the link; it automatically re-enables once valid again. Precise write-through validation, event-only recovery, chains/cycles, and shadowing remain open (D4). Consumers must not receive a newly invalid value through a rejecting linked schema. If an exposed view disappears, removal refers to its last exposed state.
+Links support writes. A write addressed through an alias first applies the
+alias schema, including its possible cast, translates the resulting operation
+to the canonical topic, then applies the canonical schema and its possible
+cast. Unusual multi-cast outcomes are logged. Either denying failure rejects
+the entire write. A disabled alias accepts the same process as a repair
+attempt; success commits and re-enables it atomically, while failure leaves it
+disabled.
+
+A rejecting linked-schema violation from a direct canonical write disables the
+link while leaving the canonical write valid. It automatically re-enables once
+valid again. An invalid instant event remains visible canonically, is
+suppressed through the rejecting link, and disables it. A later valid event
+re-enables the link and is delivered without replay. Consumers must not receive
+a newly invalid value through a rejecting linked schema. If an exposed view
+disappears, removal refers to its last exposed state.
+
+The initial topology rejects cycles, overlapping destination mounts,
+destination collisions with existing nodes/subtrees, targets reached through
+another link, and links crossing into or out of the system namespace. Link
+definitions persist when their canonical target is absent and re-evaluate when
+it appears.
 
 ## Reserved system namespace
 
@@ -200,11 +228,17 @@ A first path segment starting with `$` is reserved for Tanuki, including its des
 User schemas do not run on system topics; schemas targeting them are invalid. Built-in validation governs permitted operations and returns distinct errors, such as an attempt to alter another session's properties. A warning schema cannot bypass these checks.
 
 For schema matching, broad selectors such as `/**` range only over ordinary
-topics. An explicitly system-rooted schema rule is invalid. Link behavior when
-crossing the system boundary remains a D4 decision. System topics can otherwise
-participate in observation where exposed.
+topics. An explicitly system-rooted schema rule is invalid. Initial links may
+not cross the system boundary. System topics can otherwise participate in
+observation where exposed.
 
-Central diagnostics and logging are intended. Exact paths are unselected. The future runtime may expose script status, but the initial server must be diagnosable without that runtime.
+Central diagnostics use a read-only built-in `/$diagnostics/**` tree visible
+through ordinary snapshots and subscriptions. Active conditions such as
+overdue freshness are retained; warning and recovery transitions are emitted
+without replay. Client writes are forbidden. Failure to publish a diagnostic
+is logged locally and does not recursively publish another diagnostic. The
+future runtime may expose script status separately, but the initial server is
+diagnosable without that runtime.
 
 ## Transports and delivery order
 

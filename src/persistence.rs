@@ -16,9 +16,10 @@ use crate::{
     core::{CommitSequence, Core},
     domain::{
         ClientName, CommandNode, Deadline, DesiredNode, EventNode, FiniteF64, InputDefinition,
-        Node, NodeKind, RetainedValue, Selection, Selector, SelectorParseError, StateNode,
-        Timestamp, TopicPath, ValueKind, WriteContext, WriteProvenance,
+        Node, NodeKind, RetainedValue, Selector, SelectorParseError, StateNode, Timestamp,
+        TopicPath, ValueKind, WriteContext, WriteProvenance,
     },
+    link::{LinkBuildError, LinkDefinition, LinkInstallError, LinkName, LinkNameParseError},
     protocol::JsonValue,
     schema::{
         Enforcement, NullPolicy, Schema, SchemaBuildError, SchemaIssue, SchemaName,
@@ -28,7 +29,7 @@ use crate::{
 };
 
 const FORMAT: &str = "tanuki-snapshot";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -178,6 +179,11 @@ pub enum PersistenceError {
         #[source]
         source: SchemaPersistenceError,
     },
+    #[error("invalid link in snapshot")]
+    Link {
+        #[source]
+        source: LinkPersistenceError,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -200,6 +206,16 @@ pub enum SchemaPersistenceError {
     ExistingValue { issue: SchemaIssue },
 }
 
+#[derive(Debug, Error)]
+pub enum LinkPersistenceError {
+    #[error(transparent)]
+    Name(#[from] LinkNameParseError),
+    #[error(transparent)]
+    Definition(#[from] LinkBuildError),
+    #[error(transparent)]
+    Install(#[from] LinkInstallError),
+}
+
 #[derive(Serialize, Deserialize)]
 struct SnapshotFile {
     format: String,
@@ -209,14 +225,13 @@ struct SnapshotFile {
     nodes: BTreeMap<TopicPath, StoredNode>,
     #[serde(default)]
     schemas: Vec<StoredSchema>,
+    #[serde(default)]
+    links: Vec<StoredLink>,
 }
 
 impl SnapshotFile {
     fn capture(core: &Core, now: Timestamp) -> Result<Self, PersistenceError> {
-        let all = Selection::new(vec![
-            Selector::parse("/**").expect("root selector is valid"),
-        ]);
-        let snapshot = core.read(&all);
+        let snapshot = core.persistence_snapshot();
         let nodes = snapshot
             .nodes()
             .iter()
@@ -227,6 +242,11 @@ impl SnapshotFile {
             .schemas()
             .map(StoredSchema::capture)
             .collect();
+        let links = core
+            .links()
+            .iter()
+            .map(|link| StoredLink::capture(link.definition()))
+            .collect();
         Ok(Self {
             format: FORMAT.to_owned(),
             version: VERSION,
@@ -234,6 +254,7 @@ impl SnapshotFile {
             saved_at: now.get().to_string(),
             nodes,
             schemas,
+            links,
         })
     }
 
@@ -288,11 +309,46 @@ impl SnapshotFile {
                 });
             }
         }
-        Ok(Core::from_restored(
+        let links = self
+            .links
+            .into_iter()
+            .map(StoredLink::restore)
+            .collect::<Result<_, _>>()
+            .map_err(|source| PersistenceError::Link { source })?;
+        Core::from_restored(
             CommitSequence::from_persisted(self.sequence),
             nodes,
             schemas,
-        ))
+            links,
+        )
+        .map_err(|source| PersistenceError::Link {
+            source: source.into(),
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredLink {
+    name: String,
+    mount: TopicPath,
+    target: TopicPath,
+}
+
+impl StoredLink {
+    fn capture(link: &LinkDefinition) -> Self {
+        Self {
+            name: link.name().as_str().to_owned(),
+            mount: link.mount().clone(),
+            target: link.target().clone(),
+        }
+    }
+
+    fn restore(self) -> Result<LinkDefinition, LinkPersistenceError> {
+        Ok(LinkDefinition::new(
+            LinkName::parse(&self.name)?,
+            self.mount,
+            self.target,
+        )?)
     }
 }
 

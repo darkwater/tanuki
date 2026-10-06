@@ -11,13 +11,13 @@ does.
 | `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | tasks 02–09 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, and schema enforcement |
+| `core` | tasks 02–10 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, and linked views |
 | `protocol` | tasks 04–06 implemented | JSON/MessagePack values and typed snapshot/update/error DTOs |
 | `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
-| `persistence` | tasks 08–09 implemented | Versioned coherent node/schema snapshots, restore filtering, and atomic file replacement |
+| `persistence` | tasks 08–10 implemented | Versioned coherent node/schema/link snapshots, restore filtering, and atomic file replacement |
 | `schema` | task 09 implemented | Typed ordinary-topic validators, explicit casts, overlap checks, and named registry |
-| `links` | planned | Linked path resolution, visibility, and recovery |
+| `link` | task 10 implemented | Validated subtree definitions, topology checks, alias resolution, and enabled state |
 | `diagnostics` | planned | Structured warnings/errors and logging integration |
 
 `server` provides the lifecycle seam. `domain` contains the accepted checkpoint
@@ -226,11 +226,12 @@ keeps an existing absolute deadline and yields no deadline on a new value.
 
 ## Best-effort persistence implemented in task 08
 
-`SnapshotStore` captures one coherent selected clone while holding the core
+`SnapshotStore` captures one coherent canonical clone while holding the core
 lock, then performs MessagePack encoding, file writes, fsync, and rename outside that
-lock on a blocking worker. The version-2 file records its format marker,
+lock on a blocking worker. The version-3 file records its format marker,
 sequence, save time, ordinary node data, absolute expiries, provenance, and
-validated installed schemas.
+validated installed schemas and link definitions. Alias projections are derived
+state and are never duplicated in the snapshot.
 It never stores live sessions or input claims. Event publisher metadata and
 command definitions persist, but occurrence payloads never do.
 
@@ -267,5 +268,29 @@ stored value and every matching validator rechecks it.
 rejects existing deny violations without casting stored values; force mode
 removes invalid state and clears invalid desired current values while retaining
 input metadata. `PUT /v1/schemas/{name}` exposes complete declarations. The
-registry is stored in snapshot format 2 and reconstructed through invariant-
-checking constructors on restore.
+registry is stored in the snapshot and reconstructed through invariant-checking
+constructors on restore.
+
+## Writable linked views implemented in task 10
+
+`LinkDefinition` names one ordinary mount subtree and one ordinary canonical
+target subtree. The initial topology rejects overlap between a link's source
+and mount, overlapping mounts, targets reached through another mount, retained
+destination collisions, and either endpoint in the reserved system namespace.
+The registry is deliberately small and direct; link chains are deferred.
+
+Snapshots and subscriptions project enabled aliases from canonical nodes rather
+than storing copies. Canonical mutation, expiry, session cleanup, schema
+changes, link replacement, and link removal derive all alias upserts/removals in
+the same commit. Replacing or deleting a definition retracts its old projection.
+Restore validates definitions, rebuilds the registry, and computes enabled
+state from current canonical data.
+
+An alias write applies alias policy and any explicit cast before translating
+the operation to its canonical topic, where canonical policy and a possible
+second cast apply. Disabled aliases still resolve repair attempts. Direct
+canonical writes are never rejected solely for a linked-view violation: a deny
+disables the whole view, emits last-visible removals and a diagnostic, and keeps
+the canonical commit. A later valid relevant mutation or applicable schema
+replacement re-enables the view atomically. Invalid instant occurrences remain
+canonical-only; a later valid occurrence can recover the view, with no replay.

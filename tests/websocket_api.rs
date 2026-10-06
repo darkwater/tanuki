@@ -7,6 +7,7 @@ use serde_json::{Value as RawJson, json};
 use tanuki::{
     core::{Core, SchemaInstallMode},
     domain::{Node, Selection, Selector, Timestamp, TopicPath, Value},
+    link::{LinkDefinition, LinkName},
     protocol::{DiagnosticView, JsonValue, NodeView, ServerMessage},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
     server::serve_with_core,
@@ -171,6 +172,63 @@ async fn websocket_writes_cannot_bypass_an_installed_schema() {
         ServerMessage::Error { request_id: Some(request_id), error }
             if request_id.as_str() == "invalid" && error.code == "schema_violation"
     ));
+
+    socket.close(None).await.unwrap();
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn websocket_alias_write_updates_canonical_and_link_subscribers_atomically() {
+    let server = TestServer::start().await;
+    server
+        .core
+        .lock()
+        .unwrap()
+        .install_link(
+            LinkDefinition::new(
+                LinkName::parse("living-room").unwrap(),
+                TopicPath::parse("/rooms/living-room").unwrap(),
+                TopicPath::parse("/devices/lamp").unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut socket = server.connect().await;
+    send_hello(
+        &mut socket,
+        "wall panel",
+        &["/devices/lamp/**", "/rooms/living-room/**"],
+    )
+    .await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Snapshot { .. }
+    ));
+
+    send_json(
+        &mut socket,
+        json!({
+            "type": "write",
+            "request_id": "alias-write",
+            "operations": [{
+                "op": "publish_state",
+                "topic": "/rooms/living-room/power",
+                "value": true,
+                "expiry": {"mode": "clear"}
+            }]
+        }),
+    )
+    .await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "alias-write"
+    ));
+    assert_update_topics(
+        &mut socket,
+        &["/devices/lamp/power", "/rooms/living-room/power"],
+    )
+    .await;
 
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;

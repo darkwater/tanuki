@@ -6,6 +6,7 @@ use tanuki::{
         NonNegativeDuration, Selection, Selector, Timestamp, TopicPath, Value, WriteBatch,
         WriteContext, WriteOperation,
     },
+    link::{LinkDefinition, LinkName},
 };
 
 fn at(second: i64) -> Timestamp {
@@ -97,6 +98,42 @@ fn refreshing_a_value_guards_it_from_its_old_deadline() {
         .contains_key(&topic("/battery/laptop"))
     );
     assert!(core.process_deadlines(at(20), &[]).unwrap().is_some());
+}
+
+#[test]
+fn expiry_removes_canonical_and_linked_state_in_the_same_commit() {
+    let mut core = Core::new();
+    core.install_link(
+        LinkDefinition::new(
+            LinkName::parse("dashboard").unwrap(),
+            topic("/view"),
+            topic("/canonical"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    core.apply(
+        &actor("sensor"),
+        batch(vec![WriteOperation::PublishState {
+            topic: topic("/canonical/reading"),
+            value: Value::Integer(10),
+            expiry: ExpiryUpdate::Set(seconds(5)),
+        }]),
+        at(0),
+    )
+    .unwrap();
+
+    let update = core.process_deadlines(at(5), &[]).unwrap().unwrap();
+    let mut removed = update
+        .changes()
+        .iter()
+        .filter_map(|change| match change {
+            tanuki::core::Change::Removed { topic, .. } => Some(topic.to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    removed.sort();
+    assert_eq!(removed, ["/canonical/reading", "/view/reading"]);
 }
 
 #[test]

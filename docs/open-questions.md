@@ -6,35 +6,7 @@ that does not turn the provisional choice into an accepted requirement.
 
 ## Actually important — please answer
 
-These now block writable links (task 10), but not the completed schema/core
-integration:
-
-1. **Writes through an alias.** Recommended: translate to the canonical topic,
-   run the canonical direct schema (including its explicit cast), then validate
-   the resulting value against the alias view without casting. Reject the
-   whole write if either denying policy fails. A direct canonical write remains
-   allowed when only the alias view rejects; that link disables atomically.
-2. **Repair through a disabled alias.** Recommended: allow a write addressed
-   through a schema-disabled alias to act as a repair attempt. If the translated
-   canonical candidate and alias view both pass, commit the canonical write and
-   re-enable the link atomically. Otherwise reject it and leave the link
-   disabled. A missing canonical target may likewise be recreated this way.
-3. **Instant-event recovery.** Recommended: an invalid canonical event still
-   reaches canonical subscribers, is suppressed through the rejecting view,
-   and disables that link. A later valid event re-enables the link and is
-   delivered through it, without replaying the invalid or any older event.
-4. **Shared diagnostics interface.** Recommended: reserve a read-only built-in
-   `/$diagnostics/**` tree that appears through ordinary snapshots and
-   subscriptions. Retain active conditions such as overdue freshness so a
-   late observer sees them, and emit transition events for warning/recovery.
-   Client writes remain forbidden, and failure to publish a diagnostic is
-   logged locally without recursively diagnosing that failure.
-5. **Freshness rule scope.** Recommended: add an optional fixed
-   `expected_update_interval` to schema rules. Initially evaluate only retained
-   state and present desired values from their latest accepted write; a missing
-   desired value and instant event/command nodes do not become overdue. An
-   identical accepted write refreshes the deadline and clears active overdue
-   status without deleting the value.
+No unresolved question currently blocks tasks 10 or 11.
 
 ## Consequential, but the likely answer seems clear
 
@@ -56,10 +28,6 @@ integration:
 5. **Instant-output metadata across restart.** Preserve event-node publisher
    metadata but never occurrences; preserve command definitions but never
    command payloads.
-6. **Initial link topology.** Reject cycles, overlapping destination mounts,
-   destinations colliding with retained nodes/subtrees, targets reached through
-   another link, and links to or from `$` system branches. This keeps the first
-   forward/reverse indexes unambiguous while leaving link chains as future work.
 
 ## Provisional defaults probably worth a quick skim
 
@@ -114,6 +82,26 @@ integration:
   Intersecting casting rules are rejected even when their casts are identical.
 - A schema rule may constrain node kind. Without such a constraint, implicit
   kind changes keep the accepted freeform warning behavior.
+- A write through an alias runs the alias schema first, including an explicit
+  cast, then sends that result through the canonical schema and its possible
+  cast. Unusual multi-cast outcomes are logged. Direct canonical writes remain
+  independent and may disable a rejecting linked view.
+- A disabled alias accepts repair attempts. A candidate that passes alias and
+  canonical policy commits and re-enables the link atomically; a failure leaves
+  it disabled. A later valid instant event re-enables its view and is delivered
+  without replaying older events.
+- Initial links reject cycles/source-mount overlap, overlapping destination
+  mounts, destination collisions with retained nodes, targets reached through
+  another link, and links to or from `$` system branches. Link chains remain
+  future work.
+- Tanuki may design read-only `/$*` system trees as implementation needs
+  require, subject to later user feedback. The first shared diagnostic design
+  uses `/$diagnostics/**`, retains active conditions, and emits transitions
+  without recursively diagnosing diagnostic-publication failures.
+- Schema freshness initially applies an optional fixed expected-update interval
+  only to retained state and present desired values. Missing desired values and
+  instant nodes do not become overdue; an identical accepted write refreshes
+  freshness and clears overdue status without deleting data.
 
 Accepted decisions are recorded in `docs/spec.md`, `docs/architecture.md`, and
 `docs/decisions-to-review.md`. This file should not reopen them without a new

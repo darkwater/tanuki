@@ -96,6 +96,7 @@ async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
     assert_eq!(state.current().value(), &Value::Integer(42));
 
     let response = app
+        .clone()
         .oneshot(json_request(
             "POST",
             "/v1/state/battery/phone?client=test",
@@ -107,6 +108,101 @@ async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
     assert_eq!(
         response_json(response).await["error"]["code"],
         "schema_violation"
+    );
+}
+
+#[tokio::test]
+async fn attributed_link_install_projects_reads_and_routes_alias_writes() {
+    let (app, core) = test_app();
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/state/devices/lamp/power?client=device",
+            json!({"value": false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let unattributed = app
+        .clone()
+        .oneshot(json_request(
+            "PUT",
+            "/v1/links/living-room",
+            json!({"mount": "/rooms/living-room", "target": "/devices/lamp"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unattributed.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(unattributed).await["error"]["code"],
+        "missing_client"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "PUT",
+            "/v1/links/living-room?client=administrator",
+            json!({"mount": "/rooms/living-room", "target": "/devices/lamp"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let installed = response_json(response).await;
+    assert_eq!(installed["data"]["enabled"], true);
+
+    let response = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/v1/state/rooms/living-room/power?client=wall-panel",
+            json!({"value": true}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .read(&tanuki::domain::Selection::new(vec![
+            tanuki::domain::Selector::parse("/**").unwrap(),
+        ]));
+    for path in ["/devices/lamp/power", "/rooms/living-room/power"] {
+        let Some(Node::State(state)) = snapshot.nodes().get(&TopicPath::parse(path).unwrap())
+        else {
+            panic!("{path} must be visible as state");
+        };
+        assert_eq!(state.current().value(), &Value::Bool(true));
+    }
+
+    let response = app
+        .oneshot(json_request(
+            "DELETE",
+            "/v1/links/living-room?client=administrator",
+            json!(null),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["data"]["removed"], true);
+    let snapshot = core
+        .lock()
+        .unwrap()
+        .read(&tanuki::domain::Selection::new(vec![
+            tanuki::domain::Selector::parse("/**").unwrap(),
+        ]));
+    assert!(
+        snapshot
+            .nodes()
+            .contains_key(&TopicPath::parse("/devices/lamp/power").unwrap())
+    );
+    assert!(
+        !snapshot
+            .nodes()
+            .contains_key(&TopicPath::parse("/rooms/living-room/power").unwrap())
     );
 }
 

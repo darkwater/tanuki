@@ -15,6 +15,7 @@ use tanuki::{
         NonNegativeDuration, Selection, Selector, Timestamp, TopicPath, Value, WriteBatch,
         WriteContext, WriteOperation,
     },
+    link::{LinkDefinition, LinkName},
     persistence::{PersistenceError, SnapshotStore},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
 };
@@ -194,6 +195,60 @@ async fn installed_schemas_survive_restart_and_still_deny_invalid_writes() {
         at(2),
     );
     assert!(matches!(result, Err(CoreError::SchemaViolation(_))));
+}
+
+#[tokio::test]
+async fn installed_links_survive_restart_without_persisting_alias_copies() {
+    let directory = TestDirectory::new();
+    let store = SnapshotStore::new(directory.path("snapshot.db"));
+    let mut core = Core::new();
+    core.apply(
+        &WriteContext::stateless(ClientName::parse("writer").unwrap()),
+        WriteBatch::new(vec![WriteOperation::PublishState {
+            topic: topic("/devices/lamp/state"),
+            value: Value::Bool(false),
+            expiry: ExpiryUpdate::Clear,
+        }])
+        .unwrap(),
+        at(0),
+    )
+    .unwrap();
+    core.install_link(
+        LinkDefinition::new(
+            LinkName::parse("living-room").unwrap(),
+            topic("/rooms/living-room"),
+            topic("/devices/lamp"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
+
+    let mut restored = store.load(at(2)).unwrap().unwrap();
+    assert_eq!(restored.link_count(), 1);
+    assert!(
+        restored
+            .read(&all())
+            .nodes()
+            .contains_key(&topic("/rooms/living-room/state"))
+    );
+    restored
+        .apply(
+            &WriteContext::stateless(ClientName::parse("restored writer").unwrap()),
+            WriteBatch::new(vec![WriteOperation::PublishState {
+                topic: topic("/rooms/living-room/state"),
+                value: Value::Bool(true),
+                expiry: ExpiryUpdate::Clear,
+            }])
+            .unwrap(),
+            at(2),
+        )
+        .unwrap();
+    let snapshot = restored.read(&all());
+    let Some(Node::State(state)) = snapshot.nodes().get(&topic("/devices/lamp/state")) else {
+        panic!("canonical state must remain the persisted owner");
+    };
+    assert_eq!(state.current().value(), &Value::Bool(true));
 }
 
 #[test]

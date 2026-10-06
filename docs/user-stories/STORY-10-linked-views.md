@@ -1,6 +1,6 @@
 # US-10 — Two views of the same data
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** implemented and integration-tested; real-world use not yet verified.
 - **Origin:** User use case.
 - **Last updated:** 2026-10-05.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -27,15 +27,21 @@ Topic paths, payload layouts and timing examples are illustrative unless explici
 
 ## Details to learn through use
 
-Actual useful layouts, alias-write validation, writes through disabled links, chains and instant-event recovery. Follow D4 review rather than guessing these semantics.
+Actual useful layouts remain to be learned through use. Alias-first validation,
+disabled-link repair, and event recovery now follow the accepted D4 profile;
+link chains are deliberately deferred.
 
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — K1; E1 step 6.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- Story-specific evidence: `tests/core_links.rs` covers projection, alias writes,
+  invalidation/removal, repair, policy recovery, instant events, topology, and
+  replacement/removal. `tests/http_api.rs`, `tests/websocket_api.rs`, and
+  `tests/persistence.rs` cover adapters and restart.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-06: Implemented the accepted writable-link profile and mapped automated evidence; deployment verification remains open.

@@ -6,6 +6,7 @@ use std::{
 
 use thiserror::Error;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::domain::{
     ClaimId, ClaimRelease, ClientName, CommandNode, CommandOccurrence, Deadline, DesiredNode,
@@ -13,6 +14,7 @@ use crate::domain::{
     Selection, SessionHandle, SessionId, StateNode, Timestamp, TopicPath, Value, WriteBatch,
     WriteContext, WriteOperation, WriteProvenance,
 };
+use crate::link::{LinkDefinition, LinkInstallError, LinkName, LinkRegistry};
 use crate::schema::{
     Enforcement, Schema, SchemaIssue, SchemaRegistry, SchemaRegistryError, SchemaViolation,
 };
@@ -27,6 +29,7 @@ pub struct Core {
     subscribers: BTreeMap<SubscriptionId, SubscriberState>,
     next_subscription_id: u64,
     schemas: SchemaRegistry,
+    links: LinkRegistry,
 }
 
 impl Core {
@@ -39,30 +42,62 @@ impl Core {
         sequence: CommitSequence,
         nodes: BTreeMap<TopicPath, Node>,
         schemas: SchemaRegistry,
-    ) -> Self {
-        Self {
+        links: Vec<LinkDefinition>,
+    ) -> Result<Self, LinkInstallError> {
+        let mut core = Self {
             sequence,
             nodes,
             schemas,
             ..Self::default()
+        };
+        for definition in links {
+            if let Some(topic) = core
+                .nodes
+                .keys()
+                .find(|topic| definition.mount().is_prefix_of(topic))
+            {
+                return Err(LinkInstallError::DestinationCollision {
+                    mount: definition.mount().clone(),
+                    topic: topic.clone(),
+                });
+            }
+            let (enabled, _, _) = validate_link_retained(&definition, &core.nodes, &core.schemas);
+            core.links.install(definition, enabled)?;
         }
+        Ok(core)
     }
 
     pub(crate) fn schemas(&self) -> &SchemaRegistry {
         &self.schemas
     }
 
-    #[must_use]
-    pub fn read(&self, selection: &Selection) -> Snapshot {
+    pub(crate) fn links(&self) -> &LinkRegistry {
+        &self.links
+    }
+
+    pub(crate) fn persistence_snapshot(&self) -> Snapshot {
         Snapshot {
             sequence: self.sequence,
-            nodes: self
-                .nodes
+            nodes: self.nodes.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn read(&self, selection: &Selection) -> Snapshot {
+        let visible = visible_nodes(&self.nodes, &self.links);
+        Snapshot {
+            sequence: self.sequence,
+            nodes: visible
                 .iter()
                 .filter(|(topic, _)| selection.matches(topic))
                 .map(|(topic, node)| (topic.clone(), node.clone()))
                 .collect(),
         }
+    }
+
+    #[must_use]
+    pub fn link_count(&self) -> usize {
+        self.links.len()
     }
 
     pub fn apply(
@@ -82,12 +117,34 @@ impl Core {
             .ok_or(CoreError::SequenceExhausted)?;
         let previous = self.nodes.clone();
         let mut candidate = previous.clone();
+        let mut candidate_links = self.links.clone();
         let mut next_claim_id = self.next_claim_id;
         let mut changes = Vec::new();
         let mut warnings = Vec::new();
 
         for operation in batch.operations() {
-            let operation = validate_operation(&self.schemas, operation, &mut warnings)?;
+            let original_kind = operation_value_kind(operation);
+            let alias_topic = self
+                .links
+                .resolve_alias(operation.topic())
+                .map(|_| operation.topic().clone());
+            let operation =
+                prepare_alias_operation(&self.links, &self.schemas, operation, &mut warnings)?;
+            let alias_kind = operation_value_kind(&operation);
+            let operation = validate_operation(&self.schemas, &operation, &mut warnings)?;
+            let canonical_kind = operation_value_kind(&operation);
+            if let Some(alias_topic) = alias_topic
+                && original_kind != alias_kind
+                && alias_kind != canonical_kind
+            {
+                warn!(
+                    topic = %alias_topic,
+                    ?original_kind,
+                    ?alias_kind,
+                    ?canonical_kind,
+                    "alias and canonical schemas both cast one write"
+                );
+            }
             apply_operation(
                 &mut candidate,
                 &mut changes,
@@ -100,6 +157,15 @@ impl Core {
         }
 
         let changes = coalesce_batch_changes(&previous, &candidate, changes);
+        let changes = reconcile_link_views(
+            (&previous, &self.links),
+            &candidate,
+            &mut candidate_links,
+            &self.schemas,
+            changes,
+            &mut warnings,
+            false,
+        );
 
         debug_assert!(candidate.keys().all(|topic| !topic.is_system()));
         debug_assert!(nodes_have_no_denying_schema_violations(
@@ -107,6 +173,7 @@ impl Core {
             &candidate
         ));
         self.nodes = candidate;
+        self.links = candidate_links;
         self.next_claim_id = next_claim_id;
         self.sequence = next_sequence;
         let update = UpdateBatch {
@@ -187,9 +254,102 @@ impl Core {
             }
         }
 
-        let update = self.install_node_changes(candidate_nodes, changes)?;
+        let mut candidate_links = self.links.clone();
+        let changes = reconcile_link_views(
+            (&self.nodes, &self.links),
+            &candidate_nodes,
+            &mut candidate_links,
+            &candidate_registry,
+            changes,
+            &mut warnings,
+            true,
+        );
+        let update = if changes.is_empty() {
+            None
+        } else {
+            let next = self
+                .sequence
+                .0
+                .checked_add(1)
+                .map(CommitSequence)
+                .ok_or(CoreError::SequenceExhausted)?;
+            Some(UpdateBatch {
+                sequence: next,
+                changes,
+            })
+        };
+        self.nodes = candidate_nodes;
         self.schemas = candidate_registry;
+        self.links = candidate_links;
+        if let Some(update) = &update {
+            self.sequence = update.sequence;
+            self.publish_update(update);
+        }
         Ok(SchemaInstallOutcome { warnings, update })
+    }
+
+    pub fn install_link(
+        &mut self,
+        definition: LinkDefinition,
+    ) -> Result<LinkInstallOutcome, CoreError> {
+        if let Some(topic) = self
+            .nodes
+            .keys()
+            .find(|topic| definition.mount().is_prefix_of(topic))
+        {
+            return Err(LinkInstallError::DestinationCollision {
+                mount: definition.mount().clone(),
+                topic: topic.clone(),
+            }
+            .into());
+        }
+
+        let old_visible = visible_nodes(&self.nodes, &self.links);
+        let mut candidate_links = self.links.clone();
+        candidate_links.install(definition.clone(), true)?;
+        let (enabled, issues, denial) =
+            validate_link_retained(&definition, &self.nodes, &self.schemas);
+        candidate_links
+            .get_mut(definition.name())
+            .expect("newly installed link is present")
+            .set_enabled(enabled);
+        let warnings = issues
+            .into_iter()
+            .map(Diagnostic::SchemaWarning)
+            .chain(denial.map(|issue| Diagnostic::LinkDisabled {
+                link: definition.name().clone(),
+                issue,
+            }))
+            .collect::<Vec<_>>();
+        let new_visible = visible_nodes(&self.nodes, &candidate_links);
+        let changes = diff_visible_nodes(&old_visible, &new_visible);
+        let update = self.install_visibility_changes(changes)?;
+        self.links = candidate_links;
+        Ok(LinkInstallOutcome {
+            enabled,
+            warnings,
+            update,
+        })
+    }
+
+    pub fn remove_link(&mut self, name: &LinkName) -> Result<LinkRemovalOutcome, CoreError> {
+        let old_projected = projected_nodes(&self.nodes, &self.links);
+        let mut candidate_links = self.links.clone();
+        let removed = candidate_links.remove(name).is_some();
+        if !removed {
+            return Ok(LinkRemovalOutcome {
+                removed: false,
+                update: None,
+            });
+        }
+        let new_projected = projected_nodes(&self.nodes, &candidate_links);
+        let changes = diff_visible_nodes(&old_projected, &new_projected);
+        let update = self.install_visibility_changes(changes)?;
+        self.links = candidate_links;
+        Ok(LinkRemovalOutcome {
+            removed: true,
+            update,
+        })
     }
 
     pub fn open_session(
@@ -224,7 +384,8 @@ impl Core {
             );
         }
 
-        let update = self.install_node_changes(candidate, changes)?;
+        let (update, link_warnings) = self.install_node_changes(candidate, changes)?;
+        warnings.extend(link_warnings);
         self.sessions.insert(client.clone(), id);
         self.next_session_id = raw_id;
         Ok(OpenSessionOutcome {
@@ -261,7 +422,8 @@ impl Core {
             &mut warnings,
             &mut pending_releases,
         );
-        let update = self.install_node_changes(candidate, changes)?;
+        let (update, link_warnings) = self.install_node_changes(candidate, changes)?;
+        warnings.extend(link_warnings);
         self.sessions.remove(handle.client());
 
         Ok(DisconnectOutcome {
@@ -387,7 +549,11 @@ impl Core {
                 },
             )
             .collect();
-        self.install_node_changes(candidate, changes)
+        let (update, warnings) = self.install_node_changes(candidate, changes)?;
+        for warning in warnings {
+            warn!(?warning, "deadline mutation produced diagnostic");
+        }
+        Ok(update)
     }
 
     fn validate_actor(&self, actor: &WriteContext) -> Result<(), CoreError> {
@@ -407,6 +573,43 @@ impl Core {
         &mut self,
         candidate: BTreeMap<TopicPath, Node>,
         changes: Vec<Change>,
+    ) -> Result<(Option<UpdateBatch>, Vec<Diagnostic>), CoreError> {
+        let mut candidate_links = self.links.clone();
+        let mut warnings = Vec::new();
+        let changes = reconcile_link_views(
+            (&self.nodes, &self.links),
+            &candidate,
+            &mut candidate_links,
+            &self.schemas,
+            changes,
+            &mut warnings,
+            false,
+        );
+        if changes.is_empty() {
+            self.nodes = candidate;
+            self.links = candidate_links;
+            return Ok((None, warnings));
+        }
+        let next = self
+            .sequence
+            .0
+            .checked_add(1)
+            .map(CommitSequence)
+            .ok_or(CoreError::SequenceExhausted)?;
+        self.nodes = candidate;
+        self.links = candidate_links;
+        self.sequence = next;
+        let update = UpdateBatch {
+            sequence: next,
+            changes,
+        };
+        self.publish_update(&update);
+        Ok((Some(update), warnings))
+    }
+
+    fn install_visibility_changes(
+        &mut self,
+        changes: Vec<Change>,
     ) -> Result<Option<UpdateBatch>, CoreError> {
         if changes.is_empty() {
             return Ok(None);
@@ -417,7 +620,6 @@ impl Core {
             .checked_add(1)
             .map(CommitSequence)
             .ok_or(CoreError::SequenceExhausted)?;
-        self.nodes = candidate;
         self.sequence = next;
         let update = UpdateBatch {
             sequence: next,
@@ -676,6 +878,55 @@ pub enum Diagnostic {
         topic: TopicPath,
     },
     SchemaWarning(SchemaIssue),
+    LinkDisabled {
+        link: LinkName,
+        issue: SchemaIssue,
+    },
+    LinkEnabled {
+        link: LinkName,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkInstallOutcome {
+    enabled: bool,
+    warnings: Vec<Diagnostic>,
+    update: Option<UpdateBatch>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkRemovalOutcome {
+    removed: bool,
+    update: Option<UpdateBatch>,
+}
+
+impl LinkRemovalOutcome {
+    #[must_use]
+    pub const fn removed(&self) -> bool {
+        self.removed
+    }
+
+    #[must_use]
+    pub fn update(&self) -> Option<&UpdateBatch> {
+        self.update.as_ref()
+    }
+}
+
+impl LinkInstallOutcome {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.warnings
+    }
+
+    #[must_use]
+    pub fn update(&self) -> Option<&UpdateBatch> {
+        self.update.as_ref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -828,6 +1079,8 @@ pub enum CoreError {
     SchemaRegistry(#[from] SchemaRegistryError),
     #[error("existing values violate the proposed schema")]
     ExistingSchemaViolations { violations: Vec<SchemaIssue> },
+    #[error(transparent)]
+    Link(#[from] LinkInstallError),
 }
 
 fn validate_operation(
@@ -928,6 +1181,224 @@ fn validate_operation(
         operation => operation.clone(),
     };
     Ok(operation)
+}
+
+fn prepare_alias_operation(
+    links: &LinkRegistry,
+    schemas: &SchemaRegistry,
+    operation: &WriteOperation,
+    warnings: &mut Vec<Diagnostic>,
+) -> Result<WriteOperation, CoreError> {
+    let Some((_, canonical)) = links.resolve_alias(operation.topic()) else {
+        return Ok(operation.clone());
+    };
+    let operation = validate_operation(schemas, operation, warnings)?;
+    Ok(with_operation_topic(operation, canonical))
+}
+
+fn with_operation_topic(operation: WriteOperation, topic: TopicPath) -> WriteOperation {
+    match operation {
+        WriteOperation::PublishState { value, expiry, .. } => WriteOperation::PublishState {
+            topic,
+            value,
+            expiry,
+        },
+        WriteOperation::PublishEvent { value, .. } => WriteOperation::PublishEvent { topic, value },
+        WriteOperation::DefineInput {
+            kind, definition, ..
+        } => WriteOperation::DefineInput {
+            topic,
+            kind,
+            definition,
+        },
+        WriteOperation::ClaimInput { release, .. } => WriteOperation::ClaimInput { topic, release },
+        WriteOperation::SubmitDesired { value, expiry, .. } => WriteOperation::SubmitDesired {
+            topic,
+            value,
+            expiry,
+        },
+        WriteOperation::SubmitCommand { value, .. } => {
+            WriteOperation::SubmitCommand { topic, value }
+        }
+        WriteOperation::ClearDesired { .. } => WriteOperation::ClearDesired { topic },
+        WriteOperation::RemoveNode { .. } => WriteOperation::RemoveNode { topic },
+    }
+}
+
+fn operation_value_kind(operation: &WriteOperation) -> Option<crate::domain::ValueKind> {
+    match operation {
+        WriteOperation::PublishState { value, .. }
+        | WriteOperation::PublishEvent { value, .. }
+        | WriteOperation::SubmitDesired { value, .. }
+        | WriteOperation::SubmitCommand { value, .. } => Some(value.kind()),
+        WriteOperation::DefineInput { .. }
+        | WriteOperation::ClaimInput { .. }
+        | WriteOperation::ClearDesired { .. }
+        | WriteOperation::RemoveNode { .. } => None,
+    }
+}
+
+fn visible_nodes(
+    canonical: &BTreeMap<TopicPath, Node>,
+    links: &LinkRegistry,
+) -> BTreeMap<TopicPath, Node> {
+    let mut visible = canonical.clone();
+    visible.extend(projected_nodes(canonical, links));
+    visible
+}
+
+fn projected_nodes(
+    canonical: &BTreeMap<TopicPath, Node>,
+    links: &LinkRegistry,
+) -> BTreeMap<TopicPath, Node> {
+    links
+        .iter()
+        .filter(|link| link.enabled())
+        .flat_map(|link| {
+            canonical.iter().filter_map(move |(topic, node)| {
+                link.definition()
+                    .to_alias(topic)
+                    .map(|alias| (alias, node.clone()))
+            })
+        })
+        .collect()
+}
+
+fn node_value(node: &Node) -> Option<&Value> {
+    match node {
+        Node::State(state) => Some(state.current().value()),
+        Node::Desired(desired) => desired.current().map(RetainedValue::value),
+        Node::Event(_) | Node::Command(_) => None,
+    }
+}
+
+fn validate_link_retained(
+    definition: &LinkDefinition,
+    canonical: &BTreeMap<TopicPath, Node>,
+    schemas: &SchemaRegistry,
+) -> (bool, Vec<SchemaIssue>, Option<SchemaIssue>) {
+    let mut valid = true;
+    let mut warnings = Vec::new();
+    let mut denial = None;
+    for (topic, node) in canonical {
+        let Some(alias) = definition.to_alias(topic) else {
+            continue;
+        };
+        for (enforcement, issue) in schemas.inspect_existing(&alias, node.kind(), node_value(node))
+        {
+            match enforcement {
+                Enforcement::Warn => warnings.push(issue),
+                Enforcement::Deny => {
+                    valid = false;
+                    denial.get_or_insert(issue);
+                }
+            }
+        }
+    }
+    (valid, warnings, denial)
+}
+
+fn reconcile_link_views(
+    previous: (&BTreeMap<TopicPath, Node>, &LinkRegistry),
+    candidate: &BTreeMap<TopicPath, Node>,
+    candidate_links: &mut LinkRegistry,
+    schemas: &SchemaRegistry,
+    canonical_changes: Vec<Change>,
+    warnings: &mut Vec<Diagnostic>,
+    force_recheck: bool,
+) -> Vec<Change> {
+    let (previous_nodes, old_links) = previous;
+    let old_projected = projected_nodes(previous_nodes, old_links);
+
+    for link in candidate_links.iter_mut() {
+        let definition = link.definition().clone();
+        let relevant = canonical_changes
+            .iter()
+            .any(|change| definition.to_alias(change.topic()).is_some());
+        if !force_recheck && !relevant {
+            continue;
+        }
+
+        let (mut valid, issues, mut denial) =
+            validate_link_retained(&definition, candidate, schemas);
+        warnings.extend(issues.into_iter().map(Diagnostic::SchemaWarning));
+        for change in &canonical_changes {
+            let Some(alias) = definition.to_alias(change.topic()) else {
+                continue;
+            };
+            let (kind, value) = match change {
+                Change::Occurrence { event, .. } => (NodeKind::Event, Some(event.value())),
+                Change::Command { command, .. } => (NodeKind::Command, Some(command.value())),
+                Change::Upsert { .. } | Change::Removed { .. } => continue,
+            };
+            for (enforcement, issue) in schemas.inspect_existing(&alias, kind, value) {
+                match enforcement {
+                    Enforcement::Warn => warnings.push(Diagnostic::SchemaWarning(issue)),
+                    Enforcement::Deny => {
+                        valid = false;
+                        denial.get_or_insert(issue);
+                    }
+                }
+            }
+        }
+
+        let was_enabled = old_links
+            .get(definition.name())
+            .is_some_and(|link| link.enabled());
+        link.set_enabled(valid);
+        match (was_enabled, valid) {
+            (true, false) => warnings.push(Diagnostic::LinkDisabled {
+                link: definition.name().clone(),
+                issue: denial.expect("an invalid link has a denying schema issue"),
+            }),
+            (false, true) => warnings.push(Diagnostic::LinkEnabled {
+                link: definition.name().clone(),
+            }),
+            _ => {}
+        }
+    }
+
+    let new_projected = projected_nodes(candidate, candidate_links);
+    let mut changes = canonical_changes;
+    let instant_sources = changes
+        .iter()
+        .filter(|change| matches!(change, Change::Occurrence { .. } | Change::Command { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    changes.extend(diff_visible_nodes(&old_projected, &new_projected));
+    for link in candidate_links.iter().filter(|link| link.enabled()) {
+        for change in &instant_sources {
+            let Some(topic) = link.definition().to_alias(change.topic()) else {
+                continue;
+            };
+            match change {
+                Change::Occurrence { event, .. } => changes.push(Change::Occurrence {
+                    topic,
+                    event: event.clone(),
+                }),
+                Change::Command { command, .. } => changes.push(Change::Command {
+                    topic,
+                    command: command.clone(),
+                }),
+                Change::Upsert { .. } | Change::Removed { .. } => {}
+            }
+        }
+    }
+    changes
+}
+
+fn diff_visible_nodes(
+    previous: &BTreeMap<TopicPath, Node>,
+    candidate: &BTreeMap<TopicPath, Node>,
+) -> Vec<Change> {
+    previous
+        .keys()
+        .chain(candidate.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|topic| net_node_change(&topic, previous, candidate))
+        .collect()
 }
 
 fn validate_topics(batch: &WriteBatch) -> Result<(), CoreError> {

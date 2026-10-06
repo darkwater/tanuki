@@ -8,8 +8,8 @@ serves the Axum router. Ctrl-C starts graceful HTTP shutdown. Tests bind an
 ephemeral listener and inject state, clock, and a one-shot shutdown future
 through `server::serve_with_core`.
 
-Link-recovery remains pending its implementation card. The production server
-restores its configured snapshot before serving and starts one deadline
+The production server restores its configured snapshot before serving, rebuilds
+link projections and status from canonical data, and starts one deadline
 scheduler for the restored shared core.
 
 ## Output mutation and atomic commit
@@ -35,6 +35,28 @@ All caller-initiated mutations pass through `Core::apply`:
 No network or disk work occurs in this transition. State/event publication,
 removal, input definition/claiming, desired submission/clearing, and command
 submission all use this path.
+
+## Link installation, writes, and recovery
+
+`Core::install_link` checks destination collisions and topology against a cloned
+registry, evaluates current target nodes under alias schemas, then publishes the
+complete visibility diff. Replacement uses the same path. Removal deletes the
+definition and publishes alias removals; removing an absent name is a successful
+no-op. The HTTP operations require ordinary stateless attribution.
+
+For a write under a mount, the core validates and casts at the supplied alias,
+rebases the operation to the target, then validates and casts canonically. This
+resolution still occurs while a link is schema-disabled so a valid repair can
+commit. For canonical changes, the core validates each affected retained alias
+without casting the source value. A denying violation disables the complete
+link and publishes removals containing the last visible nodes alongside the
+canonical change. Relevant valid data, a valid later instant occurrence, or a
+schema replacement rechecks and can restore the full projection atomically.
+Old instant occurrences are never replayed.
+
+The same reconciliation runs for deadline and session-driven node changes.
+Snapshots persist canonical nodes and link definitions, never alias copies;
+restore rebuilds the registry and initial enabled state before serving reads.
 
 ## Schema installation
 

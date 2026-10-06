@@ -60,7 +60,7 @@ Decide how connection names map to path segments. Names with spaces are already 
 
 **Accepted:** a schema chooses warning (allow and log) or error (deny). Consumer-validity guarantees apply to denying constraints. Prefer permissive, diagnosable behaviour outside explicitly denying rules; built-in system restrictions remain mandatory.
 
-A linked warning can leave the view visible with a diagnostic; a rejecting linked violation disables the link. Precise linked write validation is still D4 work.
+A linked warning can leave the view visible with a diagnostic; a rejecting linked violation disables the link. D4 records the accepted linked-write order and recovery policy.
 
 Other structural choices:
 
@@ -78,15 +78,24 @@ The exact range/record/enum schema syntax can follow these decisions.
 
 Forward and reverse indexing is clear, but it does not decide the externally visible behaviour.
 
-**Recommended initial profile:**
+**Accepted initial profile:**
 
-- **Accepted:** links support writes. Still specify canonical-target validation versus alias validation, casting, and whether a write through a disabled alias can repair its target.
-- **Accepted:** disable a link on a rejecting violation, preserve its definition, and automatically re-enable when valid again. Log both transitions; restored retained views expose current state, not event history.
+- Links support writes. Apply the alias schema and its cast first, then translate
+  and apply the canonical schema and its cast. Either denying failure rejects
+  the whole write. Log unusual multi-cast outcomes.
+- A write through a schema-disabled alias is a repair attempt. Passing both
+  policies commits and re-enables it atomically; failure leaves it disabled.
+- Disable a link on a rejecting direct-source violation, preserve its
+  definition, and automatically re-enable when valid again. Log both
+  transitions; restored retained views expose current state, not event history.
 - Reject cycles, overlapping link mounts, and collisions with existing destination nodes/subtrees. Initially reject targets reached through another link, so link chains need not be supported yet.
 - Reject links to or from the reserved system namespace initially.
 - Commit source changes and all affected view removals as one batch. Do not leak the invalid candidate value as a removal's “last value”.
 
-**Important event case:** an invalid instant event has no stored value to repair later. Recommended suppress that occurrence through the rejecting view and disable the link; the canonical occurrence and other valid views still deliver it. Define how a subsequent valid occurrence can trigger recovery; do not introduce event replay to solve this.
+**Accepted event case:** an invalid instant event has no stored value to repair
+later. Suppress that occurrence through the rejecting view and disable the
+link; the canonical occurrence and other valid views still deliver it. A later
+valid occurrence re-enables the link and is delivered without replay.
 
 Subtree links also require clear behaviour when the target disappears and returns. Recommended keep the link definition, expose no absent target data, and re-evaluate on target creation while the link remains enabled. Schema-disabled links must be rechecked when relevant target data or schemas change, so they can recover automatically. Manual administrative disabling is not specified.
 

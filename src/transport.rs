@@ -29,6 +29,7 @@ use crate::{
         NonNegativeDuration, Selection, Selector, SessionHandle, SessionId, Timestamp, TopicPath,
         ValueKind, WriteBatch, WriteContext, WriteOperation,
     },
+    link::{LinkDefinition, LinkName},
     protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView},
     scheduler::DeadlineScheduler,
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
@@ -59,6 +60,7 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
     Router::new()
         .route("/v1/write", post(batch_write))
         .route("/v1/state/{*topic}", post(single_state_write))
+        .route("/v1/links/{name}", put(install_link).delete(remove_link))
         .route("/v1/schemas/{name}", put(install_schema))
         .route("/v1/snapshot", get(snapshot))
         .route("/v1/ws", get(websocket_upgrade))
@@ -70,6 +72,61 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
             scheduler,
             connections: Arc::new(Mutex::new(BTreeMap::new())),
         })
+}
+
+#[derive(Deserialize)]
+struct LinkRequest {
+    mount: TopicPath,
+    target: TopicPath,
+}
+
+async fn install_link(
+    State(state): State<HttpState>,
+    Path(name): Path<String>,
+    StatelessActor(actor): StatelessActor,
+    payload: Result<Json<LinkRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+    let Json(request) = payload.map_err(ApiError::invalid_json)?;
+    let name = LinkName::parse(&name)
+        .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
+    let definition = LinkDefinition::new(name.clone(), request.mount, request.target)
+        .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
+    let outcome = state
+        .core
+        .lock()
+        .map_err(ApiError::poisoned)?
+        .install_link(definition)
+        .map_err(ApiError::from_core)?;
+    for warning in outcome.warnings() {
+        warn!(?warning, link = %name, client = %actor.client(), "link installed with diagnostic");
+    }
+    Ok(Json(ApiResponse::success(json!({
+        "link": name.as_str(),
+        "enabled": outcome.enabled(),
+        "sequence": outcome.update().map(|update| update.sequence().get()),
+        "warnings": outcome.warnings().iter().map(diagnostic_json).collect::<Vec<_>>(),
+    }))))
+}
+
+async fn remove_link(
+    State(state): State<HttpState>,
+    Path(name): Path<String>,
+    StatelessActor(actor): StatelessActor,
+) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+    let name = LinkName::parse(&name)
+        .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
+    let outcome = state
+        .core
+        .lock()
+        .map_err(ApiError::poisoned)?
+        .remove_link(&name)
+        .map_err(ApiError::from_core)?;
+    warn!(link = %name, client = %actor.client(), removed = outcome.removed(), "link removal requested");
+    Ok(Json(ApiResponse::success(json!({
+        "link": name.as_str(),
+        "removed": outcome.removed(),
+        "sequence": outcome.update().map(|update| update.sequence().get()),
+    }))))
 }
 
 #[derive(Deserialize)]
@@ -813,6 +870,7 @@ impl ApiError {
             CoreError::ExistingSchemaViolations { .. } => {
                 (StatusCode::CONFLICT, "existing_schema_violations")
             }
+            CoreError::Link(_) => (StatusCode::CONFLICT, "invalid_link"),
         };
         let message = match &error {
             CoreError::ExistingSchemaViolations { violations } => violations
@@ -1049,6 +1107,12 @@ fn diagnostic_json(diagnostic: &Diagnostic) -> RawJson {
         }
         Diagnostic::SchemaWarning(issue) => {
             json!({"code": "schema_warning", "topic": issue.topic(), "message": issue.kind().to_string()})
+        }
+        Diagnostic::LinkDisabled { link, issue } => {
+            json!({"code": "link_disabled", "link": link.as_str(), "topic": issue.topic(), "message": issue.kind().to_string()})
+        }
+        Diagnostic::LinkEnabled { link } => {
+            json!({"code": "link_enabled", "link": link.as_str()})
         }
     }
 }

@@ -49,6 +49,8 @@ prefix.
 | `POST /v1/write` | `{"operations":[...]}` | One atomic operation batch |
 | `GET /v1/snapshot?select=/battery/*` | one selector | Selection-filtered retained snapshot |
 | `PUT /v1/schemas/{name}` | complete schema declaration | Atomically install or replace one named schema |
+| `PUT /v1/links/{name}` | `{"mount":"/view","target":"/canonical"}` | Atomically install or replace a writable subtree link |
+| `DELETE /v1/links/{name}` | none | Remove a link and retract its projected nodes |
 
 Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
 `define_input`, `claim_input`, `submit_desired`, `submit_command`,
@@ -76,6 +78,13 @@ claims. Warning violations remain and are returned as diagnostics. A complete
 declaration atomically replaces the same schema name.
 Like other HTTP mutations, schema installation requires client attribution by
 `tanuki-client` or `?client=`; this is not authentication or authorization.
+
+Link installation and deletion require the same attribution. A link projects
+the target subtree beneath its mount in snapshots and update batches. Writes to
+an alias are translated to the canonical topic after alias schema validation;
+the canonical schema is then applied. Link changes report a commit sequence
+when visible aliases were added or removed. Deleting an absent link is an
+idempotent success.
 
 Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
 arrays, and objects map directly to runtime values. The semantic forms are:

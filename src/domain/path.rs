@@ -52,6 +52,24 @@ impl TopicPath {
     pub fn segments(&self) -> impl ExactSizeIterator<Item = &str> {
         self.segments.iter().map(String::as_str)
     }
+
+    #[must_use]
+    pub(crate) fn is_prefix_of(&self, other: &Self) -> bool {
+        other.segments.starts_with(&self.segments)
+    }
+
+    pub(crate) fn rebase(&self, from: &Self, to: &Self) -> Option<Self> {
+        let suffix = self.segments.strip_prefix(from.segments.as_ref())?;
+        let segments = to
+            .segments
+            .iter()
+            .chain(suffix)
+            .cloned()
+            .collect::<Vec<_>>();
+        Some(Self {
+            segments: segments.into_boxed_slice(),
+        })
+    }
 }
 
 impl fmt::Display for TopicPath {

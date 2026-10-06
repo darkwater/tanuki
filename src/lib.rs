@@ -5,6 +5,7 @@
 pub mod client;
 pub mod core;
 pub mod domain;
+pub mod link;
 pub mod persistence;
 pub mod protocol;
 pub mod scheduler;

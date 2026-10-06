@@ -770,6 +770,14 @@ pub enum DiagnosticView {
         topic: String,
         message: String,
     },
+    LinkDisabled {
+        link: String,
+        topic: String,
+        message: String,
+    },
+    LinkEnabled {
+        link: String,
+    },
 }
 
 impl From<&Diagnostic> for DiagnosticView {
@@ -820,6 +828,14 @@ impl From<&Diagnostic> for DiagnosticView {
             Diagnostic::SchemaWarning(issue) => Self::SchemaWarning {
                 topic: issue.topic().to_string(),
                 message: issue.kind().to_string(),
+            },
+            Diagnostic::LinkDisabled { link, issue } => Self::LinkDisabled {
+                link: link.as_str().to_owned(),
+                topic: issue.topic().to_string(),
+                message: issue.kind().to_string(),
+            },
+            Diagnostic::LinkEnabled { link } => Self::LinkEnabled {
+                link: link.as_str().to_owned(),
             },
         }
     }
