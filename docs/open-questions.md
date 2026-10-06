@@ -23,6 +23,18 @@ integration:
    reaches canonical subscribers, is suppressed through the rejecting view,
    and disables that link. A later valid event re-enables the link and is
    delivered through it, without replaying the invalid or any older event.
+4. **Shared diagnostics interface.** Recommended: reserve a read-only built-in
+   `/$diagnostics/**` tree that appears through ordinary snapshots and
+   subscriptions. Retain active conditions such as overdue freshness so a
+   late observer sees them, and emit transition events for warning/recovery.
+   Client writes remain forbidden, and failure to publish a diagnostic is
+   logged locally without recursively diagnosing that failure.
+5. **Freshness rule scope.** Recommended: add an optional fixed
+   `expected_update_interval` to schema rules. Initially evaluate only retained
+   state and present desired values from their latest accepted write; a missing
+   desired value and instant event/command nodes do not become overdue. An
+   identical accepted write refreshes the deadline and clears active overdue
+   status without deleting the value.
 
 ## Consequential, but the likely answer seems clear
 

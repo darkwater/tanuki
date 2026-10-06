@@ -2,12 +2,14 @@
 
 Tanuki is an early personal automation fabric for named state, events, desired
 inputs, and commands. One transport-independent core supplies atomic writes,
-managed input ownership, coherent subscriptions, expiry, and best-effort
-restart persistence to HTTP and WebSocket clients.
+managed input ownership, coherent subscriptions, expiry, schemas, and
+best-effort restart persistence to HTTP and WebSocket clients.
 
-Tasks 00–08 of the implementation plan are implemented. Schema enforcement and
-linked views are the next architecture checkpoint; the current prioritized
-decisions are in [docs/open-questions.md](docs/open-questions.md).
+Tasks 00–09 of the implementation plan are implemented. Writable linked views
+are at architecture checkpoint C; the concrete questions that block them are
+in [docs/open-questions.md](docs/open-questions.md). Freshness/shared
+diagnostics can proceed independently once its observable system interface is
+selected.
 
 ## Run it
 
@@ -41,6 +43,34 @@ curl -sS \
 operations are `publish_state`, `publish_event`, `define_input`, `claim_input`,
 `submit_desired`, `submit_command`, `clear_desired`, and `remove_node`.
 Stateless HTTP can define or submit inputs but cannot claim them.
+
+## Schemas
+
+Install or replace a named schema atomically with
+`PUT /v1/schemas/{name}`. This example constrains battery state to integer
+percentages and explicitly casts strings such as `"72"` before revalidation:
+
+```sh
+curl -sS -X PUT \
+  -H 'content-type: application/json' \
+  --data '{
+    "rules": [{
+      "selector": "/battery/*",
+      "enforcement": "deny",
+      "node_kind": "state",
+      "validator": {"type": "integer_range", "minimum": 0, "maximum": 100},
+      "cast": "string_to_integer"
+    }]
+  }' \
+  http://127.0.0.1:5167/v1/schemas/battery
+```
+
+Normal installation reports existing denying violations and changes nothing.
+Add `"force":true` to remove invalid state values or clear an invalid desired
+current value while preserving its definition and claim. Warning rules accept
+the operation and return diagnostics. Installed schemas survive snapshots and
+restart. See [docs/protocol.md](docs/protocol.md) for the complete initial
+validator and cast vocabulary.
 
 ## WebSocket
 
@@ -99,8 +129,9 @@ documents take precedence when they disagree.
 
 ## Current limitations
 
-Schemas, linked views, freshness diagnostics, TCP/MQTT/SSE, authentication,
-large-blob transfer, event replay, and a polished client SDK are not yet
-implemented. Persistence is periodic best effort rather than a WAL: an
+Linked views, freshness diagnostics, TCP/MQTT/SSE, authentication, large-blob
+transfer, event replay, and a polished client SDK are not yet implemented.
+Persistence is periodic best effort rather than a WAL: an
 acknowledged write can be lost if the process crashes before the next completed
-snapshot. Wire shapes remain provisional pending checkpoint-B review.
+snapshot. Wire shapes remain versioned but provisional until the initial
+release review.
