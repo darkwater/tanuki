@@ -1,6 +1,6 @@
 # US-11 — Logs, alerts and script health
 
-- **Status:** intended use; implementation and real-world use not yet verified.
+- **Status:** active freshness/link conditions implemented; broader operational diagnostics and real-world use not yet verified.
 - **Origin:** User use case; embedded runtime portion deferred.
 - **Last updated:** 2026-10-05.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -13,7 +13,11 @@ I want unusual behaviour and script failures to be visible centrally, so I can i
 
 Tanuki logs unexpected situations. A notification script could consume log events and send Telegram messages. A future runtime could own per-script status topics, allowing a UI to list failed scripts.
 
-Core/client diagnostics → logging interface → viewer or optional notifier. Future runtime → illustrative `/$runtime/scripts/...` status → health UI. Exact paths are not selected; earlier `/log/info` was an interface idea.
+Core/client diagnostics → logging interface → viewer or optional notifier.
+Future runtime → illustrative `/$runtime/scripts/...` status → health UI. Active
+conditions currently use `/$diagnostics/freshness/**` and
+`/$diagnostics/links/*`; transient warnings remain in structured outcomes and
+local logging.
 
 Topic paths, payload layouts and timing examples are illustrative unless explicitly agreed elsewhere. This is an application story, not a mandatory global topic convention.
 
@@ -31,11 +35,14 @@ Log schema, event versus retained status, notifier identity/routing and future s
 
 ## Implementation and evidence
 
-- Core test links: [test plan](../test-plan.md) — S1, K1, P1; task 11 diagnostics tests; future runtime tests only when in scope.
-- Story-specific test file/command: not yet implemented. Map each criterion to a test or explicitly mark it manual/deferred.
+- Automated evidence: `tests/core_freshness.rs` covers overdue/recovery state,
+  exclusions, and recursive-failure prevention; `tests/scheduler.rs` covers the
+  timed wake; `tests/core_links.rs` covers link condition onset/recovery; and
+  `tests/persistence.rs` covers restart derivation.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 
 ## Change notes
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
+- 2026-10-06: Added read-only active freshness and link conditions under the reserved diagnostics tree.

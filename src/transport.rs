@@ -95,8 +95,9 @@ async fn install_link(
         .core
         .lock()
         .map_err(ApiError::poisoned)?
-        .install_link(definition)
+        .install_link(definition, (state.clock)())
         .map_err(ApiError::from_core)?;
+    state.scheduler.rescan();
     for warning in outcome.warnings() {
         warn!(?warning, link = %name, client = %actor.client(), "link installed with diagnostic");
     }
@@ -119,8 +120,9 @@ async fn remove_link(
         .core
         .lock()
         .map_err(ApiError::poisoned)?
-        .remove_link(&name)
+        .remove_link(&name, (state.clock)())
         .map_err(ApiError::from_core)?;
+    state.scheduler.rescan();
     warn!(link = %name, client = %actor.client(), removed = outcome.removed(), "link removal requested");
     Ok(Json(ApiResponse::success(json!({
         "link": name.as_str(),
@@ -145,6 +147,7 @@ struct SchemaRuleRequest {
     validator: ValidatorRequest,
     cast: Option<CastRequest>,
     node_kind: Option<NodeKindRequest>,
+    expected_update_interval: Option<String>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -202,8 +205,9 @@ async fn install_schema(
     State(state): State<HttpState>,
     Path(name): Path<String>,
     StatelessActor(actor): StatelessActor,
-    Json(request): Json<SchemaRequest>,
-) -> Result<Json<RawJson>, ApiError> {
+    payload: Result<Json<SchemaRequest>, JsonRejection>,
+) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+    let Json(request) = payload.map_err(ApiError::invalid_json)?;
     let schema = build_schema(&name, request.rules)?;
     let mode = if request.force {
         SchemaInstallMode::RemoveInvalid
@@ -214,19 +218,17 @@ async fn install_schema(
         .core
         .lock()
         .map_err(ApiError::poisoned)?
-        .install_schema(schema, mode)
+        .install_schema(schema, mode, (state.clock)())
         .map_err(ApiError::from_core)?;
-    if outcome.update().is_some() {
-        state.scheduler.rescan();
-    }
+    state.scheduler.rescan();
     for warning in outcome.warnings() {
         warn!(?warning, schema = %name, client = %actor.client(), "schema installed with diagnostic");
     }
-    Ok(Json(json!({
+    Ok(Json(ApiResponse::success(json!({
         "schema": name,
         "sequence": outcome.update().map(|update| update.sequence().get()),
         "warnings": outcome.warnings().iter().map(diagnostic_json).collect::<Vec<_>>(),
-    })))
+    }))))
 }
 
 fn build_schema(name: &str, rules: Vec<SchemaRuleRequest>) -> Result<Schema, ApiError> {
@@ -270,8 +272,14 @@ fn build_schema_rule(request: SchemaRuleRequest) -> Result<SchemaRule, ApiError>
             .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string())),
         None => Ok(rule),
     }?;
-    Ok(match request.node_kind {
+    let rule = match request.node_kind {
         Some(node_kind) => rule.with_node_kind(node_kind.into()),
+        None => rule,
+    };
+    Ok(match request.expected_update_interval {
+        Some(interval) => rule
+            .with_expected_update_interval(nonnegative_duration(&interval)?)
+            .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?,
         None => rule,
     })
 }

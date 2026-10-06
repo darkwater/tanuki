@@ -6,7 +6,9 @@ use std::{
 
 use thiserror::Error;
 
-use crate::domain::{FiniteF64, NodeKind, Selector, TopicPath, Value, ValueKind};
+use crate::domain::{
+    FiniteF64, NodeKind, NonNegativeDuration, Selector, TopicPath, Value, ValueKind,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Enforcement {
@@ -327,6 +329,7 @@ pub struct SchemaRule {
     validator: ValueValidator,
     cast: Option<ValueCast>,
     node_kind: Option<NodeKind>,
+    expected_update_interval: Option<NonNegativeDuration>,
 }
 
 impl SchemaRule {
@@ -344,6 +347,7 @@ impl SchemaRule {
             validator,
             cast: None,
             node_kind: None,
+            expected_update_interval: None,
         })
     }
 
@@ -365,6 +369,17 @@ impl SchemaRule {
         self
     }
 
+    pub fn with_expected_update_interval(
+        mut self,
+        interval: NonNegativeDuration,
+    ) -> Result<Self, SchemaRuleBuildError> {
+        if interval.get().is_zero() {
+            return Err(SchemaRuleBuildError::ZeroExpectedUpdateInterval);
+        }
+        self.expected_update_interval = Some(interval);
+        Ok(self)
+    }
+
     #[must_use]
     pub fn selector(&self) -> &Selector {
         &self.selector
@@ -384,6 +399,10 @@ impl SchemaRule {
 
     pub(crate) const fn node_kind(&self) -> Option<NodeKind> {
         self.node_kind
+    }
+
+    pub(crate) const fn expected_update_interval(&self) -> Option<NonNegativeDuration> {
+        self.expected_update_interval
     }
 
     pub fn validate(
@@ -434,6 +453,8 @@ pub enum SchemaRuleBuildError {
         target: ValueKind,
         validator_kind: Option<ValueKind>,
     },
+    #[error("expected update interval must be greater than zero")]
+    ZeroExpectedUpdateInterval,
 }
 
 #[derive(Clone, Debug)]
@@ -687,6 +708,18 @@ impl SchemaRegistry {
             return Ok(Vec::new());
         };
         schema.validate_node_kind(topic, node_kind)
+    }
+
+    pub(crate) fn expected_update_interval(
+        &self,
+        topic: &TopicPath,
+    ) -> Option<NonNegativeDuration> {
+        self.schemas
+            .values()
+            .flat_map(|schema| schema.rules.iter())
+            .filter(|rule| rule.applies_to(topic))
+            .filter_map(SchemaRule::expected_update_interval)
+            .min_by_key(|interval| interval.get())
     }
 
     pub(crate) fn inspect_existing(

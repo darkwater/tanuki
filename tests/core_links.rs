@@ -68,7 +68,7 @@ fn installed_subtree_link_projects_reads_and_canonical_updates() {
         now(1),
     )
     .unwrap();
-    let installed = core.install_link(link()).unwrap();
+    let installed = core.install_link(link(), now(1)).unwrap();
     assert!(installed.enabled());
 
     let snapshot = core.read(&all());
@@ -99,7 +99,10 @@ fn destination_collisions_are_rejected_without_installing_the_link() {
         now(1),
     )
     .unwrap();
-    assert!(matches!(core.install_link(link()), Err(CoreError::Link(_))));
+    assert!(matches!(
+        core.install_link(link(), now(1)),
+        Err(CoreError::Link(_))
+    ));
     assert_eq!(core.link_count(), 0);
 }
 
@@ -109,6 +112,7 @@ fn rejecting_alias_schema_disables_and_later_repairs_the_whole_view() {
     core.install_schema(
         range_schema("view range", "/view/*", None),
         tanuki::core::SchemaInstallMode::RejectInvalid,
+        now(0),
     )
     .unwrap();
     core.apply(
@@ -117,7 +121,7 @@ fn rejecting_alias_schema_disables_and_later_repairs_the_whole_view() {
         now(1),
     )
     .unwrap();
-    core.install_link(link()).unwrap();
+    core.install_link(link(), now(1)).unwrap();
 
     let invalid = core
         .apply(
@@ -135,6 +139,8 @@ fn rejecting_alias_schema_disables_and_later_repairs_the_whole_view() {
         Change::Removed { topic: changed, .. } if changed == &topic("/view/device")
     )));
     assert!(core.read(&all()).get(&topic("/view/device")).is_none());
+    let condition = topic("/$diagnostics/links/dashboard");
+    assert!(core.read(&all()).get(&condition).is_some());
     let Some(Node::State(canonical)) = core.read(&all()).get(&topic("/canonical/device")).cloned()
     else {
         panic!("canonical write must commit");
@@ -152,7 +158,12 @@ fn rejecting_alias_schema_disables_and_later_repairs_the_whole_view() {
         repaired.warnings(),
         [Diagnostic::LinkEnabled { .. }]
     ));
+    assert!(repaired.update().changes().iter().any(|change| matches!(
+        change,
+        Change::Removed { topic, .. } if topic == &condition
+    )));
     assert!(core.read(&all()).get(&topic("/view/device")).is_some());
+    assert!(core.read(&all()).get(&condition).is_none());
 }
 
 #[test]
@@ -164,12 +175,13 @@ fn alias_schema_replacement_disables_and_reenables_existing_view() {
         now(1),
     )
     .unwrap();
-    core.install_link(link()).unwrap();
+    core.install_link(link(), now(1)).unwrap();
 
     let disabled = core
         .install_schema(
             range_schema("view range", "/view/*", None),
             SchemaInstallMode::RejectInvalid,
+            now(1),
         )
         .unwrap();
     assert!(matches!(
@@ -194,6 +206,7 @@ fn alias_schema_replacement_disables_and_reenables_existing_view() {
             )
             .unwrap(),
             SchemaInstallMode::RejectInvalid,
+            now(2),
         )
         .unwrap();
     assert!(matches!(
@@ -230,6 +243,7 @@ fn topology_rejects_system_overlap_collisions_and_link_chains() {
             topic("/canonical"),
         )
         .unwrap(),
+        now(0),
     )
     .unwrap();
     assert!(matches!(
@@ -240,6 +254,7 @@ fn topology_rejects_system_overlap_collisions_and_link_chains() {
                 topic("/other"),
             )
             .unwrap(),
+            now(0),
         ),
         Err(CoreError::Link(LinkInstallError::OverlappingMounts { .. }))
     ));
@@ -251,6 +266,7 @@ fn topology_rejects_system_overlap_collisions_and_link_chains() {
                 topic("/view/source"),
             )
             .unwrap(),
+            now(0),
         ),
         Err(CoreError::Link(LinkInstallError::TargetThroughLink { .. }))
     ));
@@ -269,14 +285,14 @@ fn replacing_and_removing_a_link_retracts_only_its_old_projection() {
         now(1),
     )
     .unwrap();
-    core.install_link(link()).unwrap();
+    core.install_link(link(), now(1)).unwrap();
     let replacement = LinkDefinition::new(
         LinkName::parse("dashboard").unwrap(),
         topic("/alternate"),
         topic("/other"),
     )
     .unwrap();
-    let replaced = core.install_link(replacement).unwrap();
+    let replaced = core.install_link(replacement, now(1)).unwrap();
     let changes = replaced.update().unwrap().changes();
     assert!(changes.iter().any(|change| matches!(
         change,
@@ -288,7 +304,7 @@ fn replacing_and_removing_a_link_retracts_only_its_old_projection() {
     )));
 
     let removed = core
-        .remove_link(&LinkName::parse("dashboard").unwrap())
+        .remove_link(&LinkName::parse("dashboard").unwrap(), now(1))
         .unwrap();
     assert!(removed.removed());
     assert!(
@@ -305,7 +321,7 @@ fn replacing_and_removing_a_link_retracts_only_its_old_projection() {
     assert_eq!(core.link_count(), 0);
     assert!(
         !core
-            .remove_link(&LinkName::parse("dashboard").unwrap())
+            .remove_link(&LinkName::parse("dashboard").unwrap(), now(1))
             .unwrap()
             .removed()
     );
@@ -317,14 +333,16 @@ fn alias_write_casts_at_the_view_then_validates_and_commits_canonically() {
     core.install_schema(
         range_schema("view cast", "/view/*", Some(ValueCast::StringToInteger)),
         tanuki::core::SchemaInstallMode::RejectInvalid,
+        now(0),
     )
     .unwrap();
     core.install_schema(
         range_schema("canonical range", "/canonical/*", None),
         tanuki::core::SchemaInstallMode::RejectInvalid,
+        now(0),
     )
     .unwrap();
-    core.install_link(link()).unwrap();
+    core.install_link(link(), now(0)).unwrap();
 
     core.apply(
         &actor(),
@@ -345,9 +363,10 @@ fn invalid_event_is_canonical_only_and_later_valid_event_recovers_without_replay
     core.install_schema(
         range_schema("view range", "/view/*", None),
         tanuki::core::SchemaInstallMode::RejectInvalid,
+        now(0),
     )
     .unwrap();
-    core.install_link(link()).unwrap();
+    core.install_link(link(), now(0)).unwrap();
 
     let invalid = core
         .apply(

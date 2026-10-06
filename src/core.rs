@@ -30,6 +30,7 @@ pub struct Core {
     next_subscription_id: u64,
     schemas: SchemaRegistry,
     links: LinkRegistry,
+    diagnostics: BTreeMap<TopicPath, Node>,
 }
 
 impl Core {
@@ -43,6 +44,7 @@ impl Core {
         nodes: BTreeMap<TopicPath, Node>,
         schemas: SchemaRegistry,
         links: Vec<LinkDefinition>,
+        now: Timestamp,
     ) -> Result<Self, LinkInstallError> {
         let mut core = Self {
             sequence,
@@ -61,9 +63,18 @@ impl Core {
                     topic: topic.clone(),
                 });
             }
-            let (enabled, _, _) = validate_link_retained(&definition, &core.nodes, &core.schemas);
-            core.links.install(definition, enabled)?;
+            let (enabled, _, denial) =
+                validate_link_retained(&definition, &core.nodes, &core.schemas);
+            debug_assert_eq!(enabled, denial.is_none());
+            core.links.install(definition, denial)?;
         }
+        core.diagnostics = active_diagnostics(
+            &core.nodes,
+            &core.links,
+            &core.schemas,
+            &BTreeMap::new(),
+            now,
+        );
         Ok(core)
     }
 
@@ -84,7 +95,8 @@ impl Core {
 
     #[must_use]
     pub fn read(&self, selection: &Selection) -> Snapshot {
-        let visible = visible_nodes(&self.nodes, &self.links);
+        let mut visible = visible_nodes(&self.nodes, &self.links);
+        visible.extend(self.diagnostics.clone());
         Snapshot {
             sequence: self.sequence,
             nodes: visible
@@ -157,7 +169,7 @@ impl Core {
         }
 
         let changes = coalesce_batch_changes(&previous, &candidate, changes);
-        let changes = reconcile_link_views(
+        let mut changes = reconcile_link_views(
             (&previous, &self.links),
             &candidate,
             &mut candidate_links,
@@ -166,6 +178,17 @@ impl Core {
             &mut warnings,
             false,
         );
+        let candidate_diagnostics = active_diagnostics(
+            &candidate,
+            &candidate_links,
+            &self.schemas,
+            &self.diagnostics,
+            now,
+        );
+        changes.extend(diff_visible_nodes(
+            &self.diagnostics,
+            &candidate_diagnostics,
+        ));
 
         debug_assert!(candidate.keys().all(|topic| !topic.is_system()));
         debug_assert!(nodes_have_no_denying_schema_violations(
@@ -174,6 +197,7 @@ impl Core {
         ));
         self.nodes = candidate;
         self.links = candidate_links;
+        self.diagnostics = candidate_diagnostics;
         self.next_claim_id = next_claim_id;
         self.sequence = next_sequence;
         let update = UpdateBatch {
@@ -188,6 +212,7 @@ impl Core {
         &mut self,
         schema: Schema,
         mode: SchemaInstallMode,
+        now: Timestamp,
     ) -> Result<SchemaInstallOutcome, CoreError> {
         let mut candidate_registry = self.schemas.clone();
         candidate_registry.install(schema.clone())?;
@@ -255,7 +280,7 @@ impl Core {
         }
 
         let mut candidate_links = self.links.clone();
-        let changes = reconcile_link_views(
+        let mut changes = reconcile_link_views(
             (&self.nodes, &self.links),
             &candidate_nodes,
             &mut candidate_links,
@@ -264,6 +289,17 @@ impl Core {
             &mut warnings,
             true,
         );
+        let candidate_diagnostics = active_diagnostics(
+            &candidate_nodes,
+            &candidate_links,
+            &candidate_registry,
+            &self.diagnostics,
+            now,
+        );
+        changes.extend(diff_visible_nodes(
+            &self.diagnostics,
+            &candidate_diagnostics,
+        ));
         let update = if changes.is_empty() {
             None
         } else {
@@ -281,6 +317,7 @@ impl Core {
         self.nodes = candidate_nodes;
         self.schemas = candidate_registry;
         self.links = candidate_links;
+        self.diagnostics = candidate_diagnostics;
         if let Some(update) = &update {
             self.sequence = update.sequence;
             self.publish_update(update);
@@ -291,6 +328,7 @@ impl Core {
     pub fn install_link(
         &mut self,
         definition: LinkDefinition,
+        now: Timestamp,
     ) -> Result<LinkInstallOutcome, CoreError> {
         if let Some(topic) = self
             .nodes
@@ -305,14 +343,10 @@ impl Core {
         }
 
         let old_visible = visible_nodes(&self.nodes, &self.links);
-        let mut candidate_links = self.links.clone();
-        candidate_links.install(definition.clone(), true)?;
         let (enabled, issues, denial) =
             validate_link_retained(&definition, &self.nodes, &self.schemas);
-        candidate_links
-            .get_mut(definition.name())
-            .expect("newly installed link is present")
-            .set_enabled(enabled);
+        let mut candidate_links = self.links.clone();
+        candidate_links.install(definition.clone(), denial.clone())?;
         let warnings = issues
             .into_iter()
             .map(Diagnostic::SchemaWarning)
@@ -322,9 +356,21 @@ impl Core {
             }))
             .collect::<Vec<_>>();
         let new_visible = visible_nodes(&self.nodes, &candidate_links);
-        let changes = diff_visible_nodes(&old_visible, &new_visible);
+        let mut changes = diff_visible_nodes(&old_visible, &new_visible);
+        let candidate_diagnostics = active_diagnostics(
+            &self.nodes,
+            &candidate_links,
+            &self.schemas,
+            &self.diagnostics,
+            now,
+        );
+        changes.extend(diff_visible_nodes(
+            &self.diagnostics,
+            &candidate_diagnostics,
+        ));
         let update = self.install_visibility_changes(changes)?;
         self.links = candidate_links;
+        self.diagnostics = candidate_diagnostics;
         Ok(LinkInstallOutcome {
             enabled,
             warnings,
@@ -332,7 +378,11 @@ impl Core {
         })
     }
 
-    pub fn remove_link(&mut self, name: &LinkName) -> Result<LinkRemovalOutcome, CoreError> {
+    pub fn remove_link(
+        &mut self,
+        name: &LinkName,
+        now: Timestamp,
+    ) -> Result<LinkRemovalOutcome, CoreError> {
         let old_projected = projected_nodes(&self.nodes, &self.links);
         let mut candidate_links = self.links.clone();
         let removed = candidate_links.remove(name).is_some();
@@ -343,9 +393,21 @@ impl Core {
             });
         }
         let new_projected = projected_nodes(&self.nodes, &candidate_links);
-        let changes = diff_visible_nodes(&old_projected, &new_projected);
+        let mut changes = diff_visible_nodes(&old_projected, &new_projected);
+        let candidate_diagnostics = active_diagnostics(
+            &self.nodes,
+            &candidate_links,
+            &self.schemas,
+            &self.diagnostics,
+            now,
+        );
+        changes.extend(diff_visible_nodes(
+            &self.diagnostics,
+            &candidate_diagnostics,
+        ));
         let update = self.install_visibility_changes(changes)?;
         self.links = candidate_links;
+        self.diagnostics = candidate_diagnostics;
         Ok(LinkRemovalOutcome {
             removed: true,
             update,
@@ -384,7 +446,7 @@ impl Core {
             );
         }
 
-        let (update, link_warnings) = self.install_node_changes(candidate, changes)?;
+        let (update, link_warnings) = self.install_node_changes(candidate, changes, now)?;
         warnings.extend(link_warnings);
         self.sessions.insert(client.clone(), id);
         self.next_session_id = raw_id;
@@ -422,7 +484,7 @@ impl Core {
             &mut warnings,
             &mut pending_releases,
         );
-        let (update, link_warnings) = self.install_node_changes(candidate, changes)?;
+        let (update, link_warnings) = self.install_node_changes(candidate, changes, now)?;
         warnings.extend(link_warnings);
         self.sessions.remove(handle.client());
 
@@ -473,11 +535,22 @@ impl Core {
 
     #[must_use]
     pub fn next_value_deadline(&self) -> Option<Deadline> {
-        self.nodes
+        let expiry = self
+            .nodes
             .values()
             .filter_map(Node::retained_value)
             .filter_map(RetainedValue::expires_at)
-            .min()
+            .min();
+        let freshness = visible_nodes(&self.nodes, &self.links)
+            .iter()
+            .filter(|(topic, _)| {
+                !self
+                    .diagnostics
+                    .contains_key(&freshness_diagnostic_topic(topic))
+            })
+            .filter_map(|(topic, node)| freshness_deadline(topic, node, &self.schemas))
+            .min();
+        [expiry, freshness].into_iter().flatten().min()
     }
 
     pub fn process_deadlines(
@@ -549,7 +622,7 @@ impl Core {
                 },
             )
             .collect();
-        let (update, warnings) = self.install_node_changes(candidate, changes)?;
+        let (update, warnings) = self.install_node_changes(candidate, changes, now)?;
         for warning in warnings {
             warn!(?warning, "deadline mutation produced diagnostic");
         }
@@ -573,10 +646,11 @@ impl Core {
         &mut self,
         candidate: BTreeMap<TopicPath, Node>,
         changes: Vec<Change>,
+        now: Timestamp,
     ) -> Result<(Option<UpdateBatch>, Vec<Diagnostic>), CoreError> {
         let mut candidate_links = self.links.clone();
         let mut warnings = Vec::new();
-        let changes = reconcile_link_views(
+        let mut changes = reconcile_link_views(
             (&self.nodes, &self.links),
             &candidate,
             &mut candidate_links,
@@ -585,9 +659,21 @@ impl Core {
             &mut warnings,
             false,
         );
+        let candidate_diagnostics = active_diagnostics(
+            &candidate,
+            &candidate_links,
+            &self.schemas,
+            &self.diagnostics,
+            now,
+        );
+        changes.extend(diff_visible_nodes(
+            &self.diagnostics,
+            &candidate_diagnostics,
+        ));
         if changes.is_empty() {
             self.nodes = candidate;
             self.links = candidate_links;
+            self.diagnostics = candidate_diagnostics;
             return Ok((None, warnings));
         }
         let next = self
@@ -598,6 +684,7 @@ impl Core {
             .ok_or(CoreError::SequenceExhausted)?;
         self.nodes = candidate;
         self.links = candidate_links;
+        self.diagnostics = candidate_diagnostics;
         self.sequence = next;
         let update = UpdateBatch {
             sequence: next,
@@ -652,6 +739,7 @@ impl Core {
             match subscriber.updates.try_send(projected) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
+                    warn!(subscription = id.get(), "slow subscription disconnected");
                     *subscriber
                         .end
                         .lock()
@@ -1238,6 +1326,113 @@ fn operation_value_kind(operation: &WriteOperation) -> Option<crate::domain::Val
     }
 }
 
+fn freshness_deadline(
+    topic: &TopicPath,
+    node: &Node,
+    schemas: &SchemaRegistry,
+) -> Option<Deadline> {
+    let current = node.retained_value()?;
+    let interval = schemas.expected_update_interval(topic)?;
+    current
+        .last_write()
+        .at()
+        .get()
+        .checked_add(interval.get())
+        .ok()
+        .map(|timestamp| Deadline::new(Timestamp::new(timestamp)))
+}
+
+fn freshness_diagnostic_topic(topic: &TopicPath) -> TopicPath {
+    TopicPath::parse(&format!("/$diagnostics/freshness{topic}"))
+        .expect("a validated topic remains valid under the diagnostics prefix")
+}
+
+fn active_diagnostics(
+    canonical: &BTreeMap<TopicPath, Node>,
+    links: &LinkRegistry,
+    schemas: &SchemaRegistry,
+    previous: &BTreeMap<TopicPath, Node>,
+    now: Timestamp,
+) -> BTreeMap<TopicPath, Node> {
+    let mut diagnostics = visible_nodes(canonical, links)
+        .into_iter()
+        .filter_map(|(topic, node)| {
+            let current = node.retained_value()?;
+            let interval = schemas.expected_update_interval(&topic)?;
+            let deadline = freshness_deadline(&topic, &node, schemas)?;
+            if deadline.get() > now {
+                return None;
+            }
+            let mut value = BTreeMap::new();
+            value.insert(
+                "code".to_owned(),
+                Value::String("overdue_update".to_owned()),
+            );
+            value.insert("topic".to_owned(), Value::String(topic.to_string()));
+            value.insert(
+                "expected_update_interval".to_owned(),
+                Value::Duration(interval.get()),
+            );
+            value.insert(
+                "last_updated".to_owned(),
+                Value::Timestamp(current.last_write().at().get()),
+            );
+            let path = freshness_diagnostic_topic(&topic);
+            Some((
+                path.clone(),
+                active_condition_node(&path, Value::Map(value), previous, deadline.get()),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for link in links.iter().filter(|link| !link.enabled()) {
+        let Some(issue) = link.denial() else {
+            continue;
+        };
+        let path = TopicPath::parse(&format!(
+            "/$diagnostics/links/{}",
+            link.definition().name().as_str()
+        ))
+        .expect("a validated link name is a valid diagnostic path segment");
+        let mut value = BTreeMap::new();
+        value.insert("code".to_owned(), Value::String("link_disabled".to_owned()));
+        value.insert(
+            "link".to_owned(),
+            Value::String(link.definition().name().as_str().to_owned()),
+        );
+        value.insert("topic".to_owned(), Value::String(issue.topic().to_string()));
+        value.insert(
+            "message".to_owned(),
+            Value::String(issue.kind().to_string()),
+        );
+        diagnostics.insert(
+            path.clone(),
+            active_condition_node(&path, Value::Map(value), previous, now),
+        );
+    }
+    diagnostics
+}
+
+fn active_condition_node(
+    path: &TopicPath,
+    value: Value,
+    previous: &BTreeMap<TopicPath, Node>,
+    at: Timestamp,
+) -> Node {
+    if let Some(Node::State(existing)) = previous.get(path)
+        && existing.current().value() == &value
+    {
+        return Node::State(existing.clone());
+    }
+    let context = WriteContext::stateless(
+        ClientName::parse("tanuki").expect("the built-in client name is valid"),
+    );
+    Node::State(StateNode::new(RetainedValue::new(
+        value,
+        WriteProvenance::from_context(&context, at),
+        None,
+    )))
+}
+
 fn visible_nodes(
     canonical: &BTreeMap<TopicPath, Node>,
     links: &LinkRegistry,
@@ -1345,7 +1540,8 @@ fn reconcile_link_views(
         let was_enabled = old_links
             .get(definition.name())
             .is_some_and(|link| link.enabled());
-        link.set_enabled(valid);
+        debug_assert_eq!(valid, denial.is_none());
+        link.set_denial(denial.clone());
         match (was_enabled, valid) {
             (true, false) => warnings.push(Diagnostic::LinkDisabled {
                 link: definition.name().clone(),

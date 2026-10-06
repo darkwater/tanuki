@@ -5,13 +5,14 @@ use std::sync::{
 
 use jiff::{SignedDuration, Timestamp as JiffTimestamp};
 use tanuki::{
-    core::{Core, SubscriptionCapacity},
+    core::{Core, SchemaInstallMode, SubscriptionCapacity},
     domain::{
         ClaimRelease, ClientName, ExpiryUpdate, InputDefinition, InputKind, Node,
         NonNegativeDuration, Selection, Selector, Timestamp, TopicPath, Value, WriteBatch,
         WriteContext, WriteOperation,
     },
     scheduler::{Clock, DeadlineScheduler},
+    schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
 };
 use tokio::time::{Duration, advance, timeout};
 
@@ -162,4 +163,73 @@ async fn scheduled_grace_release_preserves_submission_and_definition() {
     };
     assert!(desired.claim().is_none());
     assert_eq!(desired.current().unwrap().value(), &Value::Integer(80));
+}
+
+#[tokio::test(start_paused = true)]
+async fn expected_update_interval_wakes_scheduler_without_deleting_data() {
+    let (core, scheduler, second) = test_scheduler();
+    core.lock()
+        .unwrap()
+        .install_schema(
+            Schema::new(
+                SchemaName::parse("freshness").unwrap(),
+                vec![
+                    SchemaRule::new(
+                        Selector::parse("/sensor/*").unwrap(),
+                        Enforcement::Warn,
+                        ValueValidator::any(NullPolicy::Allow),
+                    )
+                    .unwrap()
+                    .with_expected_update_interval(seconds(10))
+                    .unwrap(),
+                ],
+            )
+            .unwrap(),
+            SchemaInstallMode::RejectInvalid,
+            at(0),
+        )
+        .unwrap();
+    let mut subscription = core
+        .lock()
+        .unwrap()
+        .subscribe(
+            Selection::new(vec![Selector::parse("/$diagnostics/**").unwrap()]),
+            SubscriptionCapacity::new(8).unwrap(),
+        )
+        .unwrap();
+    core.lock()
+        .unwrap()
+        .apply(
+            &WriteContext::stateless(ClientName::parse("sensor").unwrap()),
+            batch(vec![WriteOperation::PublishState {
+                topic: topic("/sensor/temperature"),
+                value: Value::Integer(20),
+                expiry: ExpiryUpdate::Clear,
+            }]),
+            at(0),
+        )
+        .unwrap();
+    scheduler.rescan();
+    tokio::task::yield_now().await;
+
+    second.store(10, Ordering::SeqCst);
+    advance(Duration::from_secs(10)).await;
+    let overdue = timeout(Duration::from_secs(1), subscription.update())
+        .await
+        .expect("freshness update timed out")
+        .expect("subscription closed");
+    assert!(matches!(
+        overdue.changes(),
+        [tanuki::core::Change::Upsert { topic: condition, .. }]
+            if condition == &topic("/$diagnostics/freshness/sensor/temperature")
+    ));
+    assert!(
+        core.lock()
+            .unwrap()
+            .read(&Selection::new(vec![
+                Selector::parse("/sensor/temperature").unwrap()
+            ]))
+            .nodes()
+            .contains_key(&topic("/sensor/temperature"))
+    );
 }

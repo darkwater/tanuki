@@ -110,6 +110,7 @@ fn expiry_removes_canonical_and_linked_state_in_the_same_commit() {
             topic("/canonical"),
         )
         .unwrap(),
+        at(0),
     )
     .unwrap();
     core.apply(

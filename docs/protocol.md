@@ -69,7 +69,7 @@ storage.
 
 Schema installation accepts `{"force":false,"rules":[...]}`. Each rule has a
 `selector`, `enforcement` (`warn` or `deny`), optional `nullable`, optional
-`node_kind`, a tagged `validator`, and optional explicit cast. Initial validator types are `any`,
+`node_kind`, `expected_update_interval`, a tagged `validator`, and optional explicit cast. Initial validator types are `any`,
 `kind`, `integer_range`, `float_range`, and `string_enum`; initial casts are
 `string_to_integer`, `string_to_float`, and `string_to_bool`. The default mode
 rejects current deny violations. `force:true` removes deny-invalid state and
@@ -85,6 +85,25 @@ an alias are translated to the canonical topic after alias schema validation;
 the canonical schema is then applied. Link changes report a commit sequence
 when visible aliases were added or removed. Deleting an absent link is an
 idempotent success.
+
+`expected_update_interval` is an optional positive fixed ISO-8601 duration such
+as `"PT5M"`. It applies to retained state and present desired values matched by
+the rule. The shortest matching interval is effective.
+
+## Read-only diagnostics
+
+Active conditions appear as state nodes and ordinary atomic updates beneath
+`/$diagnostics/**`. Current paths are:
+
+- `/$diagnostics/freshness/<source...>` for retained values whose expected
+  update interval elapsed;
+- `/$diagnostics/links/<link-name>` for schema-disabled linked views.
+
+The value is a map containing a stable `code` plus relevant context such as the
+source topic, interval, last update, link name, and violation message. Onset is
+an upsert; recovery is a removal. These paths are Tanuki-owned: clients may
+select them but cannot write them, schemas do not apply, and snapshots derive
+them instead of persisting them.
 
 Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
 arrays, and objects map directly to runtime values. The semantic forms are:

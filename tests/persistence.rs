@@ -179,6 +179,7 @@ async fn installed_schemas_survive_restart_and_still_deny_invalid_writes() {
         )
         .unwrap(),
         SchemaInstallMode::RejectInvalid,
+        at(0),
     )
     .unwrap();
     store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
@@ -195,6 +196,53 @@ async fn installed_schemas_survive_restart_and_still_deny_invalid_writes() {
         at(2),
     );
     assert!(matches!(result, Err(CoreError::SchemaViolation(_))));
+}
+
+#[tokio::test]
+async fn freshness_policy_survives_restart_and_restores_overdue_status() {
+    let directory = TestDirectory::new();
+    let store = SnapshotStore::new(directory.path("snapshot.db"));
+    let mut core = Core::new();
+    core.install_schema(
+        Schema::new(
+            SchemaName::parse("freshness").unwrap(),
+            vec![
+                SchemaRule::new(
+                    Selector::parse("/sensor/*").unwrap(),
+                    Enforcement::Warn,
+                    ValueValidator::any(NullPolicy::Allow),
+                )
+                .unwrap()
+                .with_expected_update_interval(seconds(10))
+                .unwrap(),
+            ],
+        )
+        .unwrap(),
+        SchemaInstallMode::RejectInvalid,
+        at(0),
+    )
+    .unwrap();
+    core.apply(
+        &WriteContext::stateless(ClientName::parse("sensor").unwrap()),
+        WriteBatch::new(vec![WriteOperation::PublishState {
+            topic: topic("/sensor/temperature"),
+            value: Value::Integer(20),
+            expiry: ExpiryUpdate::Clear,
+        }])
+        .unwrap(),
+        at(0),
+    )
+    .unwrap();
+    store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
+
+    let restored = store.load(at(20)).unwrap().unwrap();
+    let snapshot = restored.read(&all());
+    assert!(snapshot.nodes().contains_key(&topic("/sensor/temperature")));
+    assert!(
+        snapshot
+            .nodes()
+            .contains_key(&topic("/$diagnostics/freshness/sensor/temperature"))
+    );
 }
 
 #[tokio::test]
@@ -220,6 +268,7 @@ async fn installed_links_survive_restart_without_persisting_alias_copies() {
             topic("/devices/lamp"),
         )
         .unwrap(),
+        at(0),
     )
     .unwrap();
     store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();

@@ -150,12 +150,13 @@ Expiry scheduling follows the earliest deadline, wakes when the schedule changes
 
 Value expiry, input-claim release, connection liveness, and overdue freshness are separate mechanisms. Instant payloads have no value expiry. Input expiry clears only its value; claim release clears only its ownership. Omitted-expiry behaviour remains a small policy choice in D1.
 
-Schema rules may express a fixed expected update interval for retained state and
-present desired values. Missing desired values and instant nodes do not become
-overdue. Becoming overdue reports a retained status and transition diagnostic
-without deleting the value. Any accepted duplicate write refreshes the
-deadline and clears overdue status. This requires timed checks, not only
-validation during writes.
+Schema rules may express a positive fixed expected update interval for retained
+state and present desired values; the shortest matching interval applies.
+Missing desired values and instant nodes do not become overdue. Becoming
+overdue reports retained state under `/$diagnostics/freshness/<source...>`
+without deleting the value. Any accepted duplicate write refreshes the deadline
+and removes overdue status. This requires timed checks, not only validation
+during writes.
 
 Retained data survives restarts through best-effort, coherent, versioned
 MessagePack snapshots. Acknowledgement does not promise disk durability. No
@@ -233,12 +234,12 @@ not cross the system boundary. System topics can otherwise participate in
 observation where exposed.
 
 Central diagnostics use a read-only built-in `/$diagnostics/**` tree visible
-through ordinary snapshots and subscriptions. Active conditions such as
-overdue freshness are retained; warning and recovery transitions are emitted
-without replay. Client writes are forbidden. Failure to publish a diagnostic
-is logged locally and does not recursively publish another diagnostic. The
-future runtime may expose script status separately, but the initial server is
-diagnosable without that runtime.
+through ordinary snapshots and subscriptions. Active overdue freshness and
+disabled-link conditions are retained; recovery removes the condition without
+replay. Client writes are forbidden. Failure to publish a diagnostic is logged
+locally and does not recursively publish another diagnostic. The future runtime
+may expose script status separately, but the initial server is diagnosable
+without that runtime.
 
 ## Transports and delivery order
 

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use thiserror::Error;
 
-use crate::domain::TopicPath;
+use crate::{domain::TopicPath, schema::SchemaIssue};
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LinkName(String);
@@ -120,15 +120,12 @@ pub enum LinkBuildError {
 #[derive(Clone, Debug)]
 pub(crate) struct InstalledLink {
     definition: LinkDefinition,
-    enabled: bool,
+    denial: Option<SchemaIssue>,
 }
 
 impl InstalledLink {
-    pub(crate) fn new(definition: LinkDefinition, enabled: bool) -> Self {
-        Self {
-            definition,
-            enabled,
-        }
+    pub(crate) fn new(definition: LinkDefinition, denial: Option<SchemaIssue>) -> Self {
+        Self { definition, denial }
     }
 
     pub(crate) fn definition(&self) -> &LinkDefinition {
@@ -136,11 +133,15 @@ impl InstalledLink {
     }
 
     pub(crate) const fn enabled(&self) -> bool {
-        self.enabled
+        self.denial.is_none()
     }
 
-    pub(crate) fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
+    pub(crate) fn denial(&self) -> Option<&SchemaIssue> {
+        self.denial.as_ref()
+    }
+
+    pub(crate) fn set_denial(&mut self, denial: Option<SchemaIssue>) {
+        self.denial = denial;
     }
 }
 
@@ -162,10 +163,6 @@ impl LinkRegistry {
         self.links.values_mut()
     }
 
-    pub(crate) fn get_mut(&mut self, name: &LinkName) -> Option<&mut InstalledLink> {
-        self.links.get_mut(name)
-    }
-
     pub(crate) fn get(&self, name: &LinkName) -> Option<&InstalledLink> {
         self.links.get(name)
     }
@@ -177,7 +174,7 @@ impl LinkRegistry {
     pub(crate) fn install(
         &mut self,
         definition: LinkDefinition,
-        enabled: bool,
+        denial: Option<SchemaIssue>,
     ) -> Result<Option<InstalledLink>, LinkInstallError> {
         for existing in self.links.values() {
             if existing.definition.name == definition.name {
@@ -207,7 +204,7 @@ impl LinkRegistry {
         }
         Ok(self.links.insert(
             definition.name.clone(),
-            InstalledLink::new(definition, enabled),
+            InstalledLink::new(definition, denial),
         ))
     }
 

@@ -11,14 +11,14 @@ does.
 | `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
 | `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
-| `core` | tasks 02–10 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, and linked views |
+| `core` | tasks 02–11 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, linked views, and active diagnostics |
 | `protocol` | tasks 04–06 implemented | JSON/MessagePack values and typed snapshot/update/error DTOs |
 | `transport` | tasks 04–07 implemented | Axum HTTP/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | tasks 08–10 implemented | Versioned coherent node/schema/link snapshots, restore filtering, and atomic file replacement |
-| `schema` | task 09 implemented | Typed ordinary-topic validators, explicit casts, overlap checks, and named registry |
+| `schema` | tasks 09 and 11 implemented | Typed ordinary-topic validators, explicit casts, overlap checks, freshness intervals, and named registry |
 | `link` | task 10 implemented | Validated subtree definitions, topology checks, alias resolution, and enabled state |
-| `diagnostics` | planned | Structured warnings/errors and logging integration |
+| `diagnostics` | task 11 implemented in core | Derived read-only active conditions under `/$diagnostics/**`; transient warnings remain in outcomes/logging |
 
 `server` provides the lifecycle seam. `domain` contains the accepted checkpoint
 A representation and has no transport or storage dependencies. The remaining
@@ -294,3 +294,25 @@ disables the whole view, emits last-visible removals and a diagnostic, and keeps
 the canonical commit. A later valid relevant mutation or applicable schema
 replacement re-enables the view atomically. Invalid instant occurrences remain
 canonical-only; a later valid occurrence can recover the view, with no replay.
+
+## Freshness and shared diagnostics implemented in task 11
+
+An optional positive `expected_update_interval` on a schema rule applies to
+retained state and present desired values. The strictest matching interval wins.
+The deadline scheduler considers both value expiry and freshness deadlines, but
+freshness never deletes or mutates the source node. Definition-only desired
+inputs and event/command nodes have no freshness deadline.
+
+The core derives active state nodes under `/$diagnostics/freshness/<source...>`
+and `/$diagnostics/links/<link>`. These nodes use ordinary snapshot/update DTOs
+but are Tanuki-owned, read-only, exempt from user schemas, links, expiry, and
+persistence. A condition onset is an upsert and recovery is a removal in the
+same commit as a caller-driven repair. Duplicate accepted writes refresh their
+provenance even when the value is equal, removing an overdue condition and
+scheduling the next deadline.
+
+Diagnostic publication uses the existing nonblocking subscription path and
+does not itself generate a diagnostic if a consumer overflows. This prevents a
+diagnostic-consumer failure from recursively creating more diagnostics. Local
+structured logging and per-operation warning arrays remain the channel for
+transient conditions that are not retained active state.

@@ -66,7 +66,8 @@ async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
                     "selector": "/battery/*",
                     "enforcement": "deny",
                     "validator": {"type": "integer_range", "minimum": 0, "maximum": 100},
-                    "cast": "string_to_integer"
+                    "cast": "string_to_integer",
+                    "expected_update_interval": "PT5M"
                 }]
             }),
         ))
@@ -279,6 +280,19 @@ async fn malformed_json_and_missing_attribution_use_the_common_error_shape() {
         .body(Body::from("{"))
         .unwrap();
     let response = app.clone().oneshot(malformed).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response_json(response).await["error"]["code"],
+        "invalid_json"
+    );
+
+    let malformed_schema = Request::builder()
+        .method("PUT")
+        .uri("/v1/schemas/broken?client=administrator")
+        .header("content-type", "application/json")
+        .body(Body::from("{"))
+        .unwrap();
+    let response = app.clone().oneshot(malformed_schema).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         response_json(response).await["error"]["code"],

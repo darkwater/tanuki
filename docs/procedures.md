@@ -58,6 +58,25 @@ The same reconciliation runs for deadline and session-driven node changes.
 Snapshots persist canonical nodes and link definitions, never alias copies;
 restore rebuilds the registry and initial enabled state before serving reads.
 
+## Freshness and active diagnostics
+
+Schema rules may set a positive fixed expected-update interval. The core derives
+the earliest deadline from the last accepted write of every matching retained
+state or present desired value, including linked views, and the existing
+deadline scheduler wakes for it. Processing an overdue deadline leaves source
+data untouched and atomically upserts a state condition below
+`/$diagnostics/freshness`. An accepted later write—even with an identical
+value—updates provenance, removes that condition, and schedules a new deadline.
+
+Link validation similarly derives `/$diagnostics/links/<name>` while a view is
+disabled. Recovery removes it in the repair commit. Diagnostic state bypasses
+the ordinary mutation path and is recomputed only from authoritative policy and
+data; clients cannot write it and it is not fed through schemas or links.
+Publication uses the normal nonblocking subscription queue. A failed or slow
+diagnostic consumer is disconnected without publishing another condition, so
+failure cannot recurse. Restore recomputes current active conditions from
+persisted nodes, schemas, links, and startup time.
+
 ## Schema installation
 
 `Core::install_schema` first builds a candidate registry and rejects overlap

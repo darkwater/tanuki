@@ -157,6 +157,7 @@ async fn websocket_writes_cannot_bypass_an_installed_schema() {
             )
             .unwrap(),
             SchemaInstallMode::RejectInvalid,
+            Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()),
         )
         .unwrap();
     let mut socket = server.connect().await;
@@ -192,6 +193,7 @@ async fn websocket_alias_write_updates_canonical_and_link_subscribers_atomically
                 TopicPath::parse("/devices/lamp").unwrap(),
             )
             .unwrap(),
+            Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()),
         )
         .unwrap();
     let mut socket = server.connect().await;

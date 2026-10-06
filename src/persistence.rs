@@ -16,8 +16,8 @@ use crate::{
     core::{CommitSequence, Core},
     domain::{
         ClientName, CommandNode, Deadline, DesiredNode, EventNode, FiniteF64, InputDefinition,
-        Node, NodeKind, RetainedValue, Selector, SelectorParseError, StateNode, Timestamp,
-        TopicPath, ValueKind, WriteContext, WriteProvenance,
+        Node, NodeKind, NonNegativeDuration, RetainedValue, Selector, SelectorParseError,
+        StateNode, Timestamp, TopicPath, ValueKind, WriteContext, WriteProvenance,
     },
     link::{LinkBuildError, LinkDefinition, LinkInstallError, LinkName, LinkNameParseError},
     protocol::JsonValue,
@@ -204,6 +204,14 @@ pub enum SchemaPersistenceError {
     NonFiniteFloat { value: f64 },
     #[error("restored data violates its installed schema: {issue}")]
     ExistingValue { issue: SchemaIssue },
+    #[error("invalid expected update interval `{value}` in snapshot")]
+    FreshnessInterval {
+        value: String,
+        #[source]
+        source: jiff::Error,
+    },
+    #[error("expected update interval `{value}` in snapshot is negative")]
+    NegativeFreshnessInterval { value: String },
 }
 
 #[derive(Debug, Error)]
@@ -320,6 +328,7 @@ impl SnapshotFile {
             nodes,
             schemas,
             links,
+            now,
         )
         .map_err(|source| PersistenceError::Link {
             source: source.into(),
@@ -388,6 +397,8 @@ struct StoredSchemaRule {
     validator: StoredValidator,
     cast: Option<StoredValueCast>,
     node_kind: Option<StoredNodeKind>,
+    #[serde(default)]
+    expected_update_interval: Option<String>,
 }
 
 impl StoredSchemaRule {
@@ -399,6 +410,9 @@ impl StoredSchemaRule {
             validator: StoredValidator::capture(rule.validator().shape()),
             cast: rule.cast().map(Into::into),
             node_kind: rule.node_kind().map(Into::into),
+            expected_update_interval: rule.expected_update_interval().map(|interval| {
+                jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&interval.get())
+            }),
         }
     }
 
@@ -413,10 +427,23 @@ impl StoredSchemaRule {
             Some(cast) => rule.with_cast(cast.into())?,
             None => rule,
         };
-        Ok(match self.node_kind {
+        let rule = match self.node_kind {
             Some(node_kind) => rule.with_node_kind(node_kind.into()),
             None => rule,
-        })
+        };
+        let Some(value) = self.expected_update_interval else {
+            return Ok(rule);
+        };
+        let duration =
+            value
+                .parse()
+                .map_err(|source| SchemaPersistenceError::FreshnessInterval {
+                    value: value.clone(),
+                    source,
+                })?;
+        let interval = NonNegativeDuration::new(duration)
+            .map_err(|_| SchemaPersistenceError::NegativeFreshnessInterval { value })?;
+        Ok(rule.with_expected_update_interval(interval)?)
     }
 }
 

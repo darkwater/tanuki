@@ -53,6 +53,7 @@ fn writes_are_cast_and_validated_before_the_atomic_commit() {
     core.install_schema(
         integer_schema(Enforcement::Deny),
         SchemaInstallMode::RejectInvalid,
+        now(),
     )
     .unwrap();
 
@@ -111,6 +112,7 @@ fn warning_rules_accept_the_original_value_and_return_a_diagnostic() {
     core.install_schema(
         integer_schema(Enforcement::Warn),
         SchemaInstallMode::RejectInvalid,
+        now(),
     )
     .unwrap();
     let outcome = core
@@ -149,6 +151,7 @@ fn schema_install_does_not_cast_existing_values_and_force_cleans_invalid_state()
     let rejected = core.install_schema(
         integer_schema(Enforcement::Deny),
         SchemaInstallMode::RejectInvalid,
+        now(),
     );
     assert!(matches!(
         rejected,
@@ -160,6 +163,7 @@ fn schema_install_does_not_cast_existing_values_and_force_cleans_invalid_state()
         .install_schema(
             integer_schema(Enforcement::Deny),
             SchemaInstallMode::RemoveInvalid,
+            now(),
         )
         .unwrap();
     assert!(forced.update().is_some());
@@ -193,6 +197,7 @@ fn forced_schema_install_clears_desired_current_but_preserves_definition() {
     core.install_schema(
         integer_schema(Enforcement::Deny),
         SchemaInstallMode::RemoveInvalid,
+        now(),
     )
     .unwrap();
     let snapshot = core.read(&all());
@@ -222,6 +227,7 @@ fn schema_can_deny_an_implicit_node_kind_change() {
         )
         .unwrap(),
         SchemaInstallMode::RejectInvalid,
+        now(),
     )
     .unwrap();
     core.apply(
