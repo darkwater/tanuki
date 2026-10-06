@@ -2,7 +2,7 @@
 
 - **Status:** simulated HTTP write/read implemented; real-world use and Unix socket not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-06.
+- **Last updated:** 2026-10-07.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -29,7 +29,15 @@ Topic paths, payload layouts and timing examples are illustrative unless explici
 
 Actual shell/phone request examples, Unix-socket transport exposure and deployment access. This story does not silently add the socket adapter to the first HTTP milestone.
 
+The [client API proposal](../client-api-design.md) now focuses on explicit
+WebSocket primitives and observation helpers for Rust scripts. HTTP SDK work
+is deferred; existing HTTP examples and acceptance criteria remain unchanged.
+Native SDK delivery now has loopback evidence; Unix-socket and deployment
+verification remain absent.
+
 ## Implementation and evidence
+
+- Native SDK evidence: ordinary `publisher`, `dashboard` and `controller` examples were compiled and exercised on loopback against the production binary. `tests/native_sdk.rs` covers raw wire control, typed freeform values, warnings, server rejection and mixed codecs. Existing stateless HTTP criteria remain covered by the server suites; the SDK adds no HTTP or Unix-socket transport.
 
 - Core test links: [test plan](../test-plan.md) — C1, S1, T1; HTTP task 04; add socket parity tests when that adapter lands.
 - `tests/http_api.rs::stateless_battery_publish_and_anonymous_read_cross_the_real_router`
@@ -51,3 +59,5 @@ Actual shell/phone request examples, Unix-socket transport exposure and deployme
   that cannot conveniently set headers; no actual phone automation is verified.
 - 2026-10-06: Task 09 made denying schemas consistent across the implemented
   core, HTTP, and WebSocket entrypoints.
+
+- 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.

@@ -2,7 +2,7 @@
 
 - **Status:** simulated input ownership, atomic output, value expiry, and claim grace implemented; real lamp use not yet verified.
 - **Origin:** User use case and accepted lifetime example.
-- **Last updated:** 2026-10-06.
+- **Last updated:** 2026-10-07.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -29,7 +29,15 @@ Topic paths, payload layouts and timing examples are illustrative unless explici
 
 Actual lamp adapter, colour representation, competing automation/manual-control policy and expiry durations. A brightness of 70 and ten-minute expiry are fixtures only.
 
+The [client API proposal](../client-api-design.md) uses this story to exercise
+explicit claim/submission methods and typed atomic writes. Native SDK coverage was added on 2026-10-07; this remains simulated
+client evidence, without a verified lamp adapter.
+WebSocket observation helpers will expose complete latest snapshots of paired
+state; clients needing every command or transition use raw update listeners.
+
 ## Implementation and evidence
+
+- Native SDK evidence: `tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` verifies explicit ownership, remote desired submission, paired output and rejected mixed-batch rollback; `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` covers desired expiry with the claim intact. The compiled controller accepts `/lamp/desired-brightness` and simulates an atomic `/lamp/hue` + `/lamp/brightness` report; a dashboard observed that report on loopback. No physical lamp action is verified.
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
 - `tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. `tests/client_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies transport-neutral whole-batch consumption.
@@ -48,3 +56,5 @@ Actual lamp adapter, colour representation, competing automation/manual-control 
 - 2026-10-06: Task 06 verified the desired-input and atomic actual-output chain with simulated actors over real loopback transports.
 - 2026-10-06: Task 07 implemented and simulated desired-value expiry and guarded disconnect grace. Physical lamp behaviour remains outside Tanuki and unverified.
 - 2026-10-06: Task 08 added restart persistence for desired definitions and unexpired values, with claims deliberately cleared.
+
+- 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.

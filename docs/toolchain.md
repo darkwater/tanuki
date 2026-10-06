@@ -36,3 +36,31 @@ cargo test --workspace --release
 
 The default toolchain selected by each command comes from
 `rust-toolchain.toml`.
+
+## Native SDK verification — 2026-10-07
+
+The workspace adds `tanuki-protocol` and `tanuki-client` on the existing nightly
+pin. Protocol has only Serde/JSON, base64, Jiff and thiserror runtime dependencies;
+its dependency graph contains no Tokio, sockets, server or filesystem facilities.
+Client reuses pinned Tokio/Tungstenite 0.29.0 and futures-util 0.3.34, with concrete
+native adapters. No async-trait, dynamic transport framework, new feature gates
+or nightly upgrade was needed. Ordinary Serde conversion uses serde-value 0.7.0;
+serde_bytes 0.11.19 is a test/example integration recommendation. The lockfile is
+updated with their resolved dependencies.
+
+API checks: [Tungstenite connect configuration](https://docs.rs/tokio-tungstenite/0.29.0/tokio_tungstenite/fn.connect_async_with_config.html),
+[Tokio watch receiving/version semantics](https://docs.rs/tokio/1.53.2/tokio/sync/watch/struct.Receiver.html),
+[serde-value variants](https://docs.rs/serde-value/0.7.0/serde_value/enum.Value.html),
+and [Serde's internally tagged decoder](https://docs.rs/serde_derive/latest/src/serde_derive/de/enum_internally.rs.html).
+Pinned Serde source confirms its buffered ContentDeserializer does not retain
+`is_human_readable`. Behavioral fixtures justify streaming DTO decoding.
+serde-value does not implement 128-bit integer serialization; use explicit i64
+narrowing or Value access for that input, and no semantic time autodetection is
+provided. Native transport currently has no TLS feature enabled.
+
+The attempted `cargo check -p tanuki-protocol --target wasm32-unknown-unknown`
+failed with E0463 because that target's standard library is not installed.
+Only `x86_64-unknown-linux-gnu` is installed. This is not evidence of a code
+portability failure or of browser support. Browser transport and bindings remain
+outside this implementation. Native checks and standalone protocol compilation
+pass on the pinned toolchain; `cargo test` defaults to all workspace members.

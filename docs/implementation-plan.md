@@ -223,6 +223,17 @@ includes focused test results, updated relevant docs, and a short report. Build
 the test harness with the first behaviour it verifies; do not postpone testing
 until the final task.
 
+The 2026-10-06 [client API proposal](client-api-design.md) is a separate design
+checkpoint for reusable client crates. The user selected WebSocket-only scope,
+protocol-level primitives with channel-based observation helpers, and latest
+complete snapshot delivery for observers. Typed payloads and Rust-first delivery
+with a future browser WASM path remain the direction; cross-topic Serde shapes
+come later.
+Iced is the primary consumer use case, without becoming an SDK dependency.
+The [client SDK handoff](client-api-handoff.md) records decisions, provisional
+defaults and bounded implementation tasks. This conversation prepared the
+handoff; implementation starts when the user resumes it with the chosen model.
+
 ### 00 — Bootstrap and architecture checkpoint A
 
 **Dependencies:** none. **Deliver:** pinned nightly, library plus thin binary
@@ -418,3 +429,16 @@ failures, then stop broadening the initial scope.
 
 **Done:** another agent or user can run the server, run the system simulations,
 inspect diagnostics and understand the mutation path from the documentation.
+
+### Native SDK follow-through — 2026-10-07
+
+SDK-01 through SDK-06 from [the client handoff](client-api-handoff.md) are
+implemented for the native plain-WebSocket profile. Shared protocol and SDK
+packages, direct wire control, background sessions, weak typed handles, atomic
+writes and raw/latest-state observation now have compiled implementations and
+real-server acceptance tests. Consumer examples were exercised together against
+the production binary. See [testing.md](testing.md) for task/story coverage and
+[the SDK guide](../crates/tanuki-client/README.md) for exact APIs/defaults.
+Browser transport/bindings and Iced-specific integration remain out of scope.
+The protocol-only browser check could not run because target std is absent;
+TLS and Serde 128-bit methods remain explicit native limitations.

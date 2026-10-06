@@ -441,6 +441,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "ordered-float"
+version = "2.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -562,6 +571,26 @@ checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-value"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
+dependencies = [
+ "ordered-float",
+ "serde",
+]
+
+[[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -705,18 +734,49 @@ name = "tanuki"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.23.1",
  "futures-util",
  "jiff",
  "rmp-serde",
  "serde",
  "serde_json",
+ "tanuki-client",
+ "tanuki-protocol",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "tanuki-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "jiff",
+ "rmp-serde",
+ "serde",
+ "serde-value",
+ "serde_bytes",
+ "serde_json",
+ "tanuki-protocol",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
+name = "tanuki-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "jiff",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

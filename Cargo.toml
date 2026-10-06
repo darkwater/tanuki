@@ -1,3 +1,8 @@
+[workspace]
+members = ["crates/tanuki-protocol", "crates/tanuki-client"]
+default-members = [".", "crates/tanuki-protocol", "crates/tanuki-client"]
+resolver = "3"
+
 [package]
 name = "tanuki"
 version = "0.1.0"
@@ -5,8 +10,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
+tanuki-protocol = { path = "crates/tanuki-protocol" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "tracing", "ws"] }
-base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 jiff = { version = "=0.2.37", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
@@ -18,6 +23,7 @@ tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std"] }
 
 [dev-dependencies]
+tanuki-client = { path = "crates/tanuki-client" }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 tokio = { version = "=1.53.2", features = ["test-util"] }
 tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "handshake"] }

@@ -686,13 +686,47 @@ fn backup_corrupt_snapshot(path: &Path) -> Result<PathBuf, PersistenceError> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum StoredNode {
     State { current: StoredCurrent },
     Event { last_publisher: StoredProvenance },
     Desired { current: Option<StoredCurrent> },
     Command,
+}
+
+// Stream the fields so nested JsonValue sees the MessagePack decoder rather than
+// Serde's human-readable ContentDeserializer. The stored format is unchanged.
+impl<'de> Deserialize<'de> for StoredNode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Fields {
+            kind: String,
+            current: Option<StoredCurrent>,
+            last_publisher: Option<StoredProvenance>,
+        }
+        let fields = Fields::deserialize(deserializer)?;
+        match fields.kind.as_str() {
+            "state" => Ok(Self::State {
+                current: fields
+                    .current
+                    .ok_or_else(|| serde::de::Error::missing_field("current"))?,
+            }),
+            "event" => Ok(Self::Event {
+                last_publisher: fields
+                    .last_publisher
+                    .ok_or_else(|| serde::de::Error::missing_field("last_publisher"))?,
+            }),
+            "desired" => Ok(Self::Desired {
+                current: fields.current,
+            }),
+            "command" => Ok(Self::Command),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["state", "event", "desired", "command"],
+            )),
+        }
+    }
 }
 
 impl StoredNode {

@@ -206,3 +206,34 @@ On orderly shutdown, new serving stops and in-flight requests drain. The
 periodic worker exits, then a final snapshot is attempted. A final failure is
 returned to the process rather than hidden. Crash recovery may lose writes
 since the last completed replacement; there is no WAL or replay.
+
+## Native SDK operation
+
+Run the ordinary Rust examples with the commands in
+[the client README](../crates/tanuki-client/README.md). They use the production
+WebSocket endpoint; HTTP remains available for one-off phone/remote submissions.
+The controller example defines and claims desired brightness explicitly and
+simulates a device report atomically. Its accepted report is not physical-device
+verification. Separate processes use distinct example client names.
+
+Retain Session for the intended connection lifetime. Creating/cloning a topic
+handle is local and holds no claim or strong session ownership. Dropping an
+observer cancels that projection; dropping Session signals native shutdown.
+Prefer `close().await` to join driver/writer and projection tasks. It attempts a
+normal WebSocket close, waits at most one second for writer shutdown and reports
+prior abnormal failure. Server disconnect/grace work still follows the existing
+core session lifecycle; client close has no server cleanup acknowledgement.
+
+Raw lag is terminal for only the affected receiver; fresh registration recovers
+current retained state without replaying occurrences. Slow snapshot output can
+coalesce safely because its projection consumes every delta. Abnormal closure
+has a path independent of data queues and reports once; clean close drains
+admitted deltas and exposes final unseen latest state. Prior snapshots are
+historical immutable values. Replacement code 4001 and slow-consumer code 1013
+remain inspectable in connection termination reasons.
+
+Inspect write warnings on success. A local pre-send failure differs from a reply
+timeout or lost connection after transmission may have begun; the latter have
+unknown outcomes. Cancellation is not rollback. There is no automatic mutation
+retry, connection replacement loop or claim recovery in the SDK. Reconnecting
+means explicitly creating a new Session with a fresh baseline.

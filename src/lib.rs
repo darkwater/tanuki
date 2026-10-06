@@ -1,6 +1,5 @@
-//! Tanuki's transport-independent library.
-//!
-//! The domain and core modules will be added after architecture checkpoint A.
+//! Tanuki's authoritative domain/core library and server adapters.
+//! Shared wire types and native clients live in separate workspace packages.
 
 pub mod client;
 pub mod core;

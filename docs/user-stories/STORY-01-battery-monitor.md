@@ -2,7 +2,7 @@
 
 - **Status:** simulated HTTP/WebSocket publication, live delivery, and expiry implemented; real-device use not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-06.
+- **Last updated:** 2026-10-07.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -29,7 +29,16 @@ Topic paths, payload layouts and timing examples are illustrative unless explici
 
 Percentage representation, charging state, publication intervals, freshness threshold, actual widget platform and final topic names.
 
+The [client API proposal](../client-api-design.md) uses this story for typed
+Rust WebSocket publication and observation examples. Rust-first client delivery
+and planning for later browser WASM were selected on 2026-10-06. SDK scope is
+currently WebSocket-only; existing phone HTTP behavior remains a server feature.
+Native SDK implementation and loopback acceptance were added on 2026-10-07;
+browser bindings and real-device use remain unverified.
+
 ## Implementation and evidence
+
+- Native SDK evidence: `tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` verifies typed `/battery/laptop` publication, complete laptop/phone observations and same-name stateless HTTP coexistence. SDK timer observation covers removal. The compiled `publisher` and `dashboard` examples were exercised against the production binary on loopback. No battery widget/device deployment is claimed.
 
 - Core test links: [test plan](../test-plan.md) — C1, C3, L2, S1, T1; E1 steps 1 and 4.
 - `tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry`
@@ -66,3 +75,5 @@ Percentage representation, charging state, publication intervals, freshness thre
   has been deployed.
 - 2026-10-06: Tasks 10–11 added a schema-governed linked battery view and
   retained freshness diagnostics; thresholds for actual devices remain unset.
+
+- 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.

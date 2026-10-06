@@ -266,3 +266,48 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo test --release --all-targets --all-features
 ```
+
+## Native SDK acceptance — 2026-10-07
+
+All tests below run in `cargo test --workspace` and its release-mode counterpart.
+Real-socket tests bind loopback port 0 and use `server::serve_with_core`; run them
+with local networking permitted. Scripted peers are restricted to client failure
+injection and do not substitute for production-server acceptance.
+
+| Contract/story | Evidence |
+| --- | --- |
+| SDK-01, U1/T1 | `crates/tanuki-protocol/tests/requests.rs` covers bidirectional request codecs, validated names/paths, null presence and discriminator order; existing protocol/domain/HTTP/socket suites remain regressions |
+| SDK-02, T1 | `tests/native_sdk.rs::direct_connection_receives_hello_reply_update_and_remote_error_in_both_codecs` covers mixed frame codecs and correlated replies/errors; `direct_empty_producer_selection_exposes_replacement_close_reason_once` covers empty hello and direct close 4001 |
+| SDK-03, C3/US-01.A1 | `session_writes_without_listener_polling_and_registers_current_baselines` and `registration_racing_with_commits_loses_no_retained_update_and_observer_drop_is_independent` exercise current baseline registration, interleaving and two consumers |
+| SDK-03, T1/C1 | `a_full_raw_queue_reports_lag_once_without_stalling_another_listener` and `replacement_and_drop_end_listeners_but_preserve_weak_handle_lifetime` exercise full queues, fresh registration, close 4001, hello warnings, weak handles and drop |
+| SDK-03 failure injection | `crates/tanuki-client/tests/session_failures.rs` covers cancellation/late replies, pending capacity, lost reply/unknown outcome, oversized local failure, uncorrelated errors, duplicate sequences and invalid option limits; `remote_slow_consumer_reason_preempts_a_full_data_queue` injects close 1013 |
+| SDK-04, U1 | `crates/tanuki-client/tests/payload.rs` covers Serde structs/enums/options/bytes, literal reserved keys, i64 limits, unsigned overflow, nonfinite values, map-key rejection and decode errors |
+| SDK-04/05, US-07.A1/A2 | `tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` covers local-only handles, explicit claim/submission, cross-session rejection and rollback of mixed state/event writes |
+| SDK-05, US-09.A1/A2/A4 | `observers_deliver_initial_empty_then_atomic_complete_immutable_snapshots` and `observation_keeps_null_missing_kind_errors_and_metadata_changes_distinct` cover whole snapshots, removal, claim-only metadata, null/absent payload and decode recovery |
+| SDK-05, US-07.A3/US-01.A4 | `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` observes production deadline transitions with explicit controlled wall time and real transport |
+| SDK-05 latest state/lag | `observe::tests::unread_outputs_coalesce_but_each_input_delta_is_applied` synchronizes on private watch version, without sleeps; `projection_input_lag_is_terminal_even_with_unread_output` forces a full input queue before scheduling the projection |
+| SDK-05 clean shutdown | `session::tests::clean_closure_drains_already_admitted_batches` and `observe::tests::clean_projection_closure_delivers_the_last_unseen_snapshot` distinguish clean draining from abnormal termination; `tests/native_sdk.rs::standard_stream_observation_is_native_send_and_ends_after_joined_close` verifies standard Stream polling and native Send ergonomics |
+| SDK-06, US-01.A1/A2/US-09.A3/A5 | `tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` runs a typed laptop, union-selected dashboard and same-name stateless HTTP phone through the production server |
+| SDK-06, occurrences/T1 | `instant_occurrences_remain_ordered_batches_and_are_not_replayed_to_late_listeners` and `both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in_requests_updates_and_snapshots` verify occurrence order, late baseline and full-message value preservation |
+| Regression found by SDK | `tests/persistence.rs::binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
+
+Behavioral red phases caught missing receive behavior, missing projection
+baseline, incorrect payload conversion, buffered MessagePack byte decoding in
+requests/persistence, and loss of admitted data on clean closure. Missing imports
+were not treated as behavioral evidence.
+
+Publisher/dashboard/controller examples are compiled by
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo build --workspace --examples`. They were also exercised together against
+the compiled production binary on an ephemeral loopback port and isolated
+snapshot directory: native battery publication, HTTP desired submission,
+controller's atomic hue/brightness report, dashboard typed reads, Ctrl-C exits
+and final save all passed. This is local simulated use, not hardware/deployment
+or Iced verification. The native supported transport profile is plain `ws://`;
+TLS, browser/WASM transport and bindings are outside current acceptance.
+
+Final verification: formatting and all-target workspace Clippy passed; all 156
+workspace tests (including documentation checks) passed in both debug and release
+modes, with no ignored tests. Protocol-only native compilation and package
+dependency direction were checked. The browser-target attempt is accurately
+recorded in [toolchain.md](toolchain.md); it could not compile without target std.

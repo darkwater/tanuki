@@ -36,7 +36,10 @@ use crate::{
         ValueKind, WriteBatch, WriteContext, WriteOperation,
     },
     link::{LinkDefinition, LinkName},
-    protocol::{ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView, UpdateView},
+    protocol::{
+        ClientMessage, ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView, UpdateView,
+        WireExpiry, WireInputKind, WireOperation, WireRelease,
+    },
     scheduler::DeadlineScheduler,
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
 };
@@ -360,20 +363,6 @@ async fn websocket_upgrade(State(state): State<HttpState>, upgrade: WebSocketUpg
         .on_upgrade(move |socket| websocket_session(socket, state))
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ClientMessage {
-    Hello {
-        request_id: RequestId,
-        client: ClientName,
-        selectors: Vec<Selector>,
-    },
-    Write {
-        request_id: RequestId,
-        operations: Vec<WireOperation>,
-    },
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WireCodec {
     Json,
@@ -468,7 +457,8 @@ async fn websocket_session(mut socket: WebSocket, state: HttpState) {
         previous.kick.send_replace(true);
     }
 
-    let snapshot = ServerMessage::snapshot(request_id, subscription.snapshot(), opened.warnings());
+    let snapshot =
+        crate::protocol::snapshot_message(request_id, subscription.snapshot(), opened.warnings());
     if send_server_message(&mut socket, codec, &snapshot)
         .await
         .is_ok()
@@ -515,7 +505,7 @@ async fn websocket_loop(
                     }
                     return;
                 };
-                if send_server_message(socket, subscription_codec, &ServerMessage::update(&update)).await.is_err() {
+                if send_server_message(socket, subscription_codec, &crate::protocol::update_message(&update)).await.is_err() {
                     return;
                 }
             }
@@ -975,45 +965,6 @@ impl IntoResponse for ApiError {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-enum WireOperation {
-    PublishState {
-        topic: TopicPath,
-        value: JsonValue,
-        #[serde(default)]
-        expiry: Option<WireExpiry>,
-    },
-    PublishEvent {
-        topic: TopicPath,
-        value: JsonValue,
-    },
-    DefineInput {
-        topic: TopicPath,
-        kind: WireInputKind,
-    },
-    ClaimInput {
-        topic: TopicPath,
-        release: WireRelease,
-    },
-    SubmitDesired {
-        topic: TopicPath,
-        value: JsonValue,
-        #[serde(default)]
-        expiry: Option<WireExpiry>,
-    },
-    SubmitCommand {
-        topic: TopicPath,
-        value: JsonValue,
-    },
-    ClearDesired {
-        topic: TopicPath,
-    },
-    RemoveNode {
-        topic: TopicPath,
-    },
-}
-
 impl TryFrom<WireOperation> for WriteOperation {
     type Error = ApiError;
 
@@ -1060,13 +1011,6 @@ impl TryFrom<WireOperation> for WriteOperation {
     }
 }
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum WireInputKind {
-    Desired,
-    Command,
-}
-
 impl From<WireInputKind> for InputKind {
     fn from(value: WireInputKind) -> Self {
         match value {
@@ -1074,14 +1018,6 @@ impl From<WireInputKind> for InputKind {
             WireInputKind::Command => Self::Command,
         }
     }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-enum WireExpiry {
-    Preserve,
-    Clear,
-    Set { duration: String },
 }
 
 impl TryFrom<WireExpiry> for ExpiryUpdate {
@@ -1101,13 +1037,6 @@ fn expiry_update(value: Option<WireExpiry>) -> Result<ExpiryUpdate, ApiError> {
         .map(TryInto::try_into)
         .transpose()
         .map(|expiry| expiry.unwrap_or(ExpiryUpdate::Preserve))
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case")]
-enum WireRelease {
-    Immediate,
-    After { duration: String },
 }
 
 impl TryFrom<WireRelease> for ClaimRelease {

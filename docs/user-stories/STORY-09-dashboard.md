@@ -2,7 +2,7 @@
 
 - **Status:** simulated live WebSocket and SSE dashboard delivery implemented; rendering and real-world use not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-06.
+- **Last updated:** 2026-10-07.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -29,7 +29,25 @@ Topic paths, payload layouts and timing examples are illustrative unless explici
 
 Actual UI, selections and struct/shape mapping; whether any client needs server-supplied full snapshots on each update.
 
+On 2026-10-06 the user selected explicit client operations with typed payloads
+before struct-to-topic-tree binding, and Rust delivery before browser WASM.
+The [client API proposal](../client-api-design.md) describes selected-view and
+future JavaScript use. The native Rust SDK is now implemented and tested;
+browser rendering remains deferred.
+The subsequent design narrowed SDK scope to WebSocket, with observation helpers
+built on raw update listeners and task-local caches. The user selected latest
+complete snapshots for observers: a slow renderer can skip intermediate states,
+but each delivered state reflects whole atomic batches. Raw listeners preserve
+batches with explicit lag reporting; cross-topic Serde shapes remain later work.
+The user identified Iced as the primary client SDK use case. Typed topic handles
+and observation subscriptions should fit its task/subscription model while
+remaining framework-independent; no Iced dependency or dedicated adapter is
+required. The framework use remains an API sketch, without an Iced dashboard or deployment
+claim. Ordinary Rust SDK observation now has compiled examples and acceptance tests. The implementation entrypoint is the [client SDK handoff](../client-api-handoff.md).
+
 ## Implementation and evidence
+
+- Native SDK evidence: `tests/native_sdk.rs` covers initial empty/current snapshots, overlapping selections, newly present phone state, atomic paired output, immutable history, metadata/removal, null versus absent desired payload and local decode recovery. Deterministic SDK unit tests distinguish latest-output replacement from terminal input lag. The ordinary compiled dashboard example was exercised against the production binary; no GUI, browser or Iced application is claimed.
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, T1; E1 dashboard; add wildcard membership fixture.
 - `tests/core_subscriptions.rs` verifies US-09.A1, A3, and A5 at the core boundary, including explicit empty snapshots and newly matching wildcard topics.
@@ -49,3 +67,5 @@ Actual UI, selections and struct/shape mapping; whether any client needs server-
 - 2026-10-06: Task 06 exercised the dashboard wire path with simulated actors. No UI rendering or deployed dashboard has been verified.
 - 2026-10-06: The read-only SSE adapter added a low-ceremony dashboard stream
   with the same snapshot/atomic-update boundary and no replay promise.
+
+- 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.

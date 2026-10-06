@@ -9,10 +9,10 @@ does.
 | Module | Status | Responsibility |
 | --- | --- | --- |
 | `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
-| `client` | task 05 implemented | Maintain a selected local node view by applying complete update batches |
+| `client` | SDK-01 compatibility module | Re-export shared complete-batch `SelectedView` for existing consumers |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–11 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, linked views, and active diagnostics |
-| `protocol` | tasks 04–06 implemented | JSON/MessagePack values and typed snapshot/update/error DTOs |
+| `protocol` | SDK-01 server boundary | Re-export shared DTOs/codecs and convert authoritative core state |
 | `transport` | tasks 04–07 plus SSE implemented | Axum HTTP/SSE/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | tasks 08–10 implemented | Versioned coherent node/schema/link snapshots, restore filtering, and atomic file replacement |
@@ -27,7 +27,8 @@ scaffolding.
 
 ## Dependency direction
 
-The intended inward dependency flow is transport/protocol → core → domain.
+The server dependency flow is transport → core → domain, with protocol DTOs
+and selected primitives supplied by `tanuki-protocol`.
 Domain code will not depend on Axum, sockets, or disk. Persistence and network
 I/O will happen outside the authoritative state transition. The first server
 seam accepts an injectable shutdown future so tests exercise the production
@@ -330,3 +331,47 @@ does not itself generate a diagnostic if a consumer overflows. This prevents a
 diagnostic-consumer failure from recursively creating more diagnostics. Local
 structured logging and per-operation warning arrays remain the channel for
 transient conditions that are not retained active state.
+
+## Native SDK boundary — SDK-01 through SDK-06
+
+The workspace has three packages: the root server, `tanuki-protocol`, and
+`tanuki-client`. Protocol owns validated paths/selectors/client names, values,
+time/timer primitives, bidirectional wire DTOs, value codecs and `SelectedView`.
+Server modules re-export migrated types. Authority-bearing session/claim handles,
+node storage, schema policy and core-to-wire conversions stay server-side.
+Server tests depend on client as a dev dependency; there is no runtime server →
+client dependency and client never depends on server.
+
+Payload-bearing tagged DTOs decode through private streaming field DTOs and
+validated enum construction. Serde's internally tagged derive buffers values and
+loses `is_human_readable`, breaking MessagePack bytes/extensions and literal tag
+maps. Serialization and the v1 wire shape stay unchanged. Snapshot persistence's
+payload-bearing enum uses the same approach, without changing its file format.
+
+Client modules are concrete boundaries: `connection` owns native wire I/O;
+`session` owns hello, correlation, selected state, registration and queues;
+`payload` bridges ordinary Serde data without interpreting tags; `topic` provides
+weak typed handles and staged writes; `observe` projects raw input into immutable
+complete snapshots. `SelectedView` is shared with the server's original client
+fixtures through re-exports, avoiding a second batch-application implementation.
+
+One driver serializes incoming batches, pending replies and local registration.
+Registration captures the cache and installs delivery before another driver step.
+A bounded writer task keeps network backpressure outside the reader. Each raw
+listener has a bounded data queue and independent terminal notification. Slow
+raw input ends only that listener/projection. Replies resolve independently of
+application polling. Cancellation releases pending capacity; late IDs are never
+reused for another request.
+
+Observers consume that public raw primitive, maintain task-local selected caches,
+and publish latest complete snapshots. Initial baselines remain separate from
+replaceable output. Some duplicated retained data is the deliberate simplicity
+tradeoff; queue counts do not bound total decoded memory. Explicit exact-path
+coverage lets typed reads distinguish unobserved paths from covered absence.
+
+Session owns driver/writer and projection lifetime. Topic handles are weak;
+observer drop aborts only its projection, session drop signals driver shutdown,
+and explicit close joins tasks. Clean termination drains admitted raw batches and
+exposes final unseen latest output; abnormal termination takes precedence over
+queued data and is reported once. No replay, retry, reconnect, schema validation
+or framework-specific integration lives in the SDK.

@@ -220,14 +220,38 @@ ISO-8601 fixed duration.
 
 Reference: the [MessagePack timestamp specification](https://github.com/msgpack/msgpack/blob/master/spec.md#timestamp-extension-type).
 
-## Persistence format 2
+## Persistence format 3
 
 The local snapshot is MessagePack with `format: "tanuki-snapshot"` and
-`version: 2`. It is an internal restart format, not a client transport or an
+`version: 3`. It is an internal restart format, not a client transport or an
 acknowledgement log. It contains one coherent commit sequence and retained
-node/definition metadata and installed schemas, but no live sessions, claims,
+node/definition metadata, installed schemas and link definitions, but no live sessions, claims,
 event occurrences, or command occurrences. Future incompatible formats must use a new version;
 unknown versions are treated as invalid snapshots. At startup invalid data is
 copied beside the configured file with a `.bak` suffix (or `.bak.N` without
 overwriting an earlier backup), a warning is logged, and Tanuki starts with
 empty state. Ordinary read or backup I/O failures still fail startup.
+
+## Native Rust SDK usage
+
+`tanuki-protocol` supplies bidirectional v1 requests/messages and lossless value
+codecs. The server supplies conversion functions `snapshot_message` and
+`update_message` for authoritative core data. Payload-bearing tagged enum
+decoding keeps the original JSON/MessagePack decoder through nested fields;
+bytes, extension values and literal reserved-key maps now round-trip through
+whole requests, snapshots and updates, not just standalone value fixtures.
+
+`tanuki-client::Connection` exposes explicit hello/send/receive. `Session` adds
+background reading, request correlation and atomic current-baseline listener
+registration. Typed state/event/desired/command handles and atomic builders all
+use that same write protocol; server validation remains unchanged. Exact-path
+observers publish complete latest retained snapshots, while raw listeners expose
+every admitted batch and explicit lag. Receipt sequences do not establish that
+an observer caught up. Initial selections are immutable.
+
+The supported native profile is `ws://`, JSON outgoing by default, optional
+MessagePack frame encoding, 1 MiB messages, 64 pending requests, 64 raw batches
+per listener and configurable 10-second connect/hello/write deadlines. There is
+no idle timeout. TLS, browser bindings, Iced integration, automatic reconnect
+and cross-topic Serde shapes are deferred. Full APIs, lifecycle semantics and
+compiled examples are documented in [the client README](../crates/tanuki-client/README.md).

@@ -363,3 +363,51 @@ async fn failed_atomic_replacement_is_returned_without_destroying_target() {
     assert!(matches!(result, Err(PersistenceError::Write { .. })));
     assert!(target.is_dir());
 }
+
+#[tokio::test]
+async fn binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip() {
+    use std::collections::BTreeMap;
+    let directory = TestDirectory::new();
+    let store = SnapshotStore::new(directory.path("values.db"));
+    let values = [
+        Value::Bytes(vec![0, 255]),
+        Value::Timestamp("2023-11-14T22:13:20.123456789Z".parse().unwrap()),
+        Value::Duration("-PT5.125S".parse().unwrap()),
+        Value::Map(BTreeMap::from([(
+            "$bytes".into(),
+            Value::String("literal".into()),
+        )])),
+    ];
+    let core = Arc::new(Mutex::new(Core::new()));
+    core.lock()
+        .unwrap()
+        .apply(
+            &WriteContext::stateless(ClientName::parse("codec publisher").unwrap()),
+            WriteBatch::new(
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| WriteOperation::PublishState {
+                        topic: topic(&format!("/values/{index}")),
+                        value: value.clone(),
+                        expiry: ExpiryUpdate::Clear,
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+            at(0),
+        )
+        .unwrap();
+    store.save(core, at(1)).await.unwrap();
+    let restored = store.load(at(2)).unwrap().unwrap();
+    let snapshot = restored.read(&all());
+    for (index, value) in values.iter().enumerate() {
+        assert_eq!(
+            snapshot.nodes()[&topic(&format!("/values/{index}"))]
+                .retained_value()
+                .unwrap()
+                .value(),
+            value
+        );
+    }
+}

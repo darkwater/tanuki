@@ -42,7 +42,8 @@ fn snapshot_message_is_the_correlated_subscribe_success() {
         Selector::parse("/battery/*").unwrap(),
     ]));
 
-    let message = ServerMessage::snapshot(RequestId::new("s1".to_owned()), &snapshot, &[]);
+    let message =
+        tanuki::protocol::snapshot_message(RequestId::new("s1".to_owned()), &snapshot, &[]);
     let encoded = serde_json::to_value(&message).unwrap();
     assert_eq!(encoded["type"], "snapshot");
     assert_eq!(encoded["request_id"], "s1");
@@ -118,7 +119,7 @@ fn update_message_keeps_one_commit_and_distinct_occurrence_variants() {
     assert_eq!(view.sequence, 1);
     assert_eq!(view.changes.len(), 3);
 
-    let encoded = serde_json::to_value(ServerMessage::update(&update)).unwrap();
+    let encoded = serde_json::to_value(tanuki::protocol::update_message(&update)).unwrap();
     assert_eq!(encoded["type"], "update");
     assert_eq!(encoded["sequence"], 1);
     assert_eq!(
