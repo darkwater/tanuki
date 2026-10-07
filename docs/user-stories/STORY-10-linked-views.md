@@ -2,7 +2,7 @@
 
 - **Status:** implemented and integration-tested; real-world use not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-05.
+- **Last updated:** 2026-10-07.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -45,3 +45,5 @@ link chains are deliberately deferred.
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-06: Implemented the accepted writable-link profile and mapped automated evidence; deployment verification remains open.
+
+- 2026-10-07: Link-name validation rejects dot segments before diagnostic path construction; the regression preserves valid punctuation and Unicode names. Existing K1 behavior remains tested, with no deployment claim.

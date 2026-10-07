@@ -3,17 +3,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    core::{CommitSequence, Core},
+    core::{CommitSequence, Core, PersistenceSnapshot, RestoreError},
     domain::{
         ClientName, CommandNode, Deadline, DesiredNode, EventNode, FiniteF64, InputDefinition,
         Node, NodeKind, NonNegativeDuration, RetainedValue, Selector, SelectorParseError,
@@ -22,9 +19,9 @@ use crate::{
     link::{LinkBuildError, LinkDefinition, LinkInstallError, LinkName, LinkNameParseError},
     protocol::JsonValue,
     schema::{
-        Enforcement, NullPolicy, Schema, SchemaBuildError, SchemaIssue, SchemaName,
-        SchemaNameParseError, SchemaRegistry, SchemaRegistryError, SchemaRule,
-        SchemaRuleBuildError, ValidatorBuildError, ValidatorShape, ValueCast, ValueValidator,
+        Enforcement, NullPolicy, Schema, SchemaBuildError, SchemaName, SchemaNameParseError,
+        SchemaRegistry, SchemaRegistryError, SchemaRule, SchemaRuleBuildError, ValidatorBuildError,
+        ValidatorShape, ValueCast, ValueValidator,
     },
 };
 
@@ -74,19 +71,18 @@ impl SnapshotStore {
 
     pub async fn save(
         &self,
-        core: Arc<Mutex<Core>>,
+        snapshot: PersistenceSnapshot,
         now: Timestamp,
     ) -> Result<(), PersistenceError> {
-        let snapshot = {
-            let core = core.lock().map_err(|_| PersistenceError::CorePoisoned)?;
-            SnapshotFile::capture(&core, now)?
-        };
-        let bytes = rmp_serde::to_vec_named(&snapshot)
-            .map_err(|source| PersistenceError::Encode { source })?;
         let path = self.path.clone();
-        tokio::task::spawn_blocking(move || write_atomic(&path, &bytes))
-            .await
-            .map_err(|source| PersistenceError::Task { source })??;
+        tokio::task::spawn_blocking(move || {
+            let snapshot = SnapshotFile::capture(snapshot, now);
+            let bytes = rmp_serde::to_vec_named(&snapshot)
+                .map_err(|source| PersistenceError::Encode { source })?;
+            write_atomic(&path, &bytes)
+        })
+        .await
+        .map_err(|source| PersistenceError::Task { source })??;
         Ok(())
     }
 }
@@ -134,6 +130,11 @@ impl SnapshotRecovery {
 
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    #[error("restored core state is invalid: {source}")]
+    Restore {
+        #[source]
+        source: RestoreError,
+    },
     #[error("failed to read the snapshot")]
     Read {
         #[source]
@@ -172,8 +173,6 @@ pub enum PersistenceError {
         #[source]
         source: tokio::task::JoinError,
     },
-    #[error("core state lock was poisoned")]
-    CorePoisoned,
     #[error("invalid schema in snapshot")]
     Schema {
         #[source]
@@ -202,8 +201,6 @@ pub enum SchemaPersistenceError {
     Registry(#[from] SchemaRegistryError),
     #[error("schema float bound {value} is not finite")]
     NonFiniteFloat { value: f64 },
-    #[error("restored data violates its installed schema: {issue}")]
-    ExistingValue { issue: SchemaIssue },
     #[error("invalid expected update interval `{value}` in snapshot")]
     FreshnessInterval {
         value: String,
@@ -238,32 +235,27 @@ struct SnapshotFile {
 }
 
 impl SnapshotFile {
-    fn capture(core: &Core, now: Timestamp) -> Result<Self, PersistenceError> {
-        let snapshot = core.persistence_snapshot();
+    fn capture(snapshot: PersistenceSnapshot, now: Timestamp) -> Self {
         let nodes = snapshot
-            .nodes()
+            .nodes
             .iter()
-            .map(|(topic, node)| Ok((topic.clone(), StoredNode::capture(node))))
-            .collect::<Result<_, PersistenceError>>()?;
-        let schemas = core
-            .schemas()
+            .map(|(topic, node)| (topic.clone(), StoredNode::capture(node)))
+            .collect();
+        let schemas = snapshot
+            .schemas
             .schemas()
             .map(StoredSchema::capture)
             .collect();
-        let links = core
-            .links()
-            .iter()
-            .map(|link| StoredLink::capture(link.definition()))
-            .collect();
-        Ok(Self {
+        let links = snapshot.links.iter().map(StoredLink::capture).collect();
+        Self {
             format: FORMAT.to_owned(),
             version: VERSION,
-            sequence: snapshot.sequence().get(),
+            sequence: snapshot.sequence.get(),
             saved_at: now.get().to_string(),
             nodes,
             schemas,
             links,
-        })
+        }
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, PersistenceError> {
@@ -301,22 +293,6 @@ impl SnapshotFile {
                     source: source.into(),
                 })?;
         }
-        for (topic, node) in &nodes {
-            let value = match node {
-                Node::State(state) => Some(state.current().value()),
-                Node::Desired(desired) => desired.current().map(RetainedValue::value),
-                Node::Event(_) | Node::Command(_) => None,
-            };
-            if let Some((_, issue)) = schemas
-                .inspect_existing(topic, node.kind(), value)
-                .into_iter()
-                .find(|(enforcement, _)| *enforcement == Enforcement::Deny)
-            {
-                return Err(PersistenceError::Schema {
-                    source: SchemaPersistenceError::ExistingValue { issue },
-                });
-            }
-        }
         let links = self
             .links
             .into_iter()
@@ -330,9 +306,7 @@ impl SnapshotFile {
             links,
             now,
         )
-        .map_err(|source| PersistenceError::Link {
-            source: source.into(),
-        })
+        .map_err(|source| PersistenceError::Restore { source })
     }
 }
 

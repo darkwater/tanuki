@@ -66,3 +66,5 @@ verification remain absent.
   core, HTTP, and WebSocket entrypoints.
 
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
+
+- 2026-10-07: Server regression tests cover concurrent managed-session replacement, idle and non-reading stream shutdown, and final-save ordering with a connected WebSocket publisher. Shutdown closes admission and joins timer work; this remains loopback evidence, not deployment verification.

@@ -7,6 +7,7 @@ pub mod domain;
 pub mod link;
 pub mod persistence;
 pub mod protocol;
+pub mod runtime;
 pub mod scheduler;
 pub mod schema;
 pub mod server;

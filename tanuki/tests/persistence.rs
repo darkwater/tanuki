@@ -62,6 +62,92 @@ fn all() -> Selection {
     Selection::new(vec![Selector::parse("/**").unwrap()])
 }
 
+#[test]
+fn reserved_canonical_nodes_are_rejected_and_backed_up_on_restore() {
+    let directory = TestDirectory::new();
+    let path = directory.path("reserved.db");
+    let bytes = rmp_serde::to_vec_named(&serde_json::json!({
+        "format": "tanuki-snapshot", "version": 3, "sequence": 0,
+        "saved_at": "1970-01-01T00:00:00Z",
+        "nodes": {"/$diagnostics/injected": {"kind": "command"}}
+    }))
+    .unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let store = SnapshotStore::new(path);
+    assert!(
+        store.load(at(0)).is_err(),
+        "reserved canonical node was restored"
+    );
+    let recovered = store.load_or_recover(at(0)).unwrap();
+    assert!(
+        recovered
+            .recovery()
+            .unwrap()
+            .reason()
+            .contains("reserved system namespace")
+    );
+    let backup = recovered.recovery().unwrap().backup();
+    assert_eq!(fs::read(backup).unwrap(), bytes);
+    assert!(recovered.into_core().read(&all()).nodes().is_empty());
+}
+
+#[tokio::test]
+async fn restore_checks_denying_policy_without_casting_or_rejecting_warnings() {
+    let directory = TestDirectory::new();
+    let path = directory.path("schema-candidate.db");
+    let store = SnapshotStore::new(path.clone());
+    let mut core = Core::new();
+    core.apply(
+        &WriteContext::stateless(ClientName::parse("publisher").unwrap()),
+        WriteBatch::new(vec![WriteOperation::PublishState {
+            topic: topic("/battery"),
+            value: Value::Integer(50),
+            expiry: ExpiryUpdate::Clear,
+        }])
+        .unwrap(),
+        at(0),
+    )
+    .unwrap();
+    let rule = SchemaRule::new(
+        Selector::parse("/battery").unwrap(),
+        Enforcement::Deny,
+        ValueValidator::integer_range(0, 100, NullPolicy::Deny).unwrap(),
+    )
+    .unwrap();
+    core.install_schema(
+        Schema::new(SchemaName::parse("battery").unwrap(), vec![rule]).unwrap(),
+        SchemaInstallMode::RejectInvalid,
+        at(0),
+    )
+    .unwrap();
+    store
+        .save(core.persistence_snapshot(), at(0))
+        .await
+        .unwrap();
+    let mut file: serde_json::Value = rmp_serde::from_slice(&fs::read(&path).unwrap()).unwrap();
+    file["nodes"]["/battery"]["current"]["value"] = serde_json::json!(150);
+    fs::write(&path, rmp_serde::to_vec_named(&file).unwrap()).unwrap();
+    assert!(matches!(
+        store.load(at(1)),
+        Err(PersistenceError::Restore {
+            source: tanuki::core::RestoreError::SchemaViolation { .. }
+        })
+    ));
+    file["schemas"][0]["rules"][0]["enforcement"] = serde_json::json!("warn");
+    fs::write(&path, rmp_serde::to_vec_named(&file).unwrap()).unwrap();
+    let restored = store.load(at(1)).unwrap().unwrap();
+    assert_eq!(
+        restored
+            .read(&all())
+            .get(&topic("/battery"))
+            .unwrap()
+            .retained_value()
+            .unwrap()
+            .value(),
+        &Value::Integer(150)
+    );
+}
+
 #[tokio::test]
 async fn coherent_save_restore_filters_expired_values_and_clears_live_authority() {
     let directory = TestDirectory::new();
@@ -118,7 +204,8 @@ async fn coherent_save_restore_filters_expired_values_and_clears_live_authority(
         )
         .unwrap();
 
-    store.save(Arc::clone(&core), at(1)).await.unwrap();
+    let snapshot = core.lock().unwrap().persistence_snapshot();
+    store.save(snapshot, at(1)).await.unwrap();
     let bytes = fs::read(directory.path("snapshot.db")).unwrap();
     assert_ne!(bytes.first(), Some(&b'{'));
     assert_eq!(
@@ -182,7 +269,10 @@ async fn installed_schemas_survive_restart_and_still_deny_invalid_writes() {
         at(0),
     )
     .unwrap();
-    store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
+    store
+        .save(core.persistence_snapshot(), at(1))
+        .await
+        .unwrap();
 
     let mut restored = store.load(at(2)).unwrap().unwrap();
     let result = restored.apply(
@@ -233,7 +323,10 @@ async fn freshness_policy_survives_restart_and_restores_overdue_status() {
         at(0),
     )
     .unwrap();
-    store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
+    store
+        .save(core.persistence_snapshot(), at(1))
+        .await
+        .unwrap();
 
     let restored = store.load(at(20)).unwrap().unwrap();
     let snapshot = restored.read(&all());
@@ -271,7 +364,10 @@ async fn installed_links_survive_restart_without_persisting_alias_copies() {
         at(0),
     )
     .unwrap();
-    store.save(Arc::new(Mutex::new(core)), at(1)).await.unwrap();
+    store
+        .save(core.persistence_snapshot(), at(1))
+        .await
+        .unwrap();
 
     let mut restored = store.load(at(2)).unwrap().unwrap();
     assert_eq!(restored.link_count(), 1);
@@ -359,7 +455,7 @@ async fn failed_atomic_replacement_is_returned_without_destroying_target() {
     let target = directory.path("snapshot.db");
     fs::create_dir(&target).unwrap();
     let store = SnapshotStore::new(target.clone());
-    let result = store.save(Arc::new(Mutex::new(Core::new())), at(0)).await;
+    let result = store.save(Core::new().persistence_snapshot(), at(0)).await;
     assert!(matches!(result, Err(PersistenceError::Write { .. })));
     assert!(target.is_dir());
 }
@@ -398,7 +494,8 @@ async fn binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip() 
             at(0),
         )
         .unwrap();
-    store.save(core, at(1)).await.unwrap();
+    let snapshot = core.lock().unwrap().persistence_snapshot();
+    store.save(snapshot, at(1)).await.unwrap();
     let restored = store.load(at(2)).unwrap().unwrap();
     let snapshot = restored.read(&all());
     for (index, value) in values.iter().enumerate() {

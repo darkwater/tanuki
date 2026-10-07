@@ -229,3 +229,20 @@ cargo test --workspace --release
 Run additional supported feature configurations where they change behaviour; do
 not blindly combine mutually exclusive features. No coverage percentage
 replaces evidence that core invariants and complete flows were exercised.
+
+
+## Server review regression extensions — 2026-10-07
+
+- C1/T1: concurrent same-name opening must leave the newest authoritative
+  session and socket registration aligned; stale cleanup preserves it.
+- T1: shutdown drains idle SSE clients, WebSocket peers before and after hello,
+  and peers that stop reading SSE data. Admission closes before cleanup, and
+  no retained runtime handle may commit afterward.
+- L2: scheduler shutdown is joined before final capture; advancing controlled
+  time afterward cannot apply another expiry.
+- P1/S1: restore rejects reserved canonical nodes and denying policy violations,
+  accepts warning policy, and never casts stored data. Invalid files retain a
+  byte-for-byte backup. Final save includes acknowledged WebSocket writes even
+  if that peer remains connected when shutdown starts.
+- K1/US-11: dot-segment link names fail validation before a disabled-link
+  diagnostic path is constructed; ordinary punctuation and Unicode still work.

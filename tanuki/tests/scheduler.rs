@@ -42,6 +42,35 @@ fn test_scheduler() -> (Arc<Mutex<Core>>, DeadlineScheduler, Arc<AtomicI64>) {
 }
 
 #[tokio::test(start_paused = true)]
+async fn joined_scheduler_cannot_expire_values_after_server_shutdown() {
+    let (core, scheduler, second) = test_scheduler();
+    core.lock()
+        .unwrap()
+        .apply(
+            &WriteContext::stateless(ClientName::parse("publisher").unwrap()),
+            batch(vec![WriteOperation::PublishState {
+                topic: topic("/retained"),
+                value: Value::Integer(1),
+                expiry: ExpiryUpdate::Set(seconds(10)),
+            }]),
+            at(0),
+        )
+        .unwrap();
+    scheduler.rescan();
+    scheduler.shutdown().await.unwrap();
+    second.store(20, Ordering::SeqCst);
+    advance(Duration::from_secs(20)).await;
+    scheduler.rescan();
+    assert!(
+        core.lock()
+            .unwrap()
+            .read(&Selection::new(vec![Selector::parse("/retained").unwrap()]))
+            .get(&topic("/retained"))
+            .is_some()
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn moved_earlier_deadline_wakes_scheduler_and_removes_state() {
     let (core, scheduler, second) = test_scheduler();
     let mut subscription = core

@@ -14,12 +14,11 @@ scheduler for the restored shared core.
 
 ## Output mutation and atomic commit
 
-All caller-initiated mutations pass through `Core::apply`:
+All ordinary caller writes pass through `RuntimeHandle::apply` to `Core::apply`:
 
 1. Reject reserved-system targets before staging. Repeated same-topic
    operations are allowed and execute in request order.
-2. Clone authoritative nodes into a private candidate and compute the next
-   sequence without modifying live state.
+2. Clone authoritative nodes into a private candidate without modifying live state.
 3. Apply operations in request order. For every value-bearing operation, run
    the installed ordinary-topic schema first, apply at most one explicit cast,
    and revalidate all matching rules. Compute provenance from the supplied
@@ -29,12 +28,16 @@ All caller-initiated mutations pass through `Core::apply`:
    event occurrences. The live sequence does not advance.
 5. Otherwise coalesce each topic's retained changes against its pre-batch and
    final state while preserving all instant occurrences in order. Install the
-   whole candidate, advance the sequence once, and return one indivisible
+   whole candidate through the common commit finalizer after checking sequence
+   capacity, advance the sequence once, and return one indivisible
    update batch plus successful-operation warnings.
 
 No network or disk work occurs in this transition. State/event publication,
 removal, input definition/claiming, desired submission/clearing, and command
 submission all use this path.
+
+Schema/link management and timer/session transitions retain their specific
+validation procedures and use the same install-before-publication finalizer.
 
 ## Link installation, writes, and recovery
 
@@ -131,16 +134,19 @@ commits are filtered out.
 
 ## WebSocket connection lifecycle
 
-1. Upgrade `/v1/ws`, then require one text-JSON or binary-MessagePack hello.
+1. Track the stream before upgrading `/v1/ws`, then require one text-JSON or
+   binary-MessagePack hello. Shutdown also cancels peers waiting for hello.
 2. Open the named managed session and register its selectors at the core's
    snapshot boundary.
-3. Install the transport registry entry. If it replaces an entry, signal the
-   old socket to close with `session_replaced`.
+3. Under the same runtime coordination lock, install the socket registry entry.
+   If it replaces an entry, signal the old socket to close with `session_replaced`.
+   No thread can register an older session after a newer one.
 4. Send the correlated snapshot as the first response, then select among
    client messages, subscription batches, and replacement notification.
 5. Apply every write through `Core::apply`; send its correlated reply before
    forwarding its own queued selected update.
-6. On close or I/O failure, disconnect the exact session handle. Immediate
+6. On close, I/O failure, or cancellation, the session lease disconnects the
+   exact handle. Immediate
    claim release is committed and published; a stale old handle is harmless.
    Grace-release timer work is handed to the deadline scheduler.
 
@@ -168,7 +174,7 @@ snapshot and never receives historical instant occurrences.
 
 ## Expiry and claim-grace execution
 
-After every accepted retained write, the transport signals the scheduler to
+After every accepted mutation, the runtime signals the scheduler to
 rescan. It waits for the earlier of the core's next retained-value deadline and
 its queued claim-release deadlines. A newly earlier write or release command
 wakes and replaces that wait.
@@ -195,6 +201,8 @@ without replacing an earlier backup, logged, and treated as empty state. A
 failure to read or back up the file remains a typed startup error. A valid
 restore drops expired retained values, all sessions, and all claims, and
 restores validated schema definitions before the router becomes available.
+The core restore boundary rejects canonical system nodes and denying policy
+violations without casting, accepts/logs warnings, and checks link topology.
 
 Every 30 seconds the server clones one coherent snapshot under the core lock.
 Serialization and disk I/O happen afterward on a blocking worker. The writer
@@ -203,8 +211,15 @@ it atomically over the target, then syncs the parent directory. Failure removes
 the temporary file where possible, logs the error, and leaves live authority
 unchanged. Acknowledgements never wait for or promise this periodic save.
 
-On orderly shutdown, new serving stops and in-flight requests drain. The
-periodic worker exits, then a final snapshot is attempted. A final failure is
+On orderly shutdown, the runtime closes admission before releasing its
+coordination lock, so waiting requests cannot commit after that boundary.
+Streams and WebSockets are cancelled, including blocked sends and idle hellos.
+WebSocket close delivery and HTTP draining have a provisional one-second
+window; remaining socket I/O is then cancelled even if the peer stops reading.
+Already admitted commits remain accepted, but their replies may be lost.
+Stream leases drain and session leases run exact-handle cleanup; then the
+deadline scheduler is stopped and joined. The periodic worker exits and any
+in-progress save is joined before the final snapshot is captured. A final failure is
 returned to the process rather than hidden. Crash recovery may lose writes
 since the last completed replacement; there is no WAL or replay.
 

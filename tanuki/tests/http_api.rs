@@ -13,16 +13,18 @@ use tanuki::{
         ClientName, ExpiryUpdate, Node, Timestamp, TopicPath, Value, WriteBatch, WriteContext,
         WriteOperation,
     },
-    transport::{Clock, router_with_clock},
+    runtime::{Clock, Runtime},
+    transport::router,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
-fn test_app() -> (axum::Router, Arc<Mutex<Core>>) {
+fn test_app() -> (axum::Router, Arc<Mutex<Core>>, Runtime) {
     let core = Arc::new(Mutex::new(Core::new()));
     let clock: Clock =
         Arc::new(|| Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()));
-    (router_with_clock(core.clone(), clock), core)
+    let runtime = Runtime::start(core.clone(), clock);
+    (router(runtime.handle()), core, runtime)
 }
 
 fn json_request(method: &str, uri: &str, body: JsonValue) -> Request<Body> {
@@ -75,7 +77,7 @@ async fn next_sse_event(stream: &mut BodyDataStream) -> (String, String, JsonVal
 
 #[tokio::test]
 async fn sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let response = app
         .clone()
         .oneshot(
@@ -140,7 +142,7 @@ async fn sse_starts_with_a_snapshot_then_preserves_an_atomic_update_batch() {
 
 #[tokio::test]
 async fn sse_query_failures_use_the_common_error_shape() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let response = app
         .oneshot(
             Request::builder()
@@ -159,7 +161,7 @@ async fn sse_query_failures_use_the_common_error_shape() {
 
 #[tokio::test]
 async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let unattributed = app
         .clone()
         .oneshot(json_request(
@@ -233,7 +235,7 @@ async fn schema_installation_casts_valid_http_writes_and_denies_invalid_ones() {
 
 #[tokio::test]
 async fn attributed_link_install_projects_reads_and_routes_alias_writes() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let response = app
         .clone()
         .oneshot(json_request(
@@ -328,7 +330,7 @@ async fn attributed_link_install_projects_reads_and_routes_alias_writes() {
 
 #[tokio::test]
 async fn schema_install_reports_existing_violations_and_force_removes_invalid_state() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let response = app
         .clone()
         .oneshot(json_request(
@@ -390,7 +392,7 @@ async fn schema_install_reports_existing_violations_and_force_removes_invalid_st
 
 #[tokio::test]
 async fn malformed_json_and_missing_attribution_use_the_common_error_shape() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let malformed = Request::builder()
         .method("POST")
         .uri("/v1/write")
@@ -431,7 +433,7 @@ async fn malformed_json_and_missing_attribution_use_the_common_error_shape() {
 
 #[tokio::test]
 async fn stateless_attribution_accepts_query_and_rejects_conflicts() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let request = json_request(
         "POST",
         "/v1/state/battery/phone?client=phone%20task",
@@ -468,7 +470,7 @@ async fn stateless_attribution_accepts_query_and_rejects_conflicts() {
 
 #[tokio::test]
 async fn routing_failures_also_use_the_common_error_shape() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let response = app
         .clone()
         .oneshot(
@@ -501,7 +503,7 @@ async fn routing_failures_also_use_the_common_error_shape() {
 
 #[tokio::test]
 async fn domain_failures_use_the_same_error_envelope() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let mut request = json_request(
         "POST",
         "/v1/write",
@@ -527,7 +529,7 @@ async fn domain_failures_use_the_same_error_envelope() {
 
 #[tokio::test]
 async fn batch_endpoint_composes_unclaimed_input_definition_and_submission() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let mut request = json_request(
         "POST",
         "/v1/write",
@@ -565,7 +567,7 @@ async fn batch_endpoint_composes_unclaimed_input_definition_and_submission() {
 
 #[tokio::test]
 async fn snapshot_distinguishes_missing_desired_payload_from_submitted_null() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let mut request = json_request(
         "POST",
         "/v1/write",
@@ -602,7 +604,7 @@ async fn snapshot_distinguishes_missing_desired_payload_from_submitted_null() {
 
 #[tokio::test]
 async fn stateless_battery_publish_and_anonymous_read_cross_the_real_router() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let mut request = json_request(
         "POST",
         "/v1/state/battery/phone",
@@ -635,7 +637,7 @@ async fn stateless_battery_publish_and_anonymous_read_cross_the_real_router() {
 
 #[tokio::test]
 async fn same_name_http_write_does_not_displace_a_managed_session() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let handle = core
         .lock()
         .unwrap()
@@ -675,7 +677,7 @@ async fn same_name_http_write_does_not_displace_a_managed_session() {
 
 #[tokio::test]
 async fn omitted_expiry_preserves_an_existing_absolute_deadline() {
-    let (app, core) = test_app();
+    let (app, core, _runtime) = test_app();
     let mut first = json_request(
         "POST",
         "/v1/state/battery/phone",
@@ -724,7 +726,7 @@ async fn omitted_expiry_preserves_an_existing_absolute_deadline() {
 
 #[tokio::test]
 async fn tagged_values_and_escaped_maps_survive_json_storage() {
-    let (app, _) = test_app();
+    let (app, _, _runtime) = test_app();
     let value = json!({
         "bytes": {"$bytes": "AAEC/w=="},
         "at": {"$timestamp": "2023-11-14T22:13:20Z"},

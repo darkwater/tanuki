@@ -9,11 +9,12 @@ does.
 | Module | Status | Responsibility |
 | --- | --- | --- |
 | `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
+| `runtime` | server review implemented | Coordinate admission, session/socket replacement, stream lifetimes, and scheduler notifications |
 | `client` | SDK-01 compatibility module | Re-export shared complete-batch `SelectedView` for existing consumers |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–11 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, linked views, and active diagnostics |
-| `protocol` | SDK-01 server boundary | Re-export shared DTOs/codecs and convert authoritative core state |
-| `transport` | tasks 04–07 plus SSE implemented | Axum HTTP/SSE/WebSocket lifecycle, codecs, routing, scheduler wakeups, and common errors |
+| `protocol` | SDK-01 server boundary | Re-export shared DTOs/codecs, validate request conversion, and encode typed outcomes |
+| `transport` | tasks 04–07 plus SSE implemented | Axum HTTP/SSE/WebSocket adapters, codecs, routing, and common errors |
 | `scheduler` | task 07 implemented | Wait for the earliest value/claim deadline and invoke guarded core transitions |
 | `persistence` | tasks 08–10 implemented | Versioned coherent node/schema/link snapshots, restore filtering, and atomic file replacement |
 | `schema` | tasks 09 and 11 implemented | Typed ordinary-topic validators, explicit casts, overlap checks, freshness intervals, and named registry |
@@ -27,7 +28,7 @@ scaffolding.
 
 ## Dependency direction
 
-The server dependency flow is transport → core → domain, with protocol DTOs
+The server dependency flow is transport → runtime → core → domain, with protocol DTOs
 and selected primitives supplied by `tanuki-protocol`.
 Domain code will not depend on Axum, sockets, or disk. Persistence and network
 I/O will happen outside the authoritative state transition. The first server
@@ -115,7 +116,7 @@ the ability to enforce a stable shape where it matters.
 
 ## Core mutation and sessions implemented in tasks 02–03
 
-`Core::apply` is the only state mutation boundary. It validates system-topic
+`Core::apply` is the ordinary write validation boundary. It validates system-topic
 rules, clones the current in-memory map into a candidate,
 applies every operation against that candidate, and installs it only when all
 operations succeed. An error discards candidate nodes, event occurrences,
@@ -182,7 +183,7 @@ the completed batch. Exact queued-byte accounting remains open separately.
 
 ## WebSocket transport implemented in task 06
 
-The Axum router owns a small connection registry separate from core state. A
+The runtime owns a small connection registry separate from core state. A
 hello frame chooses JSON text or MessagePack binary for unsolicited messages,
 opens the managed core session, and atomically registers its selection. The first
 server frame is the correlated snapshot. The registry exists only to signal a
@@ -235,16 +236,17 @@ passes due claim IDs and current wall time into the core. Current deadlines and
 claim IDs are rechecked there, making refreshed values and reclaimed inputs
 immune to stale work.
 
-The transport starts one scheduler alongside its shared core. Its clock is the
+The runtime starts one scheduler alongside its shared core. Its clock is the
 same injected wall-clock seam used for writes; Tokio's monotonic timer is only
 used for waiting. Omitted wire expiry provisionally maps to `Preserve`: it
 keeps an existing absolute deadline and yields no deadline on a new value.
 
 ## Best-effort persistence implemented in task 08
 
-`SnapshotStore` captures one coherent canonical clone while holding the core
-lock, then performs MessagePack encoding, file writes, fsync, and rename outside that
-lock on a blocking worker. The version-3 file records its format marker,
+The server captures `Core::persistence_snapshot()` under the core lock and
+passes the owned `PersistenceSnapshot` to `SnapshotStore::save`. The store
+knows no mutex or runtime handle. Storage DTO conversion, MessagePack encoding,
+file writes, fsync, and rename run on a blocking worker. The version-3 file records its format marker,
 sequence, save time, ordinary node data, absolute expiries, provenance, and
 validated installed schemas and link definitions. Alias projections are derived
 state and are never duplicated in the snapshot.
@@ -386,3 +388,48 @@ and defaults test/check commands to all members. The server owns its `src/` and
 stay at the root. Use `cargo run -p tanuki` to select the server explicitly.
 This matches the user's usual package layout and avoids treating the server as
 structurally special. Runtime dependency direction is unchanged.
+
+
+## Server review changes — 2026-10-07
+
+`Runtime` owns one scheduler and hands cloneable `RuntimeHandle`s to adapters.
+`transport::router(handle)` only assembles routes. A short coordination lock
+serializes admission and socket registration around core calls; lock order is
+coordination then core, with no await or socket/disk I/O under either lock.
+The scheduler uses only the core lock. This keeps domain ownership in one core
+while giving shutdown and duplicate-session replacement one runtime boundary.
+
+The private `core` modules separate operation validation/mutation, session and
+claim handling, subscriptions, linked views, diagnostics, and public outcome
+types. `core/mod.rs` owns state, staging orchestration, restore acceptance, and
+the common commit finalizer. They share state through that owner rather than
+introducing independently mutable services.
+
+Schema/link installation, session cleanup, and deadlines use their applicable
+core checks. All live commit paths finish through `Core::commit`: check sequence
+capacity, install the complete staged state, advance the sequence, then publish.
+An accepted write advances the sequence even with an empty visible diff; other
+transitions advance it only when visibility changes. Restore constructs an
+unpublished core through its own checked acceptance boundary.
+
+Core session opening, snapshot registration, and socket registry replacement
+run under the same coordination lock. Subscription capacity is checked before
+session replacement. RAII session leases disconnect the exact handle on normal
+close, error, or cancellation; stale cleanup cannot remove the replacement.
+Stream leases register before upgrades, so even a peer that never sends hello
+is included in shutdown. Replacement and shutdown interrupt blocked sends too.
+
+Decoded nodes and policies must pass `Core::from_restored`: canonical paths
+cannot be system topics, denying schemas are checked without casts, warnings
+allow with local diagnostics, and link topology is rebuilt and validated.
+`LinkName` rejects `.` and `..` at construction, so the diagnostic path consumer
+can rely on its segment invariant without panicking on user input.
+
+Shutdown closes runtime admission and cancels streams, allowing a one-second
+network drain window before the listener's socket adapter cancels remaining
+I/O. This is a provisional operational default, including stalled SSE peers.
+The runtime waits for stream/session cleanup and joins the scheduler, then the
+server joins any periodic save and attempts the final snapshot. No runtime
+mutation can follow that final capture. Dropping the runtime also closes
+admission and aborts its scheduler, even if adapter handles remain alive. External holders of the injectable
+`SharedCore` test seam must respect server lifetime themselves.

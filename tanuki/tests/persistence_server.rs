@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use futures_util::{SinkExt, StreamExt};
 use jiff::Timestamp as JiffTimestamp;
 use serde_json::{Value as RawJson, json};
 use tanuki::{
@@ -24,6 +25,83 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::oneshot,
 };
+
+#[tokio::test]
+async fn final_save_includes_acknowledged_websocket_writes_with_the_peer_still_open() {
+    let directory = TestDirectory::new();
+    let store = SnapshotStore::new(directory.0.join("live-peer.db"));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = oneshot::channel();
+    let task = tokio::spawn(serve_with_persistence(
+        listener,
+        store.clone(),
+        clock(),
+        std::time::Duration::from_secs(60),
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/v1/ws"))
+        .await
+        .unwrap();
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "hello", "request_id": "hello", "client": "publisher", "selectors": []
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let snapshot = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<RawJson>(snapshot.to_text().unwrap()).unwrap()["type"],
+        "snapshot"
+    );
+    socket.send(tokio_tungstenite::tungstenite::Message::Text(json!({
+        "type": "write", "request_id": "last", "operations": [{"op": "publish_state", "topic": "/battery/laptop", "value": 73}]
+    }).to_string().into())).await.unwrap();
+    let reply = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reply: RawJson = serde_json::from_str(reply.to_text().unwrap()).unwrap();
+    assert_eq!(reply["type"], "reply");
+    assert_eq!(reply["request_id"], "last");
+    stop.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let restored = store.load(clock()()).unwrap().unwrap();
+    let selected = restored.read(&tanuki::domain::Selection::new(vec![
+        tanuki::domain::Selector::parse("/**").unwrap(),
+    ]));
+    assert_eq!(
+        selected
+            .get(&TopicPath::parse("/battery/laptop").unwrap())
+            .unwrap()
+            .retained_value()
+            .unwrap()
+            .value(),
+        &Value::Integer(73)
+    );
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+        .await
+        .unwrap();
+    assert!(!matches!(
+        ended,
+        Some(Ok(tokio_tungstenite::tungstenite::Message::Text(_)))
+    ));
+}
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -132,8 +210,9 @@ async fn production_binary_restores_configured_snapshot() {
             Timestamp::new(JiffTimestamp::now()),
         )
         .unwrap();
+    let snapshot = core.lock().unwrap().persistence_snapshot();
     store
-        .save(Arc::clone(&core), Timestamp::new(JiffTimestamp::now()))
+        .save(snapshot, Timestamp::new(JiffTimestamp::now()))
         .await
         .unwrap();
 

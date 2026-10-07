@@ -353,3 +353,39 @@ Review completion: all 163 workspace tests passed in debug and release, with
 no ignored tests. `cargo fmt --all -- --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, and `git diff --check`
 also passed.
+
+
+## Server implementation review — 2026-10-07
+
+The regression red phase reproduced accepted dot-segment link names, reserved
+canonical nodes restored from disk, a live managed WebSocket surviving server
+return, and an idle SSE stream preventing shutdown. A second lifecycle probe
+reproduced shutdown hanging once a non-reading SSE peer filled the socket
+buffer; it now exercises the one-second forced I/O boundary.
+
+| Contract | Evidence |
+| --- | --- |
+| Newest session/socket agree after concurrent replacement; stale cleanup preserves authority | `runtime::tests::concurrent_replacements_keep_the_newest_core_session_and_socket_registered` |
+| Retained runtime handles cannot admit work after shutdown | `runtime::tests::shutdown_closes_admission_even_while_runtime_handles_remain_alive` |
+| Idle SSE, hello-waiting WebSockets, initialized sockets, and non-reading SSE peers drain | `tanuki/tests/server_lifecycle.rs` |
+| Dropping the runtime stops timers even with a retained handle | `runtime::tests::dropping_runtime_stops_timers_even_when_a_handle_is_retained` |
+| Scheduler cannot mutate after joined shutdown | `tanuki/tests/scheduler.rs::joined_scheduler_cannot_expire_values_after_server_shutdown` |
+| Reserved restore data is rejected and backed up | `tanuki/tests/persistence.rs::reserved_canonical_nodes_are_rejected_and_backed_up_on_restore` |
+| Restore enforces deny policy and accepts warnings without casts | `tanuki/tests/persistence.rs::restore_checks_denying_policy_without_casting_or_rejecting_warnings` |
+| Final save includes acknowledged writes with a live WebSocket peer | `tanuki/tests/persistence_server.rs::final_save_includes_acknowledged_websocket_writes_with_the_peer_still_open` |
+| Link-name diagnostic segment invariant | `tanuki/tests/core_links.rs::diagnostic_link_names_reject_dot_segments_before_installation` |
+
+Existing core atomicity, schema/link, transport parity, and codec tests protect
+the shared commit finalizer and DTO refactors. Run the workspace debug/release,
+formatting, and Clippy commands above. Loopback tests need socket access.
+
+Local library API changes: construct `runtime::Runtime`, retain its owner, and
+pass `runtime.handle()` to `transport::router`. Capture an owned
+`Core::persistence_snapshot()` before awaiting `SnapshotStore::save`; the store
+no longer receives `Arc<Mutex<Core>>`. Public core outcome imports stay at
+`tanuki::core::*` despite the private module split.
+
+Server review completion: all 175 workspace tests passed in debug and release,
+with no ignored tests. Formatting, all-target workspace Clippy with warnings
+denied, and `git diff --check` also passed. No compiler, dependency, protocol
+version, or snapshot format version changed.

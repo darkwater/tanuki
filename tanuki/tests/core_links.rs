@@ -60,6 +60,20 @@ fn range_schema(name: &str, selector: &str, cast: Option<ValueCast>) -> Schema {
 }
 
 #[test]
+fn diagnostic_link_names_reject_dot_segments_before_installation() {
+    for name in [".", ".."] {
+        assert!(
+            LinkName::parse(name).is_err(),
+            "accepted dot segment {name}"
+        );
+    }
+    // Punctuation and Unicode still work as diagnostic path segments.
+    for name in ["dashboard.v2", "living room", "näyttö"] {
+        assert!(LinkName::parse(name).is_ok());
+    }
+}
+
+#[test]
 fn installed_subtree_link_projects_reads_and_canonical_updates() {
     let mut core = Core::new();
     core.apply(

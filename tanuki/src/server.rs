@@ -1,5 +1,7 @@
+mod listener;
+
 use std::{
-    future::Future,
+    future::{Future, IntoFuture},
     io,
     sync::{Arc, Mutex},
 };
@@ -10,9 +12,11 @@ use tokio::sync::watch;
 use tracing::warn;
 
 use crate::{
+    core::PersistenceSnapshot,
     domain::Timestamp,
     persistence::{PersistenceError, SnapshotStore},
-    transport::{Clock, SharedCore, router_with_clock},
+    runtime::{Clock, Runtime, RuntimeHandle, SharedCore},
+    transport::router,
 };
 
 /// Serves the production HTTP router on an already-bound listener.
@@ -44,9 +48,10 @@ pub async fn serve_with_core<S>(
 where
     S: Future<Output = ()> + Send + 'static,
 {
-    axum::serve(listener, router_with_clock(core, clock))
-        .with_graceful_shutdown(shutdown)
-        .await
+    let runtime = Runtime::start(core, clock);
+    let serve = serve_runtime(listener, runtime.handle(), shutdown).await;
+    runtime.shutdown().await.map_err(io::Error::other)?;
+    serve
 }
 
 pub async fn serve_with_persistence<S>(
@@ -68,6 +73,7 @@ where
         );
     }
     let core = Arc::new(Mutex::new(loaded.into_core()));
+    let runtime = Runtime::start(Arc::clone(&core), Arc::clone(&clock));
     let (stop, stopped) = watch::channel(false);
     let saver = tokio::spawn(periodic_save(
         store.clone(),
@@ -76,19 +82,53 @@ where
         interval,
         stopped,
     ));
-    let serve = axum::serve(
-        listener,
-        router_with_clock(Arc::clone(&core), Arc::clone(&clock)),
-    )
-    .with_graceful_shutdown(async move {
+    let serve = serve_runtime(listener, runtime.handle(), async move {
         shutdown.await;
         stop.send_replace(true);
     })
     .await;
+    runtime
+        .shutdown()
+        .await
+        .map_err(ServerError::SchedulerTask)?;
     saver.await.map_err(ServerError::SnapshotTask)?;
     serve.map_err(ServerError::Serve)?;
-    store.save(core, clock()).await?;
+    store.save(capture_snapshot(&core)?, clock()).await?;
     Ok(())
+}
+
+async fn serve_runtime<S>(
+    listener: TcpListener,
+    runtime: RuntimeHandle,
+    shutdown: S,
+) -> io::Result<()>
+where
+    S: Future<Output = ()> + Send + 'static,
+{
+    let (force, forced) = watch::channel(false);
+    let mut stopped = runtime.shutdown_signal();
+    let handle = runtime.clone();
+    let serve = axum::serve(
+        listener::ShutdownListener::new(listener, forced),
+        router(runtime),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown.await;
+        handle.begin_shutdown();
+    })
+    .into_future();
+    tokio::pin!(serve);
+    tokio::select! {
+        result = &mut serve => result,
+        () = async {
+            let _ = stopped.wait_for(|stopped| *stopped).await;
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        } => {
+            warn!("shutdown drain window ended; closing remaining sockets");
+            force.send_replace(true);
+            serve.await
+        }
+    }
 }
 
 async fn periodic_save(
@@ -107,7 +147,11 @@ async fn periodic_save(
                 }
             }
             _ = ticker.tick() => {
-                if let Err(error) = store.save(Arc::clone(&core), clock()).await {
+                let result = match capture_snapshot(&core) {
+                    Ok(snapshot) => store.save(snapshot, clock()).await.map_err(ServerError::from),
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = result {
                     warn!(%error, "periodic snapshot save failed");
                 }
             }
@@ -115,8 +159,19 @@ async fn periodic_save(
     }
 }
 
+fn capture_snapshot(core: &SharedCore) -> Result<PersistenceSnapshot, ServerError> {
+    Ok(core
+        .lock()
+        .map_err(|_| ServerError::CorePoisoned)?
+        .persistence_snapshot())
+}
+
 #[derive(Debug, Error)]
 pub enum ServerError {
+    #[error("core state lock was poisoned during snapshot capture")]
+    CorePoisoned,
+    #[error("deadline scheduler task failed")]
+    SchedulerTask(#[source] tokio::task::JoinError),
     #[error("server I/O failed")]
     Serve(#[source] io::Error),
     #[error("snapshot persistence failed")]

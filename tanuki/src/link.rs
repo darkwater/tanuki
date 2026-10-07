@@ -12,6 +12,9 @@ impl LinkName {
         if input.is_empty() {
             return Err(LinkNameParseError::Empty);
         }
+        if matches!(input, "." | "..") {
+            return Err(LinkNameParseError::DotSegment);
+        }
         if input.chars().any(char::is_control) {
             return Err(LinkNameParseError::ControlCharacter);
         }
@@ -48,6 +51,8 @@ impl FromStr for LinkName {
 pub enum LinkNameParseError {
     #[error("a link name may not be empty")]
     Empty,
+    #[error("a link name may not be `.` or `..`")]
+    DotSegment,
     #[error("a link name may not contain control characters")]
     ControlCharacter,
     #[error("a link name contains reserved character `{0}`")]

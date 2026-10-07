@@ -2,7 +2,7 @@
 
 - **Status:** active freshness/link conditions implemented; broader operational diagnostics and real-world use not yet verified.
 - **Origin:** User use case; embedded runtime portion deferred.
-- **Last updated:** 2026-10-05.
+- **Last updated:** 2026-10-07.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -46,3 +46,5 @@ Log schema, event versus retained status, notifier identity/routing and future s
 
 - 2026-10-05: Initial story derived from the design conversation. Preserve the goal while refining concrete usage with the user.
 - 2026-10-06: Added read-only active freshness and link conditions under the reserved diagnostics tree.
+
+- 2026-10-07: Disabled-link diagnostic names are validated before installation, avoiding a core-lock panic from `.`/`..`. Restore now rejects canonical reserved nodes and logs accepted schema warnings; US-11.A1/A4 remain supported without a script runtime.

@@ -13,20 +13,59 @@ pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
 #[derive(Clone, Debug)]
 pub struct DeadlineScheduler {
     commands: mpsc::UnboundedSender<SchedulerCommand>,
+    task: Arc<SchedulerTask>,
+}
+
+#[derive(Debug)]
+struct SchedulerTask {
+    join: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    abort: tokio::task::AbortHandle,
+}
+
+impl Drop for SchedulerTask {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
 }
 
 #[derive(Debug)]
 enum SchedulerCommand {
     Rescan,
     ScheduleClaims(Vec<PendingClaimRelease>),
+    Stop,
 }
 
 impl DeadlineScheduler {
     #[must_use]
     pub fn start(core: Arc<Mutex<Core>>, clock: Clock) -> Self {
         let (commands, receiver) = mpsc::unbounded_channel();
-        tokio::spawn(run(core, clock, receiver));
-        Self { commands }
+        let task = tokio::spawn(run(core, clock, receiver));
+        let abort = task.abort_handle();
+        Self {
+            commands,
+            task: Arc::new(SchedulerTask {
+                join: Mutex::new(Some(task)),
+                abort,
+            }),
+        }
+    }
+
+    pub(crate) fn abort(&self) {
+        self.task.abort.abort();
+    }
+
+    pub async fn shutdown(&self) -> Result<(), tokio::task::JoinError> {
+        let _ = self.commands.send(SchedulerCommand::Stop);
+        let task = self
+            .task
+            .join
+            .lock()
+            .expect("scheduler task lock is not poisoned")
+            .take();
+        if let Some(task) = task {
+            task.await?;
+        }
+        Ok(())
     }
 
     pub fn rescan(&self) {
@@ -92,7 +131,7 @@ async fn run(
         match command {
             Some(SchedulerCommand::Rescan) => {}
             Some(SchedulerCommand::ScheduleClaims(releases)) => claims.extend(releases),
-            None => return,
+            Some(SchedulerCommand::Stop) | None => return,
         }
     }
 }

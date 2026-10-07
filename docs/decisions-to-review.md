@@ -210,3 +210,12 @@ attempt, atomic same-directory replacement, and a final orderly-shutdown
 attempt. Invalid configured data is copied to a non-overwriting adjacent
 backup, logged, and treated as empty state. The default `tanuki.db` path and
 `TANUKI_SNAPSHOT` override are accepted operational defaults.
+
+
+Server review provisional operational default (2026-10-07): shutdown first closes
+mutation/session admission and cancels live streams. HTTP draining and
+WebSocket close delivery have a one-second window, then remaining socket I/O is
+cancelled. Session cleanup and scheduler termination precede final snapshot
+capture. A reply can be lost after an accepted commit; existing unknown-outcome
+semantics continue to apply. This is a small implementation default for review,
+not a new delivery guarantee or a permissions policy.

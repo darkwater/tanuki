@@ -1,4 +1,5 @@
-//! Server-side conversion from authoritative domain state to shared wire DTOs.
+//! Server-side conversion between authoritative domain types and wire DTOs.
+mod request;
 use crate::{
     core::{Change, Diagnostic, Snapshot, UpdateBatch},
     domain::{
@@ -6,7 +7,89 @@ use crate::{
         WriteProvenance,
     },
 };
+pub use request::{RequestConversionError, expiry_update, nonnegative_duration};
+use serde::Serialize;
 pub use tanuki_protocol::*;
+
+#[derive(Serialize)]
+pub struct CommitView {
+    sequence: u64,
+    warnings: Vec<DiagnosticView>,
+}
+
+impl From<&crate::core::CommitOutcome> for CommitView {
+    fn from(outcome: &crate::core::CommitOutcome) -> Self {
+        Self {
+            sequence: outcome.update().sequence().get(),
+            warnings: outcome
+                .warnings()
+                .iter()
+                .map(DiagnosticView::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct LinkInstallView {
+    link: String,
+    enabled: bool,
+    sequence: Option<u64>,
+    warnings: Vec<DiagnosticView>,
+}
+
+impl LinkInstallView {
+    pub fn new(name: &crate::link::LinkName, outcome: &crate::core::LinkInstallOutcome) -> Self {
+        Self {
+            link: name.to_string(),
+            enabled: outcome.enabled(),
+            sequence: outcome.update().map(|update| update.sequence().get()),
+            warnings: outcome
+                .warnings()
+                .iter()
+                .map(DiagnosticView::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct LinkRemovalView {
+    link: String,
+    removed: bool,
+    sequence: Option<u64>,
+}
+
+impl LinkRemovalView {
+    pub fn new(name: &crate::link::LinkName, outcome: &crate::core::LinkRemovalOutcome) -> Self {
+        Self {
+            link: name.to_string(),
+            removed: outcome.removed(),
+            sequence: outcome.update().map(|update| update.sequence().get()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct SchemaInstallView {
+    schema: String,
+    sequence: Option<u64>,
+    warnings: Vec<DiagnosticView>,
+}
+
+impl SchemaInstallView {
+    pub fn new(name: String, outcome: &crate::core::SchemaInstallOutcome) -> Self {
+        Self {
+            schema: name,
+            sequence: outcome.update().map(|update| update.sequence().get()),
+            warnings: outcome
+                .warnings()
+                .iter()
+                .map(DiagnosticView::from)
+                .collect(),
+        }
+    }
+}
 
 impl From<&Snapshot> for SnapshotView {
     fn from(snapshot: &Snapshot) -> Self {

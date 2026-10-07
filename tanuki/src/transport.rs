@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    convert::Infallible,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{convert::Infallible, time::Duration};
 
 use axum::{
     Json, Router,
@@ -21,51 +16,32 @@ use axum::{
 };
 use futures_util::{Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as RawJson, json};
-use tokio::sync::watch;
+
 use tracing::warn;
 
 use crate::{
-    core::{
-        CommitOutcome, Core, CoreError, Diagnostic, SchemaInstallMode, Subscription,
-        SubscriptionCapacity, SubscriptionEnd,
-    },
+    core::{CoreError, SchemaInstallMode, Subscription, SubscriptionCapacity, SubscriptionEnd},
     domain::{
-        ClaimRelease, ClientName, ExpiryUpdate, FiniteF64, InputDefinition, InputKind, NodeKind,
-        NonNegativeDuration, Selection, Selector, SessionHandle, SessionId, Timestamp, TopicPath,
-        ValueKind, WriteBatch, WriteContext, WriteOperation,
+        ClientName, FiniteF64, NodeKind, Selection, Selector, SessionHandle, TopicPath, ValueKind,
+        WriteBatch, WriteContext, WriteOperation,
     },
     link::{LinkDefinition, LinkName},
     protocol::{
-        ClientMessage, ErrorView, JsonValue, RequestId, ServerMessage, SnapshotView, UpdateView,
-        WireExpiry, WireInputKind, WireOperation, WireRelease,
+        ClientMessage, CommitView, ErrorView, JsonValue, LinkInstallView, LinkRemovalView,
+        RequestConversionError, RequestId, SchemaInstallView, ServerMessage, SnapshotView,
+        UpdateView, WireExpiry, WireOperation, expiry_update, nonnegative_duration,
     },
-    scheduler::DeadlineScheduler,
+    runtime::{OpenedConnection, RuntimeError, RuntimeHandle, StreamLease},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
 };
 
-pub type SharedCore = Arc<Mutex<Core>>;
-pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
-
-#[derive(Clone)]
-struct HttpState {
-    core: SharedCore,
-    clock: Clock,
-    scheduler: DeadlineScheduler,
-    connections: Arc<Mutex<BTreeMap<ClientName, ActiveConnection>>>,
-}
-
-#[derive(Debug)]
-struct ActiveConnection {
-    session: SessionId,
-    kick: watch::Sender<bool>,
-}
+pub use crate::runtime::{Clock, SharedCore};
+type HttpState = RuntimeHandle;
 
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const SUBSCRIPTION_BATCH_CAPACITY: usize = 64;
 
-pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
-    let scheduler = DeadlineScheduler::start(core.clone(), clock.clone());
+pub fn router(runtime: RuntimeHandle) -> Router {
     Router::new()
         .route("/v1/write", post(batch_write))
         .route("/v1/state/{*topic}", post(single_state_write))
@@ -76,12 +52,7 @@ pub fn router_with_clock(core: SharedCore, clock: Clock) -> Router {
         .route("/v1/ws", get(websocket_upgrade))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .with_state(HttpState {
-            core,
-            clock,
-            scheduler,
-            connections: Arc::new(Mutex::new(BTreeMap::new())),
-        })
+        .with_state(runtime)
 }
 
 #[derive(Deserialize)]
@@ -95,50 +66,35 @@ async fn install_link(
     Path(name): Path<String>,
     StatelessActor(actor): StatelessActor,
     payload: Result<Json<LinkRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+) -> Result<Json<ApiResponse<LinkInstallView>>, ApiError> {
     let Json(request) = payload.map_err(ApiError::invalid_json)?;
     let name = LinkName::parse(&name)
         .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
     let definition = LinkDefinition::new(name.clone(), request.mount, request.target)
         .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
     let outcome = state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)?
-        .install_link(definition, (state.clock)())
-        .map_err(ApiError::from_core)?;
-    state.scheduler.rescan();
+        .install_link(definition)
+        .map_err(ApiError::from_runtime)?;
     for warning in outcome.warnings() {
         warn!(?warning, link = %name, client = %actor.client(), "link installed with diagnostic");
     }
-    Ok(Json(ApiResponse::success(json!({
-        "link": name.as_str(),
-        "enabled": outcome.enabled(),
-        "sequence": outcome.update().map(|update| update.sequence().get()),
-        "warnings": outcome.warnings().iter().map(diagnostic_json).collect::<Vec<_>>(),
-    }))))
+    Ok(Json(ApiResponse::success(LinkInstallView::new(
+        &name, &outcome,
+    ))))
 }
 
 async fn remove_link(
     State(state): State<HttpState>,
     Path(name): Path<String>,
     StatelessActor(actor): StatelessActor,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+) -> Result<Json<ApiResponse<LinkRemovalView>>, ApiError> {
     let name = LinkName::parse(&name)
         .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
-    let outcome = state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)?
-        .remove_link(&name, (state.clock)())
-        .map_err(ApiError::from_core)?;
-    state.scheduler.rescan();
+    let outcome = state.remove_link(&name).map_err(ApiError::from_runtime)?;
     warn!(link = %name, client = %actor.client(), removed = outcome.removed(), "link removal requested");
-    Ok(Json(ApiResponse::success(json!({
-        "link": name.as_str(),
-        "removed": outcome.removed(),
-        "sequence": outcome.update().map(|update| update.sequence().get()),
-    }))))
+    Ok(Json(ApiResponse::success(LinkRemovalView::new(
+        &name, &outcome,
+    ))))
 }
 
 #[derive(Deserialize)]
@@ -216,7 +172,7 @@ async fn install_schema(
     Path(name): Path<String>,
     StatelessActor(actor): StatelessActor,
     payload: Result<Json<SchemaRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+) -> Result<Json<ApiResponse<SchemaInstallView>>, ApiError> {
     let Json(request) = payload.map_err(ApiError::invalid_json)?;
     let schema = build_schema(&name, request.rules)?;
     let mode = if request.force {
@@ -225,20 +181,14 @@ async fn install_schema(
         SchemaInstallMode::RejectInvalid
     };
     let outcome = state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)?
-        .install_schema(schema, mode, (state.clock)())
-        .map_err(ApiError::from_core)?;
-    state.scheduler.rescan();
+        .install_schema(schema, mode)
+        .map_err(ApiError::from_runtime)?;
     for warning in outcome.warnings() {
         warn!(?warning, schema = %name, client = %actor.client(), "schema installed with diagnostic");
     }
-    Ok(Json(ApiResponse::success(json!({
-        "schema": name,
-        "sequence": outcome.update().map(|update| update.sequence().get()),
-        "warnings": outcome.warnings().iter().map(diagnostic_json).collect::<Vec<_>>(),
-    }))))
+    Ok(Json(ApiResponse::success(SchemaInstallView::new(
+        name, &outcome,
+    ))))
 }
 
 fn build_schema(name: &str, rules: Vec<SchemaRuleRequest>) -> Result<Schema, ApiError> {
@@ -288,7 +238,9 @@ fn build_schema_rule(request: SchemaRuleRequest) -> Result<SchemaRule, ApiError>
     };
     Ok(match request.expected_update_interval {
         Some(interval) => rule
-            .with_expected_update_interval(nonnegative_duration(&interval)?)
+            .with_expected_update_interval(
+                nonnegative_duration(&interval).map_err(ApiError::from_request_conversion)?,
+            )
             .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?,
         None => rule,
     })
@@ -356,11 +308,15 @@ async fn method_not_allowed() -> ApiError {
     }
 }
 
-async fn websocket_upgrade(State(state): State<HttpState>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade
+async fn websocket_upgrade(
+    State(state): State<HttpState>,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let lease = state.track_stream().map_err(ApiError::from_runtime)?;
+    Ok(upgrade
         .max_message_size(MAX_MESSAGE_BYTES)
         .max_frame_size(MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| websocket_session(socket, state))
+        .on_upgrade(move |socket| websocket_session(socket, state, lease)))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -369,7 +325,22 @@ enum WireCodec {
     MessagePack,
 }
 
-async fn websocket_session(mut socket: WebSocket, state: HttpState) {
+async fn websocket_session(mut socket: WebSocket, state: HttpState, _lease: StreamLease) {
+    let mut stopped = state.shutdown_signal();
+    tokio::select! {
+        biased;
+        _ = async { let _ = stopped.wait_for(|stopped| *stopped).await; } => {
+            // Close delivery is bounded; shutdown never waits for a peer response.
+            let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(Some(CloseFrame {
+                code: 1001,
+                reason: "server_shutdown".into(),
+            })))).await;
+        }
+        () = run_websocket_session(&mut socket, &state) => {}
+    }
+}
+
+async fn run_websocket_session(socket: &mut WebSocket, state: &HttpState) {
     let Some(first) = socket.recv().await else {
         return;
     };
@@ -380,7 +351,7 @@ async fn websocket_session(mut socket: WebSocket, state: HttpState) {
         Ok(decoded) => decoded,
         Err((codec, error)) => {
             let _ = send_server_message(
-                &mut socket,
+                socket,
                 codec,
                 &error_message(None, "invalid_message", error),
             )
@@ -395,7 +366,7 @@ async fn websocket_session(mut socket: WebSocket, state: HttpState) {
     } = first
     else {
         let _ = send_server_message(
-            &mut socket,
+            socket,
             codec,
             &error_message(
                 None,
@@ -407,73 +378,53 @@ async fn websocket_session(mut socket: WebSocket, state: HttpState) {
         return;
     };
 
-    let opened = match state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)
-        .and_then(|mut core| {
-            let opened = core
-                .open_session(client.clone(), (state.clock)())
-                .map_err(ApiError::from_core)?;
-            let subscription = core
-                .subscribe(
-                    Selection::new(selectors),
-                    SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
-                        .expect("configured subscription capacity is nonzero"),
-                )
-                .map_err(ApiError::from_core)?;
-            Ok((opened, subscription))
-        }) {
+    let opened = match state.open_connection(
+        client,
+        Selection::new(selectors),
+        SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
+            .expect("configured subscription capacity is nonzero"),
+    ) {
         Ok(value) => value,
         Err(api) => {
-            let _ =
-                send_server_message(&mut socket, codec, &api_server_error(Some(request_id), api))
-                    .await;
+            let _ = send_server_message(
+                socket,
+                codec,
+                &api_server_error(Some(request_id), ApiError::from_runtime(api)),
+            )
+            .await;
             return;
         }
     };
-    let (opened, mut subscription) = opened;
-    let handle = opened.handle().clone();
+    let OpenedConnection {
+        opened,
+        mut subscription,
+        mut kicked,
+        session,
+    } = opened;
+    let handle = session.handle();
     for warning in opened.warnings() {
         warn!(?warning, client = %handle.client(), "WebSocket session opened with diagnostic");
     }
     for release in opened.pending_releases() {
         warn!(topic = %release.topic(), claim = release.claim().get(), "replacement claim release scheduled");
     }
-    state.scheduler.schedule_claims(opened.pending_releases());
-    let (kick, mut kicked) = watch::channel(false);
-    let previous = state
-        .connections
-        .lock()
-        .expect("connection registry lock is not poisoned")
-        .insert(
-            client.clone(),
-            ActiveConnection {
-                session: handle.id(),
-                kick,
-            },
-        );
-    if let Some(previous) = previous {
-        previous.kick.send_replace(true);
-    }
 
     let snapshot =
         crate::protocol::snapshot_message(request_id, subscription.snapshot(), opened.warnings());
-    if send_server_message(&mut socket, codec, &snapshot)
-        .await
-        .is_ok()
-    {
-        websocket_loop(
-            &mut socket,
-            &state,
-            codec,
-            &handle,
-            &mut subscription,
-            &mut kicked,
-        )
-        .await;
+    tokio::select! {
+        biased;
+        _ = async { let _ = kicked.wait_for(|kicked| *kicked).await; } => {
+            let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(Some(CloseFrame {
+                code: 4001,
+                reason: "session_replaced".into(),
+            })))).await;
+        }
+        () = async {
+            if send_server_message(socket, codec, &snapshot).await.is_ok() {
+                websocket_loop(socket, state, codec, handle, &mut subscription).await;
+            }
+        } => {}
     }
-    finish_websocket_session(&state, &handle);
 }
 
 async fn websocket_loop(
@@ -482,19 +433,9 @@ async fn websocket_loop(
     subscription_codec: WireCodec,
     handle: &SessionHandle,
     subscription: &mut Subscription,
-    kicked: &mut watch::Receiver<bool>,
 ) {
     loop {
         tokio::select! {
-            result = kicked.changed() => {
-                if result.is_ok() && *kicked.borrow() {
-                    let _ = socket.send(Message::Close(Some(CloseFrame {
-                        code: 4001,
-                        reason: "session_replaced".into(),
-                    }))).await;
-                }
-                return;
-            }
             update = subscription.update() => {
                 let Some(update) = update else {
                     if subscription.end_reason() == Some(SubscriptionEnd::SlowConsumer) {
@@ -550,67 +491,27 @@ fn apply_websocket_write(
     request_id: RequestId,
     operations: Vec<WireOperation>,
 ) -> ServerMessage {
-    let operations = match operations
-        .into_iter()
-        .map(TryInto::try_into)
-        .collect::<Result<Vec<_>, ApiError>>()
-    {
-        Ok(operations) => operations,
-        Err(error) => return api_server_error(Some(request_id), error),
-    };
-    let batch = match WriteBatch::new(operations) {
+    let batch = match WriteBatch::try_from(operations) {
         Ok(batch) => batch,
         Err(error) => {
-            return error_message(Some(request_id), "empty_batch", error.to_string());
+            return api_server_error(Some(request_id), ApiError::from_request_conversion(error));
         }
     };
     match state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)
-        .and_then(|mut core| {
-            core.apply(
-                &WriteContext::managed(handle.clone()),
-                batch,
-                (state.clock)(),
-            )
-            .map_err(ApiError::from_core)
-        }) {
+        .apply(&WriteContext::managed(handle.clone()), batch)
+        .map_err(ApiError::from_runtime)
+    {
         Ok(outcome) => {
-            state.scheduler.rescan();
             for diagnostic in outcome.warnings() {
                 warn!(?diagnostic, client = %handle.client(), "WebSocket write accepted with diagnostic");
             }
             ServerMessage::Reply {
                 request_id,
-                result: commit_json(&outcome),
+                result: serde_json::to_value(CommitView::from(&outcome))
+                    .expect("commit replies always serialize"),
             }
         }
         Err(error) => api_server_error(Some(request_id), error),
-    }
-}
-
-fn finish_websocket_session(state: &HttpState, handle: &SessionHandle) {
-    if let Ok(mut core) = state.core.lock()
-        && let Ok(outcome) = core.disconnect(handle, (state.clock)())
-    {
-        for warning in outcome.warnings() {
-            warn!(?warning, client = %handle.client(), "disconnect completed with diagnostic");
-        }
-        for release in outcome.pending_releases() {
-            warn!(topic = %release.topic(), claim = release.claim().get(), "claim release scheduled after disconnect");
-        }
-        state.scheduler.schedule_claims(outcome.pending_releases());
-    }
-    let mut connections = state
-        .connections
-        .lock()
-        .expect("connection registry lock is not poisoned");
-    if connections
-        .get(handle.client())
-        .is_some_and(|connection| connection.session == handle.id())
-    {
-        connections.remove(handle.client());
     }
 }
 
@@ -742,14 +643,11 @@ async fn batch_write(
     State(state): State<HttpState>,
     StatelessActor(actor): StatelessActor,
     payload: Result<Json<BatchRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+) -> Result<Json<ApiResponse<CommitView>>, ApiError> {
     let Json(payload) = payload.map_err(ApiError::invalid_json)?;
-    let operations = payload
-        .operations
-        .into_iter()
-        .map(TryInto::try_into)
-        .collect::<Result<Vec<_>, _>>()?;
-    apply(&state, actor, operations)
+    let batch =
+        WriteBatch::try_from(payload.operations).map_err(ApiError::from_request_conversion)?;
+    apply(&state, actor, batch)
 }
 
 async fn single_state_write(
@@ -757,39 +655,32 @@ async fn single_state_write(
     StatelessActor(actor): StatelessActor,
     Path(topic): Path<String>,
     payload: Result<Json<StateRequest>, JsonRejection>,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
+) -> Result<Json<ApiResponse<CommitView>>, ApiError> {
     let Json(payload) = payload.map_err(ApiError::invalid_json)?;
     let topic = TopicPath::parse(&format!("/{topic}"))
         .map_err(|error| ApiError::bad_request("invalid_topic", error.to_string()))?;
     apply(
         &state,
         actor,
-        vec![WriteOperation::PublishState {
+        WriteBatch::new(vec![WriteOperation::PublishState {
             topic,
             value: payload.value.into_inner(),
-            expiry: expiry_update(payload.expiry)?,
-        }],
+            expiry: expiry_update(payload.expiry).map_err(ApiError::from_request_conversion)?,
+        }])
+        .map_err(|error| ApiError::bad_request("empty_batch", error.to_string()))?,
     )
 }
 
 fn apply(
     state: &HttpState,
     actor: WriteContext,
-    operations: Vec<WriteOperation>,
-) -> Result<Json<ApiResponse<RawJson>>, ApiError> {
-    let batch = WriteBatch::new(operations)
-        .map_err(|error| ApiError::bad_request("empty_batch", error.to_string()))?;
-    let outcome = state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)?
-        .apply(&actor, batch, (state.clock)())
-        .map_err(ApiError::from_core)?;
+    batch: WriteBatch,
+) -> Result<Json<ApiResponse<CommitView>>, ApiError> {
+    let outcome = state.apply(&actor, batch).map_err(ApiError::from_runtime)?;
     for diagnostic in outcome.warnings() {
         warn!(?diagnostic, client = %actor.client(), "write accepted with diagnostic");
     }
-    state.scheduler.rescan();
-    Ok(Json(ApiResponse::success(commit_json(&outcome))))
+    Ok(Json(ApiResponse::success(CommitView::from(&outcome))))
 }
 
 async fn snapshot(
@@ -799,10 +690,8 @@ async fn snapshot(
     let Query(query) =
         query.map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
     let snapshot = state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)?
-        .read(&Selection::new(vec![query.select]));
+        .read(&Selection::new(vec![query.select]))
+        .map_err(ApiError::from_runtime)?;
     Ok(Json(ApiResponse::success(SnapshotView::from(&snapshot))))
 }
 
@@ -812,40 +701,46 @@ async fn sse(
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let Query(query) =
         query.map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
+    let lease = state.track_stream().map_err(ApiError::from_runtime)?;
+    let stopped = state.shutdown_signal();
     let subscription = state
-        .core
-        .lock()
-        .map_err(ApiError::poisoned)?
         .subscribe(
             Selection::new(vec![query.select]),
             SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
                 .expect("configured subscription capacity is nonzero"),
         )
-        .map_err(ApiError::from_core)?;
+        .map_err(ApiError::from_runtime)?;
     let initial = sse_json_event(
         "snapshot",
         subscription.snapshot().sequence().get(),
         &SnapshotView::from(subscription.snapshot()),
     );
-    let updates = stream::unfold(subscription, |mut subscription| async move {
-        let update = subscription.update().await;
-        match update {
-            Some(update) => {
-                let event = sse_json_event(
-                    "update",
-                    update.sequence().get(),
-                    &UpdateView::from(&update),
-                );
-                Some((Ok(event), subscription))
-            }
-            None => {
-                if subscription.end_reason() == Some(SubscriptionEnd::SlowConsumer) {
-                    warn!("SSE subscription disconnected as a slow consumer");
+    let updates = stream::unfold(
+        (subscription, stopped, lease),
+        |(mut subscription, mut stopped, lease)| async move {
+            let update = tokio::select! {
+                biased;
+                _ = async { let _ = stopped.wait_for(|stopped| *stopped).await; } => return None,
+                update = subscription.update() => update,
+            };
+            match update {
+                Some(update) => {
+                    let event = sse_json_event(
+                        "update",
+                        update.sequence().get(),
+                        &UpdateView::from(&update),
+                    );
+                    Some((Ok(event), (subscription, stopped, lease)))
                 }
-                None
+                None => {
+                    if subscription.end_reason() == Some(SubscriptionEnd::SlowConsumer) {
+                        warn!("SSE subscription disconnected as a slow consumer");
+                    }
+                    None
+                }
             }
-        }
-    });
+        },
+    );
     let events = stream::once(async { Ok(initial) }).chain(updates);
     Ok(Sse::new(events).keep_alive(
         KeepAlive::new()
@@ -874,6 +769,12 @@ impl<T> ApiResponse<T> {
     }
 }
 
+#[derive(Serialize)]
+struct ApiErrorResponse {
+    ok: bool,
+    error: ErrorView,
+}
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
@@ -890,15 +791,32 @@ impl ApiError {
         }
     }
 
+    fn from_request_conversion(error: RequestConversionError) -> Self {
+        let code = match &error {
+            RequestConversionError::InvalidDuration(_) => "invalid_duration",
+            RequestConversionError::NegativeDuration(_) => "negative_duration",
+            RequestConversionError::Batch(_) => "empty_batch",
+        };
+        Self::bad_request(code, error.to_string())
+    }
+
     fn invalid_json(error: JsonRejection) -> Self {
         Self::bad_request("invalid_json", error.body_text())
     }
 
-    fn poisoned<T>(_error: std::sync::PoisonError<T>) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal_error",
-            message: "core state lock was poisoned".to_owned(),
+    fn from_runtime(error: RuntimeError) -> Self {
+        match error {
+            RuntimeError::Core(error) => Self::from_core(error),
+            RuntimeError::Stopping => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "server_shutdown",
+                message: "server is shutting down".to_owned(),
+            },
+            RuntimeError::Poisoned => Self {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "internal_error",
+                message: "server state lock was poisoned".to_owned(),
+            },
         }
     }
 
@@ -956,163 +874,14 @@ impl IntoResponse for ApiError {
         }
         (
             self.status,
-            Json(json!({
-                "ok": false,
-                "error": {"code": self.code, "message": self.message}
-            })),
+            Json(ApiErrorResponse {
+                ok: false,
+                error: ErrorView {
+                    code: self.code.to_owned(),
+                    message: self.message,
+                },
+            }),
         )
             .into_response()
-    }
-}
-
-impl TryFrom<WireOperation> for WriteOperation {
-    type Error = ApiError;
-
-    fn try_from(value: WireOperation) -> Result<Self, Self::Error> {
-        Ok(match value {
-            WireOperation::PublishState {
-                topic,
-                value,
-                expiry,
-            } => Self::PublishState {
-                topic,
-                value: value.into_inner(),
-                expiry: expiry_update(expiry)?,
-            },
-            WireOperation::PublishEvent { topic, value } => Self::PublishEvent {
-                topic,
-                value: value.into_inner(),
-            },
-            WireOperation::DefineInput { topic, kind } => Self::DefineInput {
-                topic,
-                kind: kind.into(),
-                definition: InputDefinition::new(),
-            },
-            WireOperation::ClaimInput { topic, release } => Self::ClaimInput {
-                topic,
-                release: release.try_into()?,
-            },
-            WireOperation::SubmitDesired {
-                topic,
-                value,
-                expiry,
-            } => Self::SubmitDesired {
-                topic,
-                value: value.into_inner(),
-                expiry: expiry_update(expiry)?,
-            },
-            WireOperation::SubmitCommand { topic, value } => Self::SubmitCommand {
-                topic,
-                value: value.into_inner(),
-            },
-            WireOperation::ClearDesired { topic } => Self::ClearDesired { topic },
-            WireOperation::RemoveNode { topic } => Self::RemoveNode { topic },
-        })
-    }
-}
-
-impl From<WireInputKind> for InputKind {
-    fn from(value: WireInputKind) -> Self {
-        match value {
-            WireInputKind::Desired => Self::Desired,
-            WireInputKind::Command => Self::Command,
-        }
-    }
-}
-
-impl TryFrom<WireExpiry> for ExpiryUpdate {
-    type Error = ApiError;
-
-    fn try_from(value: WireExpiry) -> Result<Self, Self::Error> {
-        Ok(match value {
-            WireExpiry::Preserve => Self::Preserve,
-            WireExpiry::Clear => Self::Clear,
-            WireExpiry::Set { duration } => Self::Set(nonnegative_duration(&duration)?),
-        })
-    }
-}
-
-fn expiry_update(value: Option<WireExpiry>) -> Result<ExpiryUpdate, ApiError> {
-    value
-        .map(TryInto::try_into)
-        .transpose()
-        .map(|expiry| expiry.unwrap_or(ExpiryUpdate::Preserve))
-}
-
-impl TryFrom<WireRelease> for ClaimRelease {
-    type Error = ApiError;
-
-    fn try_from(value: WireRelease) -> Result<Self, Self::Error> {
-        Ok(match value {
-            WireRelease::Immediate => Self::Immediate,
-            WireRelease::After { duration } => Self::After(nonnegative_duration(&duration)?),
-        })
-    }
-}
-
-fn nonnegative_duration(input: &str) -> Result<NonNegativeDuration, ApiError> {
-    let duration = input.parse().map_err(|error: jiff::Error| {
-        ApiError::bad_request("invalid_duration", error.to_string())
-    })?;
-    NonNegativeDuration::new(duration)
-        .map_err(|error| ApiError::bad_request("negative_duration", error.to_string()))
-}
-
-fn commit_json(outcome: &CommitOutcome) -> RawJson {
-    json!({
-        "sequence": outcome.update().sequence().get(),
-        "warnings": outcome
-            .warnings()
-            .iter()
-            .map(diagnostic_json)
-            .collect::<Vec<_>>()
-    })
-}
-
-fn diagnostic_json(diagnostic: &Diagnostic) -> RawJson {
-    match diagnostic {
-        Diagnostic::OutputOwnerChanged {
-            topic,
-            previous,
-            replacement,
-        } => {
-            json!({"code": "output_owner_changed", "topic": topic, "previous": previous, "replacement": replacement})
-        }
-        Diagnostic::NodeKindChanged {
-            topic,
-            previous,
-            replacement,
-        } => {
-            json!({"code": "node_kind_changed", "topic": topic, "previous": format!("{previous:?}").to_lowercase(), "replacement": format!("{replacement:?}").to_lowercase()})
-        }
-        Diagnostic::NodeAlreadyAbsent { topic } => {
-            json!({"code": "node_already_absent", "topic": topic})
-        }
-        Diagnostic::SessionReplaced {
-            client,
-            previous,
-            replacement,
-        } => {
-            json!({"code": "session_replaced", "client": client, "previous": previous.get(), "replacement": replacement.get()})
-        }
-        Diagnostic::InputClaimReplaced {
-            topic,
-            previous,
-            replacement,
-        } => {
-            json!({"code": "input_claim_replaced", "topic": topic, "previous": previous, "replacement": replacement})
-        }
-        Diagnostic::ClaimGraceOutOfRange { topic } => {
-            json!({"code": "claim_grace_out_of_range", "topic": topic})
-        }
-        Diagnostic::SchemaWarning(issue) => {
-            json!({"code": "schema_warning", "topic": issue.topic(), "message": issue.kind().to_string()})
-        }
-        Diagnostic::LinkDisabled { link, issue } => {
-            json!({"code": "link_disabled", "link": link.as_str(), "topic": issue.topic(), "message": issue.kind().to_string()})
-        }
-        Diagnostic::LinkEnabled { link } => {
-            json!({"code": "link_enabled", "link": link.as_str()})
-        }
     }
 }

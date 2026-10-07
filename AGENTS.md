@@ -140,6 +140,10 @@ For task completion report behaviour delivered, tests run and their results,
 any chosen provisional defaults, and remaining limitations. Do not mark an
 entire milestone done because only its happy path works.
 
+Always commit and push completed work after running the required checks. Include
+the code, tests, and documentation for the task in the commit. If committing or
+pushing is blocked, report the blocker explicitly.
+
 ## Living user stories
 
 Read `docs/user-stories/USER-STORIES.md` and the relevant individual stories

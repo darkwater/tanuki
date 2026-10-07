@@ -78,3 +78,24 @@ Only `x86_64-unknown-linux-gnu` is installed. This is not evidence of a code
 portability failure or of browser support. Browser transport and bindings remain
 outside this implementation. Native checks and standalone protocol compilation
 pass on the pinned toolchain; `cargo test` defaults to all workspace members.
+
+
+## Server boundary verification — 2026-10-07
+
+The server review keeps the compiler and all dependency versions unchanged and
+adds no unstable gates. Tokio watch `wait_for`/`send_modify` and join handles
+provide cancellation, stream drainage, and scheduler ownership. A retained
+Tokio `AbortHandle` also stops timers when the runtime owner is dropped while
+other handles remain alive. Watch borrows
+are discarded before awaiting socket work. Axum's native `Listener` interface
+wraps accepted TCP I/O so a stalled peer cannot block shutdown forever; its
+native accept implementation supplies retry/error handling. A single boxed
+notification future at that I/O boundary preserves wakeups without a general
+transport trait or async-trait dependency.
+
+APIs were checked in the pinned dependency source and compiled against the pin:
+[Tokio watch receiver](https://docs.rs/tokio/latest/tokio/sync/watch/struct.Receiver.html),
+[Tokio watch sender](https://docs.rs/tokio/latest/tokio/sync/watch/struct.Sender.html),
+[Axum listener](https://docs.rs/axum/latest/axum/serve/trait.Listener.html),
+and [Tokio AsyncRead](https://docs.rs/tokio/latest/tokio/io/trait.AsyncRead.html).
+The pages resolve to Tokio 1.53.2 and Axum 0.8.9 at verification time.

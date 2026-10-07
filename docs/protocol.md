@@ -267,3 +267,25 @@ per listener and configurable 10-second connect/hello/write deadlines. There is
 no idle timeout. TLS, browser bindings, Iced integration, automatic reconnect
 and cross-topic Serde shapes are deferred. Full APIs, lifecycle semantics and
 compiled examples are documented in [the client README](../tanuki-client/README.md).
+
+
+## Server boundary and shutdown — 2026-10-07
+
+HTTP and WebSocket request conversion shares `protocol::RequestConversionError`
+and the same validated `WriteBatch` conversion. Typed commit and management
+response DTOs reuse `DiagnosticView`; HTTP envelopes and the existing generic
+WebSocket reply result retain their version-1 JSON shape. No wire or snapshot
+version change is required by this refactor.
+
+Once shutdown closes admission, a request that reaches a still-draining adapter
+is rejected with the common `server_shutdown` code (HTTP 503). Already accepted
+writes remain committed even if shutdown prevents delivery of their reply.
+WebSockets attempt close code 1001 with reason `server_shutdown`; a forced
+socket close may instead appear as EOF or transport failure. HTTP/SSE draining
+and WebSocket close delivery have a provisional one-second window, after which
+remaining socket I/O is cancelled. Reconnect obtains a new snapshot as usual.
+
+Link management rejects names `.` and `..` with `invalid_link`; other existing
+valid punctuation, spaces, and Unicode names remain supported. Restore rejects
+reserved canonical nodes and denying policy violations before exposing state;
+warning policies still accept without casting stored data.
