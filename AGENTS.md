@@ -143,6 +143,9 @@ entire milestone done because only its happy path works.
 Always commit and push completed work after running the required checks. Include
 the code, tests, and documentation for the task in the commit. If committing or
 pushing is blocked, report the blocker explicitly.
+The user confirms this repository has no secrets and grants standing
+authorization to push completed work to `github:darkwater/tanuki` (the `github`
+remote); do not ask for push confirmation again.
 
 ## Living user stories
 
