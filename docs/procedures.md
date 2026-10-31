@@ -337,3 +337,28 @@ blocking destructor, panic-catching wrapper or speculative framework is used.
 The separate POSIX PTY smoke procedure in `tanuki-ui/tools/terminal-smoke.py`
 checks real terminal attributes and actual production binaries in temporary
 snapshot storage. It is distinct from headless CI and deployment verification.
+
+## Browser SDK procedures — 2026-10-31
+
+Install `wasm32-unknown-unknown` for the pinned nightly, then run
+`cargo check -p tanuki-client --target wasm32-unknown-unknown --locked`.
+A Rust browser application depends on the same client crate; Cargo selects its
+browser dependencies. Drive application futures through a framework's local
+executor or `wasm_bindgen_futures::spawn_local`, without a Tokio runtime. The
+[SDK guide](../tanuki-client/README.md#browser-webassembly) includes usage and tests.
+
+Connect/hello waits for the browser open event and correlated snapshot under the
+configured deadline. Registration captures current state before forwarding new
+complete batches. Writes still pass server validation before commit/publication;
+the browser does not become another mutation authority. Errors and local unsent
+versus potentially applied outcomes remain visible. Browser timer delays during
+backgrounding/suspension do not authorize a retry. Reconnecting is an explicit
+new Session with a fresh snapshot, with no occurrence replay.
+
+On application teardown, drop observers and await Session close when possible.
+It joins SDK tasks and requests a normal socket close; server disconnect/expiry
+procedures run on the server afterward. Drop signals shutdown but cannot make
+page unload run queued futures. Browser certificate/mixed-content restrictions
+apply; use a TLS proxy for HTTPS deployments. The test helper starts the actual
+production binary on an assigned loopback port with temporary persistence, waits
+for its readiness log, runs browser tests and then sends SIGINT and joins it.

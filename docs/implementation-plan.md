@@ -456,3 +456,14 @@ direction does not reopen tasks 00–12 or imply a delivered UI.
 The [inspector implementation handoff](inspector-implementation-plan.md) breaks
 this direction into six bounded tasks with two architecture checkpoints. Its
 terminal UI and delivery defaults are proposals pending checkpoint A.
+
+### Browser SDK follow-through — 2026-10-31
+
+The user requested WASM/web support for the existing Rust SDK. This supersedes
+the earlier browser-transport deferral: the client now selects native or browser
+WebSocket/executor/time adapters while preserving shared Session/typed/topic/
+projection behavior. Protocol and client compile for `wasm32-unknown-unknown`;
+headless browser tests use the production binary in debug and release, alongside
+native workspace gates. See [browser evidence](testing.md#browser-sdk-acceptance--2026-10-31).
+No JavaScript binding package or rendered web application is delivered. Node,
+WASI, worker contexts, other browser engines and TLS deployment remain unverified.

@@ -333,3 +333,14 @@ On 2026-10-07 the workspace was flattened to the user's usual convention:
 `tanuki/`, `tanuki-protocol/`, and `tanuki-client/` directly at the root. The server
 source/tests moved into its package; shared documentation and Cargo.lock remain
 at the workspace root. References above now point to the current package paths.
+
+## Browser follow-through — 2026-10-31
+
+The user's WASM/web SDK request supersedes the native handoff's transport
+restriction. Browser `wasm32-unknown-unknown` now uses Gloo WebSocket, local joined
+abortable tasks and browser timers beneath the shared Rust API. Both codecs,
+atomic/raw/latest observation, close/replacement and deadlines have real-browser
+coverage against the production server. The target standard library is installed
+and protocol/client compilation succeeds. See the [SDK guide](../tanuki-client/README.md#browser-webassembly)
+and [verification](testing.md#browser-sdk-acceptance--2026-10-31). JavaScript
+bindings, rendered UI and deployed browser/TLS usage remain separate work.

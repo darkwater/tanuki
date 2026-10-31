@@ -523,3 +523,28 @@ argument iteration and typed errors. Main parses before acquiring terminal
 state; post-run errors are escaped and printed after restoration. The UI uses
 Ratatui 0.30.2 and Crossterm 0.29.0 on the unchanged compiler. It introduces no
 server/SDK/wire changes or policy introspection APIs.
+
+## Browser SDK adapter — 2026-10-31
+
+`tanuki-client` now builds for browser `wasm32-unknown-unknown`. `connection/native`
+retains Tokio/Tungstenite I/O; `connection/browser` owns a Gloo WebSocket and
+translates text, binary, close and transport results. Common codec options and
+errors stay in `connection`. Browser control frames are handled by its WebSocket
+implementation. No dynamic transport trait or additional workspace crate is needed.
+
+`runtime` selects concrete native Tokio spawning/time or browser local tasks,
+abortable joined futures, Performance-based instants and cancel-on-drop timers.
+Native spawning retains Send bounds; browser spawning accepts local futures.
+Tokio's executor-independent sync channels, semaphore and select macro remain
+shared. Session still owns driver/writer/projections, and registration, mutation
+of the selected cache, publication, correlation and lag semantics are shared.
+
+Browser close explicitly consumes/closes the underlying socket because Gloo's
+Sink close is a no-op. Awaited Session close joins SDK work and requests network
+closure; browser shutdown cannot acknowledge server cleanup. Native backpressure
+waits for socket readiness, whereas browser sends hand data to browser buffers.
+Gloo also queues incoming browser events without a bound. SDK queue capacities
+and the 1 MiB per-message check therefore do not bound total browser allocations;
+incoming size checks run after browser message assembly. This is the practical
+tradeoff for using the established browser adapter. It does not change the raw
+listener lag or complete-snapshot contracts. Page suspension can delay deadlines.

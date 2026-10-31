@@ -290,3 +290,17 @@ restoration attempts cursor show even if leaving the screen fails. Do not add a
 production panic switch or catch all panics. A1/A2 get local inspector evidence;
 A3/A4 and deployed hardware remain unverified. Run full workspace debug/release,
 formatting and all-target Clippy at this milestone.
+
+## Browser SDK transport — US-09, 2026-10-31
+
+Compile protocol/client for `wasm32-unknown-unknown` and run actual Rust WASM in
+headless Chrome against the production server, in debug and release. Cover both
+outgoing codecs, mixed wire frames, typed bytes, complete paired state, preserved
+registration baseline, removal and immutable history, independent raw listeners,
+explicit lag, invalid endpoint/oversized writes, local unsent deadlines, duplicate
+name replacement with close reason, and joined close. Run shared projection and
+raw drainage tests in the browser too. Unit-check malformed/trailing/oversized
+incoming frames and clean/abnormal close codes. A silent socket peer may inject a
+stalled handshake for browser timer testing; it does not substitute for the real
+server's behavior. Browser TLS deployment, other engines and rendered web UI
+remain unverified. See [test evidence](testing.md#browser-sdk-acceptance--2026-10-31).

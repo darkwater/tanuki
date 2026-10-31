@@ -333,3 +333,19 @@ No schema/link enumeration or explanation endpoint is introduced. The terminal
 says schema information is unavailable and still cannot fabricate the missing
 connection-topic projection. Public inspection API design is checkpoint B,
 Task 04. Milestone 1 node inspection is not complete public-state coverage.
+
+## Browser Rust SDK — 2026-10-31
+
+The same Rust `Connection`, `Session`, typed write and observation APIs now work
+on browser `wasm32-unknown-unknown`, using `/v1/ws` unchanged. JSON remains the
+outgoing default; binary MessagePack and mixed incoming frame codecs work too.
+Limits, initial baselines, whole-batch publication, lag, replacement code/reason,
+and local versus unknown write outcomes retain their SDK meanings.
+
+Browser WebSockets support `ws://` and browser-managed `wss://`; an HTTPS page
+normally needs a TLS proxy and `wss://`. TLS deployment was not tested here.
+Browser control frames, certificates and networking restrictions are outside
+Rust's socket API, and handshake errors may omit details. Browser receive size
+checks occur after complete-message allocation; timers depend on event-loop
+scheduling. Native TLS, JavaScript bindings and automatic reconnect remain
+outside this increment. See [SDK usage](../tanuki-client/README.md#browser-webassembly).

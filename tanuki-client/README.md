@@ -1,13 +1,15 @@
 # tanuki-client
 
-Native async Rust SDK for Tanuki's v1 WebSocket protocol. Use the repository's
+Async Rust SDK for Tanuki's v1 WebSocket protocol, on native and browser WASM. Use the repository's
 pinned nightly. The client depends on `tanuki-protocol`, never on the server.
-The current native transport profile is `ws://` with Tokio/Tungstenite; TLS,
-browser transport, JavaScript bindings and framework integration are deferred.
+Native uses Tokio/Tungstenite with `ws://`. Browser builds for
+`wasm32-unknown-unknown` use the browser's WebSocket API (`ws://`/`wss://`), local
+tasks and browser timers. The same Rust Session, typed handles and observers
+work on both targets. JavaScript bindings and framework integration remain deferred.
 
 ## Start with a session
 
-```rust,no_run
+```rust,no_run,standalone_crate
 use tanuki_client::{Session, ExpiryUpdate};
 use tanuki_client::protocol::{ClientName, Selector};
 
@@ -114,7 +116,7 @@ release capacity, and late replies cannot resolve another request.
 
 ## Lifetime and examples
 
-Session owns the native driver/writer and projection tasks. Dropping an observer
+Session owns the driver/writer and projection tasks. Dropping an observer
 cancels only its projection. Dropping Session signals shutdown; weak topic handles
 cannot keep it alive. `close().await` joins tasks, attempts WebSocket close and
 bounds writer shutdown to one second; a prior abnormal termination is returned.
@@ -122,6 +124,85 @@ There is no library-owned runtime or blocking destructor.
 
 Shutdown rejects requests still in the driver's command queue. Requests already
 handed to the socket writer may still be applied; closing is not rollback.
+
+## Browser WebAssembly
+
+Install the target on the pinned compiler, then check the SDK:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo check -p tanuki-client --target wasm32-unknown-unknown --locked
+```
+
+Depend on `tanuki-client` normally from a Rust web application. Target-specific
+dependencies select the browser adapter automatically; no SDK feature switch or
+Tokio runtime is needed. Run application futures on your framework's local
+executor or `wasm_bindgen_futures::spawn_local` (add `wasm-bindgen-futures` to
+your application dependencies when using it directly). For example:
+
+```rust,no_run,standalone_crate
+# #[cfg(target_arch = "wasm32")]
+# mod browser_example {
+use tanuki_client::{ClientError, Session};
+use tanuki_client::protocol::{ClientName, Selector};
+
+pub fn start(url: String) {
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(error) = watch_battery(&url).await {
+            tracing::error!(%error, "battery subscription ended");
+        }
+    });
+}
+
+async fn watch_battery(url: &str) -> Result<(), ClientError> {
+    let session = Session::connect(
+        url, ClientName::parse("web dashboard").unwrap(),
+        vec![Selector::parse("/battery/*").unwrap()],
+    ).await?;
+    let battery = session.state::<u8>("/battery/laptop")?;
+    let mut observer = session.observe(&battery).await?;
+    while let Some(snapshot) = observer.recv().await? {
+        // Pass snapshot.read(&battery) to your UI here.
+        tracing::debug!(sequence = snapshot.sequence(), "battery view updated");
+    }
+    session.close().await
+}
+# }
+```
+
+Use `wss://` behind a TLS proxy for an HTTPS page. Certificate validation,
+mixed-content rules, connection failures and ping/pong handling belong to the
+browser. Browser errors may hide handshake details. The server still accepts
+the same `/v1/ws` protocol and validates every write.
+
+The browser may throttle timers in background tabs or suspend tasks entirely;
+deadlines fire when its event loop runs, without retrying writes. The SDK keeps
+its bounded pending/write/raw queues and latest-state observer policy. Browser
+network buffers and Gloo's incoming event queue are additional buffers outside
+those limits. The 1 MiB receive limit is checked after the browser has assembled
+and allocated a complete message; it is not a total browser memory limit.
+
+`close().await` joins SDK tasks and requests a WebSocket close. It does not wait
+for a server cleanup acknowledgement. Dropping Session signals shutdown while
+the event loop runs; unloading a page cannot guarantee awaited cleanup.
+Native examples below need Tokio. Node, WASI, web workers, Firefox/Safari and a
+deployed browser application have not been verified by this increment.
+
+Run browser acceptance tests against an isolated production server with:
+
+```sh
+cargo install wasm-bindgen-cli --version 0.2.130 --locked
+# Install Chrome + matching chromedriver (or configure another WebDriver).
+python3 tanuki-client/tests/run-browser.py
+python3 tanuki-client/tests/run-browser.py --release
+```
+
+The helper uses temporary storage and dynamically assigned ports, then closes
+the server. `CHROMEDRIVER` selects the driver binary; optional `CHROME_BIN`
+selects a nonstandard browser binary. The test-runner version must match the
+lockfile's wasm-bindgen version. See [testing](../docs/testing.md) for coverage.
+
+## Native examples
 
 From the repository root, run the server and use separate terminals:
 

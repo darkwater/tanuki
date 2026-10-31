@@ -1,4 +1,5 @@
-use crate::connection::encode_message;
+use crate::connection::{Message, encode_message};
+use crate::runtime::{self, Instant, JoinHandle, timeout};
 use crate::{Codec, Connection, ConnectionError, SelectedView, protocol::*};
 use futures_util::{SinkExt, StreamExt};
 use std::{
@@ -6,11 +7,7 @@ use std::{
     sync::{Arc, Mutex, Weak},
     time::Duration,
 };
-use tokio::{
-    sync::{Semaphore, mpsc, oneshot, watch},
-    task::JoinHandle,
-    time::{Instant, timeout},
-};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use tracing::Instrument;
 
 #[derive(Clone, Debug)]
@@ -42,8 +39,8 @@ pub enum SessionEnd {
     Connection(#[source] Arc<ConnectionError>),
     #[error("invalid update sequence: {0}")]
     Sequence(#[source] crate::ClientViewError),
-    #[error("native SDK task failed: {0}")]
-    Task(#[source] Arc<tokio::task::JoinError>),
+    #[error("SDK task failed: {0}")]
+    Task(#[source] Arc<runtime::JoinError>),
     #[error("protocol violation: {0}")]
     Protocol(String),
     #[error("uncorrelated server error: {0:?}")]
@@ -115,7 +112,7 @@ impl Drop for Inner {
 
 enum DriverCommand {
     Write {
-        frame: tokio_tungstenite::tungstenite::Message,
+        frame: Message,
         id: RequestId,
         reply: oneshot::Sender<Result<WriteReceipt, ClientError>>,
         deadline: Instant,
@@ -204,7 +201,7 @@ impl Session {
             end,
             projections: Mutex::new(vec![]),
         });
-        let driver = tokio::spawn(
+        let driver = runtime::spawn(
             run_driver(
                 connection,
                 rx,
@@ -414,7 +411,7 @@ async fn run_driver(
     // Socket writes can wait on network backpressure; they never block reading or registration.
     let (outgoing, mut sends) = mpsc::channel(outgoing_capacity);
     let (failed, mut failures) = mpsc::channel(1);
-    let mut writer = tokio::spawn(async move {
+    let mut writer = runtime::spawn(async move {
         while let Some(frame) = sends.recv().await {
             if let Err(source) = sink.send(frame).await {
                 let _ = failed.send(source).await;
@@ -442,7 +439,7 @@ async fn run_driver(
         tokio::select! {
             _ = stopped.changed() => break SessionEnd::Closed,
             Some(error) = failures.recv() => break SessionEnd::Connection(Arc::new(ConnectionError::Transport(error))),
-            _ = tokio::time::sleep_until(next_deadline) => {
+            _ = runtime::sleep_until(next_deadline) => {
                 let now = Instant::now();
                 let expired: Vec<_> = pending.iter().filter(|(_, p)| p.deadline <= now).map(|(id, _)| id.clone()).collect();
                 for id in expired { if let Some(p) = pending.remove(&id) { let _ = p.reply.send(Err(ClientError::ReplyTimeout)); } }
@@ -466,7 +463,7 @@ async fn run_driver(
                 }
             },
             frame = stream.next() => {
-                use tokio_tungstenite::tungstenite::Message;
+                #[cfg(not(target_arch = "wasm32"))]
                 let message = match frame {
                     Some(Ok(Message::Text(text))) => serde_json::from_str::<ServerMessage>(&text).map_err(ConnectionError::from),
                     Some(Ok(Message::Binary(bytes))) => decode_messagepack::<ServerMessage>(&bytes).map_err(ConnectionError::from),
@@ -480,6 +477,12 @@ async fn run_driver(
                     }
                     Some(Err(source)) => break SessionEnd::Connection(Arc::new(ConnectionError::Transport(source))),
                     None => break SessionEnd::Closed,
+                };
+                #[cfg(target_arch = "wasm32")]
+                let message = match crate::connection::decode_frame(frame) {
+                    Ok(Some(message)) => Ok(message),
+                    Ok(None) => break SessionEnd::Closed,
+                    Err(error) => Err(error),
                 };
                 let message = match message { Ok(message) => message, Err(error) => break SessionEnd::Connection(Arc::new(error)) };
                 match message {
@@ -538,7 +541,8 @@ async fn run_driver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     async fn clean_closure_drains_already_admitted_batches() {
         let (mut raw, data, terminal) = raw_channel(
             SnapshotView {

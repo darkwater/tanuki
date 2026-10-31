@@ -1,8 +1,8 @@
 # US-09 — Dashboard combining unrelated topics
 
-- **Status:** simulated live WebSocket and SSE dashboard delivery implemented; rendering and real-world use not yet verified.
+- **Status:** simulated native/browser Rust WebSocket and SSE dashboard delivery implemented; rendering and real-world use not yet verified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-07.
+- **Last updated:** 2026-10-31.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -75,3 +75,14 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
   with the same snapshot/atomic-update boundary and no replay promise.
 
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
+
+- 2026-10-31: The user requested WASM/web support for the Rust SDK. Browser
+  Session, typed handles and observations now run in headless Chrome against the
+  production server. `tanuki-client/tests/browser.rs` verifies US-09.A1/A2 and the
+  removal portion of A4, with paired `/browser-json/{hue,brightness}` and
+  `/browser-msgpack/{hue,brightness}` updates plus binary bytes. Shared projection
+  tests also run in WASM, including immutable history, latest output and terminal
+  input lag. Existing native coverage retains null-versus-absent criteria; this
+  increment does not claim every criterion was exercised in every browser.
+  Rust web application integration is documented; no rendered dashboard,
+  JavaScript SDK, TLS deployment or actual user deployment has been verified.

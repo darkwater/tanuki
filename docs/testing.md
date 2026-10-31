@@ -544,3 +544,64 @@ The final actual-binary PTY run passed all five restoration cases after the
 footer/layout correction. Provisional UI defaults are 100 ms dirty redraw ticks,
 a 60x10 minimum full layout and eight-scalar horizontal key steps. There is no
 new compiler gate, server API or deployment claim.
+
+## Browser SDK acceptance — 2026-10-31
+
+`tanuki-client` and `tanuki-protocol` now compile for
+`wasm32-unknown-unknown` on the pinned nightly. Browser transport uses the same
+Session driver, typed operations and projections; native SDK/server/UI regression
+suites remain supported. The browser suite runs real Rust WASM in headless Chrome
+against the production server binary, with temporary persistence and assigned
+ports. `run-browser.py` waits for the listener readiness log, launches the WASM
+runner, then requests SIGINT and joins shutdown. Only a silent handshake peer is
+scripted for timeout injection; it does not implement Tanuki's server behavior.
+
+| Evidence | Contract |
+| --- | --- |
+| `tests/browser.rs::sessions_preserve_atomic_batches_typed_bytes_and_removal_in_both_codecs` | US-09.A1/A2 and removal portion of A4: baseline, complete paired hue/brightness, JSON/MessagePack bytes, immutable history, continued delivery after observer drop, dead weak handles after close |
+| `direct_connection_waits_for_open_mixes_codecs_and_reports_remote_errors` | Handshake readiness, explicit hello, mixed outgoing codecs and correlated remote errors, actual close and rejection of later sends |
+| `replacement_preserves_abnormal_close_code_and_reason` | Production same-name replacement preserves code 4001/reason, reports terminal listener error once, joins both sessions |
+| `raw_lag_is_local_and_reported_once` | Independent bounded listeners; healthy consumer establishes driver progress without sleeps; slow listener reports lag once |
+| `invalid_urls_and_oversized_writes_fail_locally`, `zero_write_deadline_rejects_before_sending` | Typed failures before sending, no cache mutation, connection remains live |
+| `stalled_handshake_obeys_browser_deadline` | Browser timer cancels a pending open/hello with ConnectTimeout |
+| `connection::browser::tests` | Receive size limits, malformed JSON/trailing MessagePack and clean/abnormal close translation |
+| `runtime::tests` | Local task join/abort drops future state; monotonic waits and timeout work without a Tokio runtime |
+| Shared `observe::tests` and `session::tests`, also run in WASM | Initial baseline survives coalescing, complete latest output, terminal input lag, clean final snapshot/raw drainage |
+
+Red evidence: before adapters, browser checking failed in Mio/native networking
+and native randomness. More substantively, running the direct-connection browser
+regression with Gloo's original no-op Sink close failed specifically because a
+send after close still succeeded. Explicit socket close/ownership then made the
+same test pass. No assertions were weakened to fit the adapter.
+
+Commands (Chrome plus matching ChromeDriver, or configured WebDriver required):
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.130 --locked
+cargo check -p tanuki-protocol -p tanuki-client --target wasm32-unknown-unknown --locked
+cargo clippy -p tanuki-client --target wasm32-unknown-unknown --lib --test browser --locked -- -D warnings
+cargo test -p tanuki-client --target wasm32-unknown-unknown --doc --locked
+python3 tanuki-client/tests/run-browser.py
+python3 tanuki-client/tests/run-browser.py --release
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo test --workspace --release
+```
+
+Verification: browser debug and release each passed **15 tests** (8 unit/shared,
+7 production-socket scenarios), using Chrome/ChromeDriver 156.0.8078.80. Native
+workspace debug/release (210 tests each), both Clippy configurations, formatting, target checks
+and the two SDK documentation snippets pass. Local socket checks need permission
+to create loopback sockets; the first sandboxed full run stopped at EPERM in the
+existing HTTP socket test, then passed with socket access enabled. CI includes a
+separate browser job with the same target checks and both browser profiles.
+The CI definition is added; hosted execution is distinct from these local results.
+
+Defaults preserve JSON, 1 MiB messages, 64 pending requests/raw batches and
+10-second deadlines. Native plain WebSockets remain unchanged. Browser `wss://`
+uses browser TLS behind a proxy; TLS deployment, other engines, workers, Node,
+WASI, JavaScript bindings and rendered/deployed dashboards are unverified.
+Browser event/network buffers are outside SDK queue limits, and suspended tabs
+may delay deadlines and cleanup. These are not replay or retry guarantees.

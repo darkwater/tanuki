@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Narrow scripted peers inject missing/late replies. Production server behavior is tested by tanuki's integration suite.
 use futures_util::{SinkExt, StreamExt};
 use tanuki_client::protocol::*;

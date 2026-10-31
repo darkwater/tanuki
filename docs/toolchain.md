@@ -146,3 +146,40 @@ The PTY unwind probe builds a temporary Cargo package depending on the actual
 UI library. A direct rustc attempt cannot consume this environment's cached
 metadata-only rlib stubs; Cargo selects the corresponding compiled artifacts.
 This is a smoke-tool implementation detail, not a compiler or application bug.
+
+## Browser SDK — 2026-10-31
+
+The unchanged `nightly-2026-10-01` now also has the installed
+`wasm32-unknown-unknown` standard library, and protocol/client checks pass for that
+target. This supersedes the earlier uninstalled-target limitation. Native Tokio
+network/runtime/time features and Tungstenite are target-specific dependencies.
+Browser dependencies are pinned Gloo Net 0.7.0 (WebSocket only), Gloo Timers 0.4.0
+(futures), wasm-bindgen-futures 0.4.80 and web-time 1.1.0. Browser tests use
+wasm-bindgen-test 0.3.80 and matching wasm-bindgen-cli 0.2.130. Cargo.lock records
+the resolved browser graph; existing dependency versions and feature gates stay
+unchanged. No unstable gates or compatibility macro/trait dependencies are added.
+
+Standard Instant cannot supply browser monotonic time. API checks used the
+[nightly Instant docs](https://doc.rust-lang.org/nightly/std/time/struct.Instant.html),
+[Unstable Book](https://doc.rust-lang.org/nightly/unstable-book/),
+[web-time](https://docs.rs/web-time/1.1.0/web_time/),
+[Gloo WebSocket](https://docs.rs/gloo-net/0.7.0/gloo_net/websocket/futures/struct.WebSocket.html),
+[local spawning](https://wasm-bindgen.github.io/wasm-bindgen/api/wasm_bindgen_futures/fn.spawn_local.html),
+and pinned source for Gloo close/readiness, timer integer limits and Tokio's
+executor-independent sync APIs. Compile checks against the pin and browser tests
+verify the actual syntax and runtime behavior. Browser task cancellation uses
+futures-util's Abortable and Tokio oneshot results; WASM panic aborts are not
+recoverable task errors. Timer waits round up sub-millisecond waits and chunk
+at signed 32-bit milliseconds, rechecking the monotonic deadline after waking.
+
+Headless Chrome/ChromeDriver 156.0.8078.80 ran the SDK against the production
+binary on loopback. Browser debug/release gates and setup live in
+[testing.md](testing.md#browser-sdk-acceptance--2026-10-31) and CI. Browser tooling
+is a developer/test prerequisite, not a shipped SDK runtime dependency. Native
+examples and the terminal inspector remain native targets.
+
+SDK README snippets use rustdoc's
+[`standalone_crate`](https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html)
+with `no_run`, so browser doc compilation does not attempt to execute a merged
+WASM test harness as a native process. Both snippets compile against the pin on
+native and WASM; no ignored examples or feature gates are needed.

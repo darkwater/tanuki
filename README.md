@@ -23,7 +23,7 @@ at the root:
 
 - `tanuki/` — authoritative server library, binary and integration tests
 - `tanuki-protocol/` — shared wire types/codecs and validated primitives
-- `tanuki-client/` — native Rust SDK, examples and client tests
+- `tanuki-client/` — native/browser Rust SDK, examples and client tests
 - `tanuki-ui/` — read-only terminal inspector and model/formatting/connection library
 
 Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the

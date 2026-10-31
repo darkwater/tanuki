@@ -18,3 +18,29 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo test --workspace --release
+
+  browser-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain and browser target
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - name: Install matching WASM test runner
+        run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+      - run: cargo check -p tanuki-protocol -p tanuki-client --target wasm32-unknown-unknown --locked
+      - run: cargo clippy -p tanuki-client --target wasm32-unknown-unknown --lib --test browser --locked -- -D warnings
+      - run: cargo test -p tanuki-client --target wasm32-unknown-unknown --doc --locked
+      - name: Test browser SDK against the production server
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+        run: |
+          python3 tanuki-client/tests/run-browser.py
+          python3 tanuki-client/tests/run-browser.py --release

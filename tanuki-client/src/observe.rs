@@ -1,10 +1,11 @@
+use crate::runtime::{self, AbortHandle};
 use crate::{
     ClientError, DecodedNode, ReadError, SelectedView, Session, SessionEnd, Topic, TopicKind,
     protocol::*,
 };
 use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, BTreeSet};
-use tokio::{sync::watch, task::AbortHandle};
+use tokio::sync::watch;
 /// Immutable retained state after a complete batch. Occurrences remain on raw listeners.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObservationSnapshot {
@@ -153,7 +154,7 @@ fn change_topic(change: &ChangeView) -> &str {
 fn projection(
     mut raw: crate::RawListener,
     paths: BTreeSet<TopicPath>,
-) -> (Observer, tokio::task::JoinHandle<()>) {
+) -> (Observer, runtime::JoinHandle<()>) {
     let baseline = raw.initial_snapshot();
     let nodes = paths
         .iter()
@@ -171,7 +172,7 @@ fn projection(
     let snapshot = project(&view, &paths);
     let (snapshots, rx) = watch::channel(snapshot.clone());
     let (terminal, end) = watch::channel(None);
-    let task = tokio::spawn(async move {
+    let task = runtime::spawn(async move {
         let names: BTreeSet<_> = paths.iter().map(ToString::to_string).collect();
         let reason = loop {
             let update = match raw.recv().await {
@@ -231,7 +232,8 @@ mod tests {
             },
         }
     }
-    #[tokio::test]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     async fn unread_outputs_coalesce_but_each_input_delta_is_applied() {
         let (raw, input, end) = raw_channel(
             SnapshotView {
@@ -283,7 +285,8 @@ mod tests {
         end.send_replace(Some(SessionEnd::Closed));
         task.await.unwrap();
     }
-    #[tokio::test]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     async fn clean_projection_closure_delivers_the_last_unseen_snapshot() {
         let (raw, input, end) = raw_channel(
             SnapshotView {
@@ -309,7 +312,8 @@ mod tests {
         assert_eq!(observer.recv().await.unwrap().unwrap().sequence(), 5);
         assert!(observer.recv().await.unwrap().is_none());
     }
-    #[tokio::test]
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     async fn projection_input_lag_is_terminal_even_with_unread_output() {
         let (raw, input, end) = raw_channel(
             SnapshotView {

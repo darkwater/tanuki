@@ -248,3 +248,13 @@ Start with basic HTTP reads/writes, then quickly build WebSocket as the first co
 HTTP should support convenient single writes and reads and multi-topic operations. URL parameters may provide shorthands such as `expire=1h`, but adapters must translate to common values and operations. Exact verbs and string conversion rules remain open (D8).
 
 WebSocket and HTTP SSE reads are subscriptions; unsubscribe is not an initial priority. Raw TCP and MQTT can follow later. TCP framing and protocol detection need not delay WebSocket.
+
+## Rust browser SDK delivery — 2026-10-31
+
+The Rust WebSocket SDK now also supports browser `wasm32-unknown-unknown` with
+its existing Session, typed operations and raw/latest-state observation APIs.
+Browser transport and scheduling do not change the authoritative mutation,
+validation, subscription, ownership or expiry semantics above. Browser scheduling
+may delay client deadlines during tab suspension. Browser-managed WebSocket
+buffers are outside SDK queue limits. JavaScript/TypeScript bindings, automatic
+reconnect and browser UI rendering remain separate work.
