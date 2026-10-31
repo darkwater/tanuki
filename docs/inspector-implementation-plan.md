@@ -22,9 +22,15 @@ server state, including node kinds and applicable schemas. See
   complete batches, stale disconnect/error/lag, explicit fresh-baseline reconnect
   and joined close. Real production-server loopback tests verify wildcard future
   topics, atomic updates, metadata/expiry, diagnostics and duplicate replacement.
-- Next: Task 03 only. Ratatui/Crossterm evaluation belongs with terminal work;
-  Tasks 01–02 add no terminal dependency and do not change the pinned compiler.
-  The binary remains status-only; there is no interactive inspector yet.
+- Task 03 implemented: Ratatui 0.30.2/Crossterm 0.29.0 terminal, controls and
+  CLI, safe Unicode-aware clipping/scrolling, stale status, help and resize
+  fallback. An owning guard restores terminal state on exit/errors/unwinding.
+  Single cancellable connection job keeps input responsive without update queues.
+- Milestone 1 is implemented and verified with headless backend tests, production
+  loopback tests and separate actual-binary POSIX PTY smoke checks. This is not
+  complete policy/public-state coverage or verified deployment.
+- Next: Task 04 only, checkpoint B public inspection design review. Do not expand
+  server APIs or add schema/link UI until that checkpoint is agreed.
 - Verified scope gap: `/**` subscriptions include exposed `/$diagnostics/**`.
   The server does not currently project `/$connections/**`. The checkpoint's
   expectation that the observer itself appears as a system node is therefore

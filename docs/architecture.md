@@ -487,3 +487,39 @@ Actual public scope: `/**` includes active reserved diagnostics, verified by
 real loopback tests alongside explicit system selection. There is currently no
 server connection-topic projection. Managed-session participation is not a
 fabricated `/$connections` node. Policy enumeration/explanation remains absent.
+
+## Inspector Task 03 — terminal milestone 1
+
+`tanuki-ui::ui::ViewState` owns pane focus, filter-edit/help state, tree viewport
+and detail scroll offsets. `draw` is synchronous: it reads the model/config and
+renders Ratatui widgets; it never awaits or accesses server internals. The tree
+preserves full-path identity through Model while ListState handles viewport
+selection. Real nodes and ancestor-only prefixes remain distinct. Node kind and
+payload type are separate. System paths have a cyan `[sys]` marker. Detail lines
+remain complete; scalar offsets plus Ratatui cell clipping and a conservative
+wide-character suffix calculation keep Unicode value endings reachable. Row
+previews reserve cells for wide text. Below 60x10 a bounded fallback replaces
+the panes. Status/currentness and key hints are at the bottom.
+
+`terminal` owns the Crossterm backend and a Drop restoration guard. Raw mode is
+enabled before entering the alternate screen; the guard exists before screen/
+backend setup can fail. Drop attempts raw disable, alternate-screen leave and
+cursor show independently. The main loop selects SDK input, Crossterm EventStream,
+SIGINT and 100 ms dirty render ticks. It may skip draws, never batches. Errors
+from the stream become visible non-current status; terminal failures exit and
+restore before joined SDK cleanup. No panic catcher or global panic hook is added.
+
+To keep redraw/input responsive while connecting, App now owns at most one
+cancellable connection job in addition to its live session. A oneshot signals
+cancellation. The job joins the previous session, connects and registers a raw
+listener, then returns ownership to App. `next_update` awaits a borrowed
+JoinHandle, so tick/input cancellation does not lose a completed result. Baseline
+installation is synchronous. Exit signals cancellation, joins the job and closes/
+joins any resulting session. Repeated reconnect input during an attempt is
+ignored. There is no additional update queue or automatic reconnect.
+
+`cli` parses only URL, validated client name and help with standard-library
+argument iteration and typed errors. Main parses before acquiring terminal
+state; post-run errors are escaped and printed after restoration. The UI uses
+Ratatui 0.30.2 and Crossterm 0.29.0 on the unchanged compiler. It introduces no
+server/SDK/wire changes or policy introspection APIs.

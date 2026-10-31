@@ -24,7 +24,7 @@ at the root:
 - `tanuki/` — authoritative server library, binary and integration tests
 - `tanuki-protocol/` — shared wire types/codecs and validated primitives
 - `tanuki-client/` — native Rust SDK, examples and client tests
-- `tanuki-ui/` — inspector model, formatting and live connection library; status-only binary
+- `tanuki-ui/` — read-only terminal inspector and model/formatting/connection library
 
 Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the
 workspace root. See [the SDK guide](tanuki-client/README.md) for typed publication,
@@ -70,17 +70,28 @@ operations are `publish_state`, `publish_event`, `define_input`, `claim_input`,
 `submit_desired`, `submit_command`, `clear_desired`, and `remove_node`.
 Stateless HTTP can define or submit inputs but cannot claim them.
 
-## Inspector foundation
+## Terminal inspector
 
-Checkpoint A is confirmed: a read-only Rust terminal inspector covering public
-ordinary topics and exposed system branches, with schema/link inspection later.
-[Inspector Tasks 01–02](docs/inspector-implementation-plan.md) implement the
-pure tree/selection model, terminal-safe formatting and SDK connection ownership,
-including live batches, stale state and explicit fresh-baseline reconnect.
-`cargo run -p tanuki-ui` currently prints a status message; it does not connect
-or open an interactive terminal. Rendering, CLI flags and controls are Task 03.
-See [tanuki-ui/README.md](tanuki-ui/README.md) for the library API. The server
-exposes diagnostics, but has no connection-topic projection yet.
+Run the read-only inspector beside the server:
+
+```sh
+cargo run -p tanuki-ui
+cargo run -p tanuki-ui -- --url ws://127.0.0.1:5167/v1/ws --client desk-inspector
+```
+
+Browse the topic tree with arrows or j/k, expand/collapse with right/left,
+filter with `/`, switch panes with Tab and scroll details with PageUp/PageDown.
+In details, left/right scroll long values horizontally; Home/End jump to their
+start/end. Use `?` for help, `r` for explicit reconnect, and `q` or Ctrl-C to exit.
+Default client names are distinct for simultaneous local inspectors. Disconnected,
+connecting, lagged and error views are labeled stale. The terminal is restored
+before joined shutdown. See [the inspector guide](tanuki-ui/README.md).
+
+[Inspector milestone 1](docs/inspector-implementation-plan.md) covers public
+node kinds, values, metadata and exposed diagnostics. Schema details are labeled
+unavailable; schema/link policy browsing remains future work. The server has no
+connection-topic projection yet. Complete public-state coverage and deployment
+are not claimed.
 
 ## Schemas
 

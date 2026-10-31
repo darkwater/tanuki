@@ -1,13 +1,60 @@
-# Tanuki inspector library
+# Tanuki terminal inspector
 
-Tasks 01–02 implement a model/formatting library and SDK connection owner
-(`app`). The binary remains a thin status-only placeholder; it neither connects
-to a server nor enters terminal mode. Terminal interaction is Task 03:
+Milestone 1 is a read-only native terminal inspector. Start the server and UI
+in separate terminals:
 
 ```sh
+cargo run -p tanuki
 cargo run -p tanuki-ui
-cargo test -p tanuki-ui
+cargo run -p tanuki-ui -- --url ws://127.0.0.1:5167/v1/ws --client desk-inspector
+cargo run -p tanuki-ui -- --help
 ```
+
+The left pane browses topics; the right shows the selected full path, kind,
+value type/value, provenance, expiry and claims. Reserved system nodes are cyan
+and marked `[sys]`. Connection/currentness and help hints are at the bottom.
+Branches start collapsed. No publish, edit, claim, deletion or policy management
+controls are provided. Schema details explicitly say they are unavailable.
+
+| Key | Action |
+| --- | --- |
+| Up/Down or j/k | Select topic; in details, scroll rows |
+| Left/Right or h/l | Collapse/expand or move to parent/child; in details, scroll columns |
+| Tab | Switch pane |
+| PageUp/PageDown | Scroll detail rows from either pane |
+| Home/End | First/last topic; in details, start/end of value columns |
+| / | Edit case-sensitive path filter; ancestors stay visible |
+| Enter / Backspace | Accept filter / erase one filter character |
+| Escape | Clear filter or close help |
+| r | Explicit fresh-snapshot reconnect; ignored while already connecting |
+| ? | Toggle help |
+| q / Ctrl-C | Quit (q is text while editing a filter) |
+
+Long detail lines are complete and can be scrolled horizontally; Home resets
+both detail offsets. The scroll title counts Unicode scalar positions, while
+Ratatui clips glyphs to terminal cells. Wide text remains reachable at End.
+Windows below 60x10 show a resize/status/quit fallback; input still works.
+Raw mode, alternate screen and cursor are restored by an owning guard on normal
+exit, I/O errors and unwinding. Shell restoration precedes joined SDK cleanup.
+Terminal I/O errors are printed only after restoration, with controls escaped.
+
+Verification:
+
+```sh
+cargo test -p tanuki-ui
+cargo build -p tanuki -p tanuki-ui
+python3 tanuki-ui/tools/terminal-smoke.py
+```
+
+Cargo tests are headless and include real loopback servers. The separate POSIX
+PTY smoke script runs actual binaries, seeds lamp state over HTTP, exercises
+navigation/filter/help/resize, q, Ctrl-C key and SIGINT, and compares terminal
+attributes before/after. It also checks output failure during setup and a
+temporary Cargo probe unwinding through the production terminal guard. It uses
+only Python stdlib and the pinned compiler and isolates persistence in `/tmp`.
+It is local simulated use, not a deployed/hardware verification.
+
+The following library APIs support the UI and headless consumers.
 
 `Model::from_snapshot` validates protocol path strings and owns one
 `SelectedView`. `Model::apply` validates all paths before applying one complete
@@ -63,8 +110,13 @@ closed?;
 ```
 
 Reconnect first closes/joins the previous session, then connects once and
-registers a raw listener. The baseline comes from listener registration, not
-historical hello. Only successful registration replaces the cache. Replacement
+registers a raw listener. The terminal calls `begin_reconnect()` to start a
+single owned, cancellable connection job; `next_update()` installs its result
+without losing it when a render tick cancels a receive poll. No extra update
+queue is added. Repeated reconnect keys during a pending attempt are ignored.
+Exit cancels and joins a pending job, closing/joining any session it obtained.
+The convenience `reconnect().await` remains available to headless callers.
+The baseline comes from listener registration, not historical hello. Only successful registration replaces the cache. Replacement
 accepts a restarted sequence and preserves surviving selection, expansion and
 filter. A failed attempt keeps the previous display and returns a typed error.
 `close().await` joins SDK driver/writer tasks; prior abnormal termination may be
@@ -82,5 +134,7 @@ connection topics or introspect private state. Schema text says “not available
 from this server API”, which does not imply that no schema applies. Schema/link
 enumeration and explanation remain later tasks.
 
-Task 03 owns terminal layout, input, CLI flags, scrolling and restoration.
-Terminal dependencies, controls and interactive smoke checks are deferred.
+Milestone 1 is complete for node inspection. Policy enumeration and explanation,
+live policy notifications, occurrence history and complete public-state inventory
+are still absent. The next task is checkpoint B (Task 04), a public API design
+review before server contract expansion.

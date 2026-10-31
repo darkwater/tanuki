@@ -303,3 +303,37 @@ production server shutdown separately joins its session cleanup. The future
 terminal loop must not draw during a network await or hold a server lock while
 drawing. Task 03 supplies input/render ticks, controls and restoration; the
 current binary still acquires no terminal state.
+
+## Inspector terminal procedures — Task 03
+
+Run `cargo run -p tanuki-ui -- [--url ws://HOST:PORT/v1/ws] [--client NAME]`.
+Help and invalid arguments are handled before terminal setup. The default
+loopback URL and generated local name are unchanged. Startup enters raw mode,
+alternate screen and hidden cursor under an owning guard, starts one explicit
+connection attempt and draws the connecting/stale state. Input and redraw stay
+active during the attempt. Connection and raw-registration results install
+atomically from that listener baseline. Reconnect repeats this procedure with
+old-session join; repeated r during an attempt is ignored.
+
+Use arrows/jk to select, left/right to expand/collapse, `/` to edit a filter,
+Enter to accept, Escape to clear, Tab to switch pane, PageUp/PageDown for detail
+rows and left/right for detail columns. Home/End move to the start/end of the
+focused pane's topic list or value columns. `?` opens help. Input is read-only;
+q is ordinary text while editing a filter, and Ctrl-C always exits. System
+paths are marked; instant nodes explicitly have no retained payload/history.
+Schema details are unavailable, never implied to be absent.
+
+Resize is handled through terminal events and Ratatui auto-resizing. Under
+60x10, show a resize/status/quit fallback without unsigned size arithmetic
+underflow. Render ticks are capped at 100 ms and may coalesce redraws; each SDK
+batch still applies. Any non-live state denotes stale cached data. User values,
+paths, attribution, filter, URL and error text are escaped before display.
+
+On q, Ctrl-C, terminal EOF or I/O error, drop the terminal guard first, then
+cancel/join any connection job and close/join the live SDK session. A prior
+abnormal SDK reason may still produce a failing exit code after successful
+cleanup. Partial setup errors and Rust unwinding restore via Drop too. No
+blocking destructor, panic-catching wrapper or speculative framework is used.
+The separate POSIX PTY smoke procedure in `tanuki-ui/tools/terminal-smoke.py`
+checks real terminal attributes and actual production binaries in temporary
+snapshot storage. It is distinct from headless CI and deployment verification.

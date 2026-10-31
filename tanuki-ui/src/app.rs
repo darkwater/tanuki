@@ -4,6 +4,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use tokio::{sync::oneshot, task::JoinHandle};
+
 use tanuki_client::{ClientError, RawListener, Session, SessionEnd};
 use tanuki_protocol::{ClientName, Selector, SnapshotView, UpdateView};
 
@@ -46,6 +48,8 @@ impl Default for ConnectionConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("inspector connection task failed: {0}")]
+    Task(#[from] tokio::task::JoinError),
     #[error(transparent)]
     Client(#[from] ClientError),
     #[error(transparent)]
@@ -61,10 +65,16 @@ struct LiveConnection {
     listener: Option<RawListener>,
 }
 
+struct ConnectionAttempt {
+    cancel: oneshot::Sender<()>,
+    task: JoinHandle<Result<Option<LiveConnection>, AppError>>,
+}
+
 pub struct App {
     config: ConnectionConfig,
     model: Model,
     connection: Option<LiveConnection>,
+    attempt: Option<ConnectionAttempt>,
 }
 impl App {
     pub fn new(config: ConnectionConfig) -> Self {
@@ -78,6 +88,7 @@ impl App {
             config,
             model,
             connection: None,
+            attempt: None,
         }
     }
     pub fn config(&self) -> &ConnectionConfig {
@@ -90,69 +101,85 @@ impl App {
         &mut self.model
     }
 
-    /// Explicit attempt only: close/join any previous session, then register a
-    /// fresh raw listener. Keep the old cache visibly non-live until replacement.
-    pub async fn reconnect(&mut self) -> Result<(), AppError> {
-        self.model.set_status(ConnectionStatus::Connecting);
-        if let Some(old) = self.connection.take() {
-            drop(old.listener);
-            if let Err(error) = old.session.close().await {
-                tracing::warn!(error = %crate::format::safe_text(&error.to_string()), "previous inspector session ended before reconnect");
-            }
+    /// Start one bounded connection job. Repeated reconnect input while connecting
+    /// is ignored. The job owns cleanup; it never queues updates or draws.
+    pub fn begin_reconnect(&mut self) {
+        if self.attempt.is_some() {
+            return;
         }
-        let result = match Session::connect(
-            self.config.url(),
-            self.config.client.clone(),
-            vec![Selector::parse("/**").expect("valid inspector selection")],
-        )
-        .await
-        {
-            Ok(session) => self.install_session(session).await,
-            Err(error) => Err(error.into()),
-        };
-        if let Err(error) = &result {
-            self.model
-                .set_status(ConnectionStatus::Error(error.to_string()));
-            tracing::warn!(error = %crate::format::safe_text(&error.to_string()), "inspector connection attempt failed; cached view is stale");
+        self.model.set_status(ConnectionStatus::Connecting);
+        let config = self.config.clone();
+        let previous = self.connection.take();
+        let (cancel, cancelled) = oneshot::channel();
+        self.attempt = Some(ConnectionAttempt {
+            cancel,
+            task: tokio::spawn(open(config, previous, cancelled)),
+        });
+    }
+
+    /// Convenience for non-terminal callers. The terminal uses begin_reconnect
+    /// and next_update so it can keep rendering/input active during handshakes.
+    pub async fn reconnect(&mut self) -> Result<(), AppError> {
+        self.begin_reconnect();
+        self.next_update().await
+    }
+
+    fn install(&mut self, mut connection: LiveConnection) -> Result<(), AppError> {
+        let snapshot = connection
+            .listener
+            .as_ref()
+            .expect("new listener")
+            .initial_snapshot()
+            .clone();
+        // Registration, not historical hello, is the baseline for this listener.
+        let result = self
+            .model
+            .replace_snapshot(snapshot)
+            .map_err(AppError::from);
+        if result.is_err() {
+            connection.listener = None;
+        }
+        self.connection = Some(connection); // Still own failed setup for joined close.
+        if result.is_ok() {
+            self.model.set_status(ConnectionStatus::Live);
         }
         result
     }
 
+    #[cfg(test)]
     async fn install_session(&mut self, session: Session) -> Result<(), AppError> {
-        let result = async {
-            let listener = session.listen_updates().await?;
-            // Hello is historical. Only registration's baseline lines up with
-            // this listener's first delta, including writes since hello.
-            self.model
-                .replace_snapshot(listener.initial_snapshot().clone())?;
-            Ok::<_, AppError>(listener)
-        }
-        .await;
-        match result {
-            Ok(listener) => {
-                for warning in session.hello_warnings() {
-                    tracing::warn!(?warning, "inspector hello accepted with warning");
-                }
-                self.connection = Some(LiveConnection {
-                    session,
-                    listener: Some(listener),
-                });
-                self.model.set_status(ConnectionStatus::Live);
-                Ok(())
-            }
-            Err(error) => {
-                if let Err(cleanup) = session.close().await {
-                    tracing::warn!(error = %crate::format::safe_text(&cleanup.to_string()), "failed inspector setup session joined");
-                }
-                Err(error)
-            }
-        }
+        let listener = session.listen_updates().await?;
+        self.install(LiveConnection {
+            session,
+            listener: Some(listener),
+        })
     }
 
     /// Apply exactly one complete batch. Suitable as a branch of tokio::select!;
     /// cancelling the receive does not dequeue data. With no active listener,
     /// remain pending so an input/tick loop cannot spin or auto-reconnect.
     pub async fn next_update(&mut self) -> Result<(), AppError> {
+        if let Some(attempt) = &mut self.attempt {
+            // Awaiting a borrowed JoinHandle is cancellation safe: a render tick
+            // may cancel this poll without losing a completed connection.
+            let joined = (&mut attempt.task).await;
+            self.attempt = None;
+            let result = match joined {
+                Ok(Ok(Some(connection))) => self.install(connection),
+                Ok(Ok(None)) => {
+                    self.model.set_status(ConnectionStatus::Disconnected);
+                    Ok(())
+                }
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(error.into()),
+            };
+            if let Err(error) = &result {
+                self.model
+                    .set_status(ConnectionStatus::Error(error.to_string()));
+                tracing::warn!(error=%crate::format::safe_text(&error.to_string()),"inspector connection attempt failed; cache is stale");
+            }
+            return result;
+        }
         let Some(listener) = self
             .connection
             .as_mut()
@@ -201,11 +228,59 @@ impl App {
     /// but only this explicit method joins the session's driver/writer tasks.
     pub async fn close(&mut self) -> Result<(), AppError> {
         self.model.set_status(ConnectionStatus::Disconnected);
+        if let Some(attempt) = self.attempt.take() {
+            let _ = attempt.cancel.send(());
+            if let Some(connection) = attempt.task.await?? {
+                connection.session.close().await?;
+            }
+        }
         if let Some(connection) = self.connection.take() {
             drop(connection.listener);
             connection.session.close().await?;
         }
         Ok(())
+    }
+}
+
+/// Cancellation is checked before connect and during registration. Every Session
+/// obtained by the job is either returned to App or closed/joined by this job.
+async fn open(
+    config: ConnectionConfig,
+    previous: Option<LiveConnection>,
+    mut cancelled: oneshot::Receiver<()>,
+) -> Result<Option<LiveConnection>, AppError> {
+    if let Some(previous) = previous {
+        drop(previous.listener);
+        if let Err(error) = previous.session.close().await {
+            tracing::warn!(error=%crate::format::safe_text(&error.to_string()),"previous inspector session joined before reconnect");
+        }
+    }
+    let session = tokio::select! {biased;
+        _=&mut cancelled=>return Ok(None),
+        session=Session::connect(config.url(),config.client.clone(),vec![Selector::parse("/**").expect("valid selection")])=>session?,
+    };
+    let listener = tokio::select! {biased;
+        _=&mut cancelled=>None,
+        listener=session.listen_updates()=>Some(listener),
+    };
+    match listener {
+        Some(Ok(listener)) => {
+            for warning in session.hello_warnings() {
+                tracing::warn!(?warning, "inspector hello accepted with warning");
+            }
+            Ok(Some(LiveConnection {
+                session,
+                listener: Some(listener),
+            }))
+        }
+        result => {
+            let closed = session.close().await;
+            if let Some(Err(error)) = result {
+                return Err(error.into());
+            }
+            closed?;
+            Ok(None)
+        }
     }
 }
 
@@ -392,5 +467,48 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod connecting_tests {
+    use super::*;
+    #[tokio::test]
+    async fn stalled_handshake_can_be_drawn_and_cancelled_with_joined_exit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = ConnectionConfig::new(
+            format!("ws://{}", listener.local_addr().unwrap()),
+            ClientName::parse("inspector").unwrap(),
+        );
+        let mut app = App::new(config);
+        app.begin_reconnect();
+        assert_eq!(app.model().status(), &ConnectionStatus::Connecting);
+        // Prove the job has sent a real handshake before testing cancellation.
+        // The peer deliberately never answers it; there are no timing sleeps.
+        use tokio::io::AsyncReadExt;
+        let (mut peer, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+        let mut byte = [0; 1];
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), peer.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            1
+        );
+        tokio::select! {biased;
+            _=app.next_update()=>panic!("handshake cannot complete without a peer"),
+            ()=std::future::ready(())=>{}
+        }
+        // Drawing/input may borrow the model between cancelled receive polls.
+        assert_eq!(app.model().status(), &ConnectionStatus::Connecting);
+        tokio::time::timeout(std::time::Duration::from_secs(1), app.close())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(app.model().status(), &ConnectionStatus::Disconnected);
     }
 }

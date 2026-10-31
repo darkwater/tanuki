@@ -120,3 +120,29 @@ no trait abstraction, macro async trait or boxed future is introduced. A
 standard pending future keeps inactive receives dormant, and native Tokio
 select/SDK raw receives provide cancellation at input/render boundaries.
 Terminal dependencies and TLS remain outside this task.
+
+## Inspector Task 03 — terminal dependencies, 2026-10-31
+
+Pinned `nightly-2026-10-01` compiled Ratatui **0.30.2** and Crossterm **0.29.0**
+without compiler upgrades or new feature gates. Ratatui is selected with default
+features disabled and only the Crossterm backend enabled. Crossterm's
+`event-stream` feature supplies async terminal events. Existing futures-util
+0.3.34 supplies StreamExt; Tokio gains signal support for external SIGINT.
+Cargo.lock includes the selected terminal dependency graph. Server/SDK/protocol
+package versions remain unchanged.
+
+API selection and checks used the official
+[Ratatui installation/version pairing](https://ratatui.rs/installation/),
+[Crossterm event API](https://docs.rs/crossterm/0.29.0/crossterm/event/index.html),
+[EventStream](https://docs.rs/crossterm/0.29.0/crossterm/event/struct.EventStream.html),
+and [Tokio JoinHandle cancellation behavior](https://docs.rs/tokio/1.53.2/tokio/task/struct.JoinHandle.html),
+alongside compiled pinned-source APIs for Terminal, Frame, List/ListState,
+Paragraph, TestBackend and Span width. Some umbrella Ratatui widget doc URLs
+were unavailable; the downloaded modular crate source and compile checks
+confirmed their re-exports and syntax. No unstable rendered-line API, custom
+terminal framework, async-trait or boxed future was needed.
+
+The PTY unwind probe builds a temporary Cargo package depending on the actual
+UI library. A direct rustc attempt cannot consume this environment's cached
+metadata-only rlib stubs; Cargo selects the corresponding compiled artifacts.
+This is a smoke-tool implementation detail, not a compiler or application bug.

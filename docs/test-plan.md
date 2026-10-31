@@ -272,3 +272,21 @@ Assert receive cancellation and skipped draw opportunities do not skip batches.
 Client close joins client tasks; check server cleanup after joined server
 shutdown rather than assuming immediate cross-transport acknowledgement.
 Terminal layout/input/restoration remain inspector Task 03 acceptance.
+
+## Inspector terminal milestone — US-13, Task 03
+
+Use Ratatui's real TestBackend for visible content and selection assertions:
+empty/populated panes, separate kind/type labels, metadata, system/instant nodes,
+search/expansion/navigation/help, control-character escaping, long Unicode
+values and reachable endings, stale/error banners at the bottom and tiny sizes.
+Test CLI rejection before terminal acquisition. Establish a pending WebSocket
+handshake using a received-byte barrier, then cancel/join exit without sleeps.
+
+Keep POSIX PTY smoke tests separate from headless CI: run actual production
+server/UI binaries with temporary persistence, seed state via HTTP, drive keys
+and resize, and compare terminal attributes before/after q, Ctrl-C key, SIGINT,
+setup-output failure and Rust unwinding through the production guard. Test
+restoration attempts cursor show even if leaving the screen fails. Do not add a
+production panic switch or catch all panics. A1/A2 get local inspector evidence;
+A3/A4 and deployed hardware remain unverified. Run full workspace debug/release,
+formatting and all-target Clippy at this milestone.

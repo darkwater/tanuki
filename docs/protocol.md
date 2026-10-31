@@ -318,3 +318,18 @@ reset are distinct SDK outcomes, both non-live. Reconnect is a new session and
 snapshot, with no retry/replay promise. Explicit duplicate names preserve
 server replacement semantics; generated local defaults avoid ordinary local
 collisions. Session close joins client tasks, not server-side cleanup delivery.
+
+## Inspector milestone 1 terminal — Task 03
+
+`tanuki-ui` now exposes the existing node inspection surface through a read-only
+terminal application, with configurable WebSocket URL/client name. It still
+uses only the SDK `/**` snapshot/update stream, preserves complete batches and
+separates instant metadata from occurrences. A bounded connection job changes
+UI ownership, not wire behavior: explicit reconnect joins the old session and
+registers a new listener/baseline. Connecting/disconnected/lagged/error data is
+labeled stale; there is no retry or replay.
+
+No schema/link enumeration or explanation endpoint is introduced. The terminal
+says schema information is unavailable and still cannot fabricate the missing
+connection-topic projection. Public inspection API design is checkpoint B,
+Task 04. Milestone 1 node inspection is not complete public-state coverage.

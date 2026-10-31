@@ -2,7 +2,7 @@
 
 - **Status:** active freshness/link conditions implemented; broader operational diagnostics and real-world use not yet verified.
 - **Origin:** User use case; embedded runtime portion deferred.
-- **Last updated:** 2026-10-07.
+- **Last updated:** 2026-10-31.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -39,6 +39,12 @@ Log schema, event versus retained status, notifier identity/routing and future s
   exclusions, and recursive-failure prevention; `tanuki/tests/scheduler.rs` covers the
   timed wake; `tanuki/tests/core_links.rs` covers link condition onset/recovery; and
   `tanuki/tests/persistence.rs` covers restart derivation.
+- Inspector milestone 1 (2026-10-31): `tanuki-ui` provides read-only terminal
+  browsing of exposed `/$diagnostics/**`, with system markers and explicit stale
+  connection states. `tanuki-ui/tests/live.rs` verifies broad/explicit diagnostic
+  delivery through the production server; backend tests verify system-node
+  details. This adds a local inspector, not script supervision, transient log
+  history or deployed alerting evidence. See US-13.
 - Real clients, scripts, configuration and deployment: not yet recorded.
 - Observed behaviour and limitations: not yet verified. Passing mock-client tests alone does not establish real deployment.
 

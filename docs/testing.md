@@ -485,3 +485,62 @@ smoke check and diff whitespace checks passed on the existing nightly pin.
 `cargo tree -p tanuki-ui -e normal --depth 1` confirms no production server
 dependency. No compiler, server, SDK, transport limit or protocol change was
 made; full workspace debug/release milestone gates remain due for Task 03.
+
+## Inspector Task 03 — terminal milestone 1
+
+`tanuki-ui/tests/render.rs` contains six backend tests. They assert meaningful
+text and selection style from actual Ratatui buffers: empty state, populated
+parent/child selection and metadata, bottom status/hints, Unicode/control-safe
+text, all stale states, zero/tiny dimensions, filtering/help/navigation/exit,
+system/instant labels, and long wide-character value endings reachable through
+scrolling. The fixture reconstructs visible text using symbol-cell widths;
+continuation cells are not literal extra spaces. Model/transport tests retain
+all four kind and missing/Null/absent distinctions.
+
+CLI unit tests cover defaults/overrides/help and invalid/missing/duplicate
+arguments before terminal setup. A cleanup test injects a failed screen-leave
+write and requires a subsequent cursor-show attempt. A stalled-handshake test
+waits for a real TCP request byte before checking that drawing/receive
+cancellation and joined exit remain responsive. The connection job adds only
+one oneshot and JoinHandle, not a queue of updates.
+
+Behavioral red evidence: the initial render/input stub compiled and failed all
+six backend scenarios; CLI stubs failed both CLI scenarios; the inert reconnect
+starter failed expected connecting status. A strengthened long-Unicode test
+then exposed unreachable trailing text after End, corrected with terminal-cell
+suffix accounting. A bottom-status assertion failed before connection status
+was moved to the footer. These corrections preserve the accepted requirements.
+
+Separate interactive verification: an actual terminal run displayed the error
+banner/help and q restoration. `python3 tanuki-ui/tools/terminal-smoke.py` uses
+actual server/UI binaries with `/lamp = 1` and `/lamp/hue = 120`, validates
+filter/navigation/help and resize, and passed q, Ctrl-C key, external SIGINT,
+output failure during partial initialization (`/dev/full`) and a temporary Cargo
+probe unwinding through the production TerminalGuard. All five compared actual
+termios state before/after, with alternate-screen leave and cursor-show commands
+required where output was writable. No production panic switches or broad
+panic catching were added. Direct-rustc metadata-stub failure was an environment
+artifact, resolved by compiling the probe with Cargo. A smoke-fixture failure
+was also corrected to account for differential terminal drawing and Escape
+sequence parsing; it was not a server/UI regression.
+
+Run the POSIX smoke checks separately from headless CI:
+
+```sh
+cargo build -p tanuki -p tanuki-ui
+python3 tanuki-ui/tools/terminal-smoke.py
+```
+
+This milestone supplies local simulated inspector evidence for US-13.A1/A2.
+It does not claim deployed hardware, schema/link introspection, a connection
+projection or complete public-state coverage (A3/A4). Next is checkpoint B
+(Task 04), a public inspection API design review, not implementation.
+
+Task 03 milestone gates passed on the existing nightly: `cargo fmt --all --
+--check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+--workspace` and `cargo test --workspace --release` (209 tests each, including
+doctests), `cargo build -p tanuki-ui`, CLI help smoke and `git diff --check`.
+The final actual-binary PTY run passed all five restoration cases after the
+footer/layout correction. Provisional UI defaults are 100 ms dirty redraw ticks,
+a 60x10 minimum full layout and eight-scalar horizontal key steps. There is no
+new compiler gate, server API or deployment claim.

@@ -18,7 +18,7 @@ These documents describe why and how the user expects to use Tanuki. They should
 | US-10 | [Two views of the same data](STORY-10-linked-views.md)                  | User use case                                               |
 | US-11 | [Logs, alerts and script health](STORY-11-diagnostics.md)               | User use case; embedded runtime portion deferred            |
 | US-12 | [Ad hoc local and remote scripts](STORY-12-adhoc-local.md)              | User use case                                               |
-| US-13 | [Live system inspector](STORY-13-system-inspector.md) | User-requested future UI; mqttui reference |
+| US-13 | [Live system inspector](STORY-13-system-inspector.md) | Terminal milestone 1 implemented; policy/full inventory pending |
 
 ## How to maintain these documents
 
