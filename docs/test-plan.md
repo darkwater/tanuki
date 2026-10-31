@@ -17,6 +17,14 @@ real-world use, and stories must not be weakened to make tests pass.
 
 ## Test layers
 
+Future inspector coverage is tracked by
+[US-13](user-stories/STORY-13-system-inspector.md). When implemented, exercise
+the real server with an inspector client: initial tree, atomic updates, node
+kinds, absent versus Null payloads, expiry/removal, and schema applicability
+changes. Include schemas without matching nodes and unavailable/stale policy
+information. UI acceptance remains deferred; existing dashboard transport tests
+do not establish it. No event replay or new permission semantics are implied.
+
 | Layer       | What is real                                                               | What is controlled                         | Main evidence                               |
 | ---         | ---                                                                        | ---                                        | ---                                         |
 | Unit        | Domain constructors, matching and transition functions                     | Input values and explicit time             | Local invariants and boundary rules         |

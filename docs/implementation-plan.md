@@ -442,3 +442,13 @@ the production binary. See [testing.md](testing.md) for task/story coverage and
 Browser transport/bindings and Iced-specific integration remain out of scope.
 The protocol-only browser check could not run because target std is absent;
 TLS and Serde 128-bit methods remain explicit native limitations.
+
+### Future system inspector — direction recorded 2026-10-31
+
+[US-13](user-stories/STORY-13-system-inspector.md) records the requested UI for
+eventually inspecting the entire public server state, including node kinds and
+applicable schemas. Timing and UI format remain open. A read-only live tree
+using existing snapshots/updates is a proposed first increment; full coverage
+needs public schema/link introspection and a defined public inspection surface.
+Review those APIs and their consistency model before implementing them. This
+direction does not reopen tasks 00–12 or imply a delivered UI.
