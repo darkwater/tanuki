@@ -783,9 +783,14 @@ dependencies = [
 name = "tanuki-ui"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "serde_json",
+ "tanuki",
+ "tanuki-client",
  "tanuki-protocol",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

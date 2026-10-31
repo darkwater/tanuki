@@ -300,3 +300,21 @@ cache mutation. Schema/link enumeration and explanation are still unavailable;
 the detail formatter explicitly labels schema information unavailable rather
 than claiming no schema applies. Live subscription/system-namespace scope will
 be verified through real transport in Task 02.
+
+## Inspector live consumer — Task 02
+
+The inspector uses the existing native Session/raw-listener protocol only,
+subscribing to `/**`. Real-server tests confirm this subscription includes
+exposed `/$diagnostics/**` as well as ordinary topics, both in initial snapshots
+and later updates. Schema matchers' ordinary-only restriction does not apply
+to subscription matching. No `/$connections/**` projection currently exists;
+the observer is a managed session but cannot be shown as a connection node.
+No new protocol surface is added to fill that gap in this task.
+
+Listener registration's baseline replaces the cache on explicit reconnect;
+hello is not reused as that baseline. Complete batches are consumed in order;
+raw lag is terminal and marks cached data stale. Clean shutdown and transport
+reset are distinct SDK outcomes, both non-live. Reconnect is a new session and
+snapshot, with no retry/replay promise. Explicit duplicate names preserve
+server replacement semantics; generated local defaults avoid ordinary local
+collisions. Session close joins client tasks, not server-side cleanup delivery.

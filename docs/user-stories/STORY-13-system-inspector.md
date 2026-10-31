@@ -1,6 +1,6 @@
 # US-13 — Live system inspector
 
-- **Status:** terminal scope confirmed; pure model/formatting tested; live UI and deployment unverified.
+- **Status:** terminal scope confirmed; model and live connection owner tested; terminal rendering and deployment unverified.
 - **Origin:** User request, 2026-10-31; mqttui interaction reference.
 - **Last updated:** 2026-10-31.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -65,6 +65,24 @@ path filtering and nearest surviving selection. No occurrence history is stored;
 instant details explicitly say there is no retained payload. Full text is
 available to a future scrolling pane; scrolling itself is Task 03.
 
+Task 02 evidence: `tanuki-ui/tests/live.rs` starts the production server on
+loopback and verifies initially empty/populated baselines, newly matching paths,
+atomic lamp updates, metadata-only refresh and scheduled expiry, diagnostics in
+`/**` and explicit `/$diagnostics/**`, duplicate-name replacement, stale display,
+failed reconnect and removal of absent cached nodes on successful reconnect.
+Generated local client names coexist. Cancelled idle receives and delayed draws
+do not skip queued batches. App unit tests establish a write between hello and
+registration and verify that the newer baseline is used; inject terminal lag
+without timing races; and cover typed failure/currentness and joined close.
+These extend A1/A2 evidence at the model/transport boundary. Rendering/controls
+remain Task 03, and A3/A4 remain unmet. No deployment is claimed.
+
+Verified public-surface limitation: the current server exposes active
+`/$diagnostics/**`, but has no `/$connections/**` node projection. Thus the
+observer participates in managed sessions and duplicate-name replacement, but
+cannot yet display itself as a system node. This preserves the eventual public
+state goal and records the gap without expanding Task 02 into server work.
+
 Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 [US-11](STORY-11-diagnostics.md) for operational diagnostics.
 
@@ -75,5 +93,8 @@ Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 - 2026-10-31: User confirmed checkpoint A; Task 01 delivered the headless
   model/formatting foundation. Live connections and terminal rendering remain
   pending.
+
+- 2026-10-31: Task 02 added tested SDK ownership/lifecycle and real loopback
+  evidence; recorded missing connection-topic projection and pending rendering.
 
 Implementation planning: [bounded inspector handoff](../inspector-implementation-plan.md).

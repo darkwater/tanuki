@@ -1,5 +1,5 @@
 fn main() {
     println!(
-        "tanuki-ui: model and formatting foundation; interactive inspector is not implemented yet."
+        "tanuki-ui: live inspector library ready; interactive terminal is not implemented yet (Task 03)."
     );
 }

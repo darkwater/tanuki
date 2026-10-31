@@ -108,3 +108,15 @@ the new package; no existing dependency versions change and no feature gates
 are added. Tree/selection/formatting use ordinary standard-library collections,
 string formatting and Unicode character iteration. Ratatui/Crossterm API/version
 evaluation is deferred until terminal implementation; this task needs neither.
+
+## Inspector Task 02 — 2026-10-31
+
+The pin remains `nightly-2026-10-01`, with no new feature gates or dependency
+versions. UI production dependencies now include the existing native client,
+Tokio 1.53.2 and tracing 0.1.44; server and Jiff are development dependencies
+for real-server tests. The workspace lockfile records these edges. Session/
+RawListener APIs are verified in the pinned SDK source and by compiled tests;
+no trait abstraction, macro async trait or boxed future is introduced. A
+standard pending future keeps inactive receives dormant, and native Tokio
+select/SDK raw receives provide cancellation at input/render boundaries.
+Terminal dependencies and TLS remain outside this task.

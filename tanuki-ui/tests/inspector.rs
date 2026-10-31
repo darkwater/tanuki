@@ -396,3 +396,40 @@ fn removal_selects_the_nearest_surviving_old_row() {
     .unwrap();
     assert_eq!(m.selected_path(), Some(&path("/c")));
 }
+
+#[test]
+fn replacement_baselines_can_restart_sequences_and_preserve_surviving_navigation() {
+    let mut m = model(vec![
+        ("/lamp/hue", state(Value::Integer(1))),
+        ("/old", state(Value::Null)),
+    ]);
+    m.set_expanded(&path("/lamp"), true);
+    m.select(&path("/lamp/hue"));
+    m.set_filter("lamp".into());
+    m.replace_snapshot(SnapshotView {
+        sequence: 0,
+        nodes: [("/lamp/hue".into(), state(Value::Integer(2)))].into(),
+    })
+    .unwrap();
+    assert_eq!(m.sequence(), 0);
+    assert_eq!(m.selected_path(), Some(&path("/lamp/hue")));
+    assert_eq!(m.filter(), "lamp");
+    assert!(m.node(&path("/old")).is_none());
+    assert!(detail(&m).contains("Value: 2"));
+    assert!(
+        m.replace_snapshot(SnapshotView {
+            sequence: 9,
+            nodes: [("invalid".into(), state(Value::Null))].into()
+        })
+        .is_err()
+    );
+    assert_eq!(m.sequence(), 0);
+    m.set_filter(String::new());
+    assert!(
+        m.rows()
+            .iter()
+            .find(|r| r.path() == &path("/lamp"))
+            .unwrap()
+            .is_expanded()
+    );
+}

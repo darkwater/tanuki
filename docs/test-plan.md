@@ -254,3 +254,21 @@ replaces evidence that core invariants and complete flows were exercised.
   if that peer remains connected when shutdown starts.
 - K1/US-11: dot-segment link names fail validation before a disabled-link
   diagnostic path is constructed; ordinary punctuation and Unicode still work.
+
+## Inspector transport increment — US-13, Task 02
+
+Use a real loopback production server and simulated SDK producers. Verify empty
+and populated registration baselines, a write between hello and registration,
+new wildcard membership, complete paired changes, metadata refresh and expiry.
+Compare broad `/**` selection with explicit exposed system diagnostics; do not
+apply schema matchers' ordinary-only domain to subscriptions or invent nodes
+for unexposed branches. Record missing public projections as limitations.
+
+Disconnect, replacement and lag must stop claiming cached data is current.
+Reconnect uses a fresh listener baseline and removes absent stale nodes, with
+no retry or occurrence replay. Inject the exact lag receive result at the UI
+boundary deterministically; SDK tests establish queue-overflow guarantees.
+Assert receive cancellation and skipped draw opportunities do not skip batches.
+Client close joins client tasks; check server cleanup after joined server
+shutdown rather than assuming immediate cross-transport acknowledgement.
+Terminal layout/input/restoration remain inspector Task 03 acceptance.

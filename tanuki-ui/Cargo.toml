@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+tanuki-client = { path = "../tanuki-client" }
+tokio = { version = "=1.53.2", features = ["macros", "rt", "sync", "time"] }
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 tanuki-protocol = { path = "../tanuki-protocol" }
 thiserror = "=2.0.21"
 
 [dev-dependencies]
+tanuki = { path = "../tanuki" }
+jiff = { version = "=0.2.37", default-features = false, features = ["std"] }
 serde_json = "=1.0.151"

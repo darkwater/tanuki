@@ -17,9 +17,19 @@ server state, including node kinds and applicable schemas. See
 - Provisional local defaults: initially collapsed branches; case-sensitive full
   path substring search temporarily expands matching ancestor context; selection
   prefers a visible ancestor, then nearest surviving old row (preceding on ties),
-  then first new row. No network or interactive terminal implementation yet.
-- Next: Task 02 only. Ratatui/Crossterm evaluation belongs with terminal work;
-  Task 01 adds no terminal dependency and does not change the pinned compiler.
+  then first new row. These remain the navigation defaults for Task 02.
+- Task 02 implemented: one SDK session/raw listener, registration baseline,
+  complete batches, stale disconnect/error/lag, explicit fresh-baseline reconnect
+  and joined close. Real production-server loopback tests verify wildcard future
+  topics, atomic updates, metadata/expiry, diagnostics and duplicate replacement.
+- Next: Task 03 only. Ratatui/Crossterm evaluation belongs with terminal work;
+  Tasks 01–02 add no terminal dependency and do not change the pinned compiler.
+  The binary remains status-only; there is no interactive inspector yet.
+- Verified scope gap: `/**` subscriptions include exposed `/$diagnostics/**`.
+  The server does not currently project `/$connections/**`. The checkpoint's
+  expectation that the observer itself appears as a system node is therefore
+  not implemented by the server; Task 02 does not invent such nodes or change
+  server behavior. Complete-state coverage remains unmet.
 
 ## Instructions to the implementing model
 

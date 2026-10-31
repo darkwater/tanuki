@@ -421,3 +421,67 @@ Task 01 completion checks passed on the pinned nightly: `cargo fmt --all --
 build -p tanuki-ui`, foundation-only `cargo run -q -p tanuki-ui`, and `git diff
 --check`. Workspace debug/release transport suites are reserved for the planned
 milestone gates; this task changes only the UI package and workspace membership.
+
+## Inspector Task 02 — live ownership and lifecycle
+
+`tanuki-ui/tests/live.rs` exercises production server/router/runtime/scheduler
+logic over ephemeral loopback WebSockets, with simulated producers:
+
+| Contract | Evidence |
+| --- | --- |
+| Empty and populated listener baselines; later wildcard paths | `empty_populated_and_future_wildcard_topics_follow_the_live_listener` |
+| Whole paired lamp batches, duplicate-value metadata refresh and state expiry | `whole_batches_metadata_and_scheduled_expiry_reach_the_model` |
+| `/**` includes reserved diagnostics in both snapshots and deltas; explicit system selectors agree | `broad_subscription_includes_exposed_system_diagnostics` |
+| Duplicate-name kick preserves stale data; explicit reconnect discards absent nodes | `duplicate_replacement_marks_cache_stale_and_reconnect_replaces_baseline` |
+| Server shutdown and failed reconnect invalidate currentness without erasing cache | `shutdown_and_failed_reconnect_preserve_stale_display_and_join_session` |
+| Generated local names coexist under normal server replacement semantics | `generated_names_allow_multiple_inspectors_without_replacement` |
+| Cancelled idle receive and multiple commits before rendering lose no batches | `cancelled_idle_receive_and_delayed_rendering_do_not_skip_batches` |
+
+App unit tests inject exact SDK receive results for clean end, lag and error,
+checking stale-state retention and typed error sources. Another production-server
+unit test uses a received batch as a barrier after a write between hello and
+registration: installing the listener must use the newer baseline. It then
+injects lag at the SDK-result boundary, verifies the listener is removed and
+receiving stays pending, and explicitly reconnects. No sleep-based lag test or
+SDK behavior change is needed. Model replacement coverage accepts a restarted
+sequence, preserves surviving navigation and rejects malformed snapshots without
+mutation. The library README example is a compiled doctest.
+
+For the initial behavioral red, the compiled App stub returned success without
+connecting and left the status disconnected; the live-baseline test failed its
+expected-live assertion. An earlier sandbox TCP bind denial was environment
+failure, not behavioral evidence; rerunning with loopback capability established
+the real red. The full inspector/SDK debug suites subsequently passed.
+
+Two test-only assumptions were corrected without changing requirements: server
+shutdown may deliver a transport reset rather than a clean close, and joining
+SDK tasks does not acknowledge server cleanup. Tests now require stale status
+and preserve the actual SDK reason for either shutdown outcome, and verify
+server cleanup after joined server shutdown. No server behavior was mocked or
+altered to satisfy these cases. Expiry/freshness advance an injected wall clock
+and wake the real scheduler through a production transport mutation, with
+bounded receive deadlines and no sleeps.
+
+Run focused checks with loopback access:
+
+```sh
+cargo test -p tanuki-ui -p tanuki-client
+cargo test -p tanuki-ui --release
+```
+
+Task 01's headless suite is now `cargo test -p tanuki-ui --test inspector`
+(12 tests, including replacement); the full UI package also requires sockets.
+Existing SDK `session::tests::clean_closure_drains_already_admitted_batches`,
+`observe::tests::projection_input_lag_is_terminal_even_with_unread_output`,
+and `tests/session_failures.rs` continue to verify raw driver guarantees and
+termination priority. Public diagnostics are covered; connection nodes are not
+exposed by the current server. This remains model/transport evidence for US-13,
+not terminal interaction, complete policy coverage or verified deployment.
+
+Task 02 completion: 40 UI/SDK tests passed in debug (including compiled
+examples in documentation), and all 24 UI tests passed in release. Formatting,
+workspace all-target Clippy with warnings denied, UI build/status-only binary
+smoke check and diff whitespace checks passed on the existing nightly pin.
+`cargo tree -p tanuki-ui -e normal --depth 1` confirms no production server
+dependency. No compiler, server, SDK, transport limit or protocol change was
+made; full workspace debug/release milestone gates remain due for Task 03.

@@ -6,12 +6,13 @@ use tanuki_protocol::{
 };
 use thiserror::Error;
 
-/// Display state only; connection lifecycle is owned by the future application loop.
+/// Display state updated by the application connection owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConnectionStatus {
     Connecting,
     Live,
     Disconnected,
+    Lagged,
     Error(String),
 }
 
@@ -150,6 +151,17 @@ impl Model {
         // SelectedView applies the entire batch before rows/details can be read.
         // Occurrences deliberately do not become retained values or history.
         self.view.apply(update)?;
+        self.rebuild();
+        Ok(())
+    }
+
+    /// Replace retained data atomically on reconnect, preserving navigation where
+    /// its full paths survive. Invalid snapshots leave the old display intact.
+    pub fn replace_snapshot(&mut self, snapshot: SnapshotView) -> Result<(), ModelError> {
+        for path in snapshot.nodes.keys() {
+            TopicPath::parse(path)?;
+        }
+        self.view = SelectedView::from_snapshot(snapshot);
         self.rebuild();
         Ok(())
     }

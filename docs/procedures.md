@@ -276,3 +276,30 @@ No connection lifecycle, startup/recovery, reconnect, disconnect detection,
 expiry scheduler or shutdown tasks are owned by this foundation; Task 02 will
 feed their observable effects through snapshots/batches and status changes.
 The binary only prints its implementation status and acquires no terminal state.
+
+## Inspector connection procedures — Task 02
+
+Create App with a configured WebSocket URL/client name (defaults: loopback
+`/v1/ws`, `tanuki-ui-<pid>-<counter>`). Initially it is disconnected and empty.
+An explicit reconnect marks the old cache connecting/stale, removes the old
+listener and closes/joins the old session, logging a prior abnormal termination.
+It connects once through the native SDK with `/**`, installs a raw listener,
+validates/replaces from registration's baseline and then marks the view live.
+Failure retains the old data with an error state; there is no retry or replay.
+
+Each `next_update().await` applies one complete batch. Rendering/input can
+cancel an idle receive without dequeuing a batch. A clean end marks disconnected
+(after SDK drainage); lag marks lagged and other failures mark error. Cache is
+retained and the listener removed so later receives remain pending. Explicit
+reconnect replaces all retained data, preserving surviving navigation/filtering;
+it does not append occurrences. Expiry is a production-server batch, not a UI
+timer or polling procedure. Connecting/disconnected/lagged/error all mean that
+the display must not be presented as current.
+
+Normal/error exit must await App close to join the SDK session, including
+already terminated sessions. Prior abnormal SDK reasons can still be returned
+after joining. Client join does not wait for server cleanup acknowledgement;
+production server shutdown separately joins its session cleanup. The future
+terminal loop must not draw during a network await or hold a server lock while
+drawing. Task 03 supplies input/render ticks, controls and restoration; the
+current binary still acquires no terminal state.

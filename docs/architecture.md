@@ -457,3 +457,33 @@ instant metadata are distinct. Detail lines remain complete for later scrolling.
 Control and directional formatting characters are escaped, including strings
 inside collections and attribution. The preview budget counts Unicode scalars;
 terminal display-cell clipping remains the future renderer's responsibility.
+
+## Inspector Task 02 — connection ownership
+
+`tanuki-ui::app::App` privately owns the model, `ConnectionConfig` and at most
+one SDK session with raw listener. Production dependencies now include the
+native SDK, Tokio and tracing; `tanuki` is a test-only dependency. No server,
+SDK or wire behavior changes. URL/name are configured in the library; CLI and
+terminal wiring remain Task 03. Local default names include PID and a counter.
+
+Reconnect marks the existing model connecting/non-current, joins the previous
+session, connects once with `/**`, then registers a raw listener. It replaces
+SelectedView from that listener's registration baseline, never hello. Model
+replacement validates before mutation, allows a lower restarted sequence and
+reconciles navigation by full path. Failed setup joins the new session and
+leaves cached nodes intact. Full batches apply through the existing Model/
+SelectedView boundary before a caller can draw; there is no extra queue or
+projection task. `next_update` is cancellation-safe at its receive await.
+
+Disconnected, lagged and error states retain the last complete view as stale.
+Terminal input results remove the listener; a retained session can then be
+joined on explicit reconnect/exit. `next_update` stays pending while inactive,
+so an eventual select loop cannot spin or auto-register. `close().await` joins
+SDK tasks; Drop only signals SDK shutdown. Error enums preserve SDK/model
+sources; logs escape display controls. The existing SDK capacity (64 raw
+batches) and transport limits remain in effect.
+
+Actual public scope: `/**` includes active reserved diagnostics, verified by
+real loopback tests alongside explicit system selection. There is currently no
+server connection-topic projection. Managed-session participation is not a
+fabricated `/$connections` node. Policy enumeration/explanation remains absent.
