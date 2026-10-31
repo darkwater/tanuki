@@ -1,0 +1,20 @@
+[package]
+name = "tanuki-tv-volume"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tanuki-client = { path = "../../tanuki-client" }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "=1.53.2", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+reqwest = { version = "=0.13.5", default-features = false }
+url = "=2.5.8"
+roxmltree = "=0.21.1"
+thiserror = "=2.0.21"
+tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std"] }
+
+[dev-dependencies]
+tanuki = { path = "../../tanuki" }
+jiff = { version = "=0.2.37", default-features = false, features = ["std"] }

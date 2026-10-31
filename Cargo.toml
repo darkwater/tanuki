@@ -1,4 +1,4 @@
 [workspace]
-members = ["tanuki", "tanuki-client", "tanuki-protocol", "tanuki-ui"]
-default-members = ["tanuki", "tanuki-client", "tanuki-protocol", "tanuki-ui"]
+members = ["tanuki", "tanuki-client", "tanuki-protocol", "tanuki-ui", "examples/tv-volume"]
+default-members = ["tanuki", "tanuki-client", "tanuki-protocol", "tanuki-ui", "examples/tv-volume"]
 resolver = "3"

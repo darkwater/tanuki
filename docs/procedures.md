@@ -362,3 +362,15 @@ page unload run queued futures. Browser certificate/mixed-content restrictions
 apply; use a TLS proxy for HTTPS deployments. The test helper starts the actual
 production binary on an assigned loopback port with temporary persistence, waits
 for its readiness log, runs browser tests and then sends SIGINT and joins it.
+
+## TV volume bridge
+
+See [configuration, discovery and service instructions](../examples/tv-volume/README.md).
+Run `cargo run -p tanuki-tv-volume -- DESCRIPTION_URL CALLBACK_URL [LISTEN_ADDR]
+[TANUKI_WS_URL]`; the callback must reach `/notify` from the TV. No service is
+automatically installed. A supplied systemd user-unit template restarts failures.
+Startup subscribes and explicitly claims retained intent. Shutdown attempts
+unsubscribe, callback-task termination, output removal and session close;
+input definition/value survive. Lost subscriptions require a fresh process
+subscription; stale output expires if cleanup cannot reach Tanuki. This example
+has simulated-device acceptance only, not verified physical-TV deployment.

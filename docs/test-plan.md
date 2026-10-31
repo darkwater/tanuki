@@ -304,3 +304,16 @@ incoming frames and clean/abnormal close codes. A silent socket peer may inject 
 stalled handshake for browser timer testing; it does not substitute for the real
 server's behavior. Browser TLS deployment, other engines and rendered web UI
 remain unverified. See [test evidence](testing.md#browser-sdk-acceptance--2026-10-31).
+
+## TV volume example acceptance — US-03.A5–A7
+
+Run `cargo test -p tanuki-tv-volume` and its `--release` equivalent. XML unit
+scenarios select instance 0/Master, reject invalid volume and malformed XML,
+resolve namespaced device descriptions/URLBase, and honor granted lease times.
+Real-socket tests in `examples/tv-volume/tests/bridge.rs` use production Tanuki
+and a simulated HTTP TV: initial/changed actual state, desired SOAP control,
+no optimistic publication, invalid requests, foreign SID isolation, renewal,
+sequence-gap and renewal-failure exit, claim takeover, and output removal.
+These do not certify a physical TV or tablet. Hardware notification behavior,
+crash expiry and systemd recovery remain manual checks in the example guide;
+US-03's power/HDMI criteria are still deferred.

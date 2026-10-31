@@ -349,3 +349,14 @@ Rust's socket API, and handshake errors may omit details. Browser receive size
 checks occur after complete-message allocation; timers depend on event-loop
 scheduling. Native TLS, JavaScript bindings and automatic reconnect remain
 outside this increment. See [SDK usage](../tanuki-client/README.md#browser-webassembly).
+
+## TV volume example convention
+
+The native [TV bridge](../examples/tv-volume/README.md) uses existing protocol
+operations only: retained output `/tv/volume` (integer 0–100, 90-second lease)
+and claimed retained input `/tv/desired-volume` (integer 0–100). These paths are
+application conventions, not reserved protocol names. Invalid input is logged
+by the adapter and not sent to the TV; absent a configured denying schema, a
+Tanuki write receipt still means publication acceptance. Actual output comes
+only from TV notifications. A lease refresh on subscription renewal repeats the
+last observed value, rather than establishing a new physical measurement.

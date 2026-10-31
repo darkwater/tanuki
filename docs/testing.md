@@ -605,3 +605,22 @@ uses browser TLS behind a proxy; TLS deployment, other engines, workers, Node,
 WASI, JavaScript bindings and rendered/deployed dashboards are unverified.
 Browser event/network buffers are outside SDK queue limits, and suspended tabs
 may delay deadlines and cleanup. These are not replay or retry guarantees.
+
+## TV volume example — 2026-10-31
+
+The example's red phase demonstrated missing Master volume extraction and
+missing range rejection, then an actual loopback integration failure because
+the stub bridge never subscribed. The implemented bridge passes four parser/
+subscription unit tests and five real-socket scenarios (production Tanuki plus
+simulated TV). A claim-check regression exposed an older observer registration
+baseline arriving after setup acceptance; the adapter now waits for an observed
+snapshot covering setup before checking its claim.
+
+Verification: `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, and
+`cargo test --workspace` passed. Final example tests passed in debug and release
+(`cargo test -p tanuki-tv-volume [--release]`), including initial-event timeout,
+sequence gap, renewal failure, claim displacement, invalid/duplicate events,
+lease metadata and orderly cleanup. The binary's `--help` command also ran.
+Loopback tests require permission to bind local sockets in restricted sandboxes.
+No actual TV, systemd installation or new browser behavior was tested.

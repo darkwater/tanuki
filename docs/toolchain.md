@@ -183,3 +183,18 @@ SDK README snippets use rustdoc's
 with `no_run`, so browser doc compilation does not attempt to execute a merged
 WASM test harness as a native process. Both snippets compile against the pin on
 native and WASM; no ignored examples or feature gates are needed.
+
+## TV volume example — 2026-10-31
+
+The unchanged nightly pin builds `examples/tv-volume`, a native workspace
+application. Reqwest 0.13.5 (default features off; local HTTP only), URL 2.5.8 and
+roxmltree 0.21.1 supply HTTP requests, URL resolution and XML parsing. Existing
+Axum, Tokio, SDK, tracing and thiserror versions are reused; no unstable gates
+or compatibility wrappers were added. Cargo.lock includes the new dependency
+graph without upgrading existing packages. The example is not a browser target.
+
+API checks used [Reqwest redirect policy](https://docs.rs/reqwest/0.13.5/reqwest/redirect/),
+[roxmltree Document](https://docs.rs/roxmltree/0.21.1/roxmltree/struct.Document.html),
+and pinned source for `Node::has_tag_name`, `Response::chunk` and SDK observers.
+Named XML tags match regardless of namespace prefix. Parser defaults disallow
+DTDs. Compile, Clippy and integration checks exercise the actual pinned APIs.

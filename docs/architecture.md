@@ -548,3 +548,20 @@ and the 1 MiB per-message check therefore do not bound total browser allocations
 incoming size checks run after browser message assembly. This is the practical
 tradeoff for using the established browser adapter. It does not change the raw
 listener lag or complete-snapshot contracts. Page suspension can delay deadlines.
+
+## TV volume example — 2026-10-31
+
+`examples/tv-volume` is a standalone native application crate, not server
+functionality. Its library owns UPnP XML discovery/event parsing, a bounded
+Axum callback listener, subscription renewal and a Tanuki SDK session; the thin
+binary supplies configuration and shutdown signals. Tests replace the external
+TV with an HTTP producer/actuator while running actual Tanuki server logic.
+
+Validated notifications flow through the current subscription SID/sequence
+check into `/tv/volume` publication through the SDK and normal core validation.
+`/tv/desired-volume` observations validate 0–100 before SOAP SetVolume. Output
+is never fabricated from SOAP success. Registration can predate processing of
+the setup write's update, so claim checks wait for an observed snapshot at least
+as new as that write. Later claim takeover stops the bridge. Renewal refreshes
+the output lease from the last observed value; details and limitations are in
+[the example guide](../examples/tv-volume/README.md).
