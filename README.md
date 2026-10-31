@@ -1,5 +1,10 @@
 # Tanuki
 
+> [!IMPORTANT]
+>
+> **Vibe meter**: I'm designing the API and how the system should work but the
+> code is 100% AI slop.
+
 Tanuki is an early personal automation fabric for named state, events, desired
 inputs, and commands. One transport-independent core supplies atomic writes,
 managed input ownership, coherent subscriptions, expiry, schemas, writable
