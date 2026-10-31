@@ -115,3 +115,26 @@ It used no Tanuki session or SOAP commands; all live volume changes came from
 the user. This verifies notification parsing on the physical TV, while complete
 bridge operation under reordering is tested with simulated-TV/production-server
 fixtures. No volume-setting live test is authorized while media is playing.
+
+## Mute state and control — 2026-11-01
+
+- **US-03.A9:** Consumers can observe `/tv/mute` as a boolean and request mute
+  or unmute through `/tv/desired-mute`. Mute is observed independently of volume;
+  SOAP acceptance alone does not establish the actual mute state. Combined
+  volume/mute notifications must be visible atomically.
+
+The user requested mute alongside the implemented volume bridge. Both new
+paths are retained, with `/tv/desired-mute` defined/claimed by `tv-volume bridge`.
+Inputs require boolean payloads. The adapter uses RenderingControl `SetMute`
+(instance 0, Master, DesiredMute 1/0); no toggle/replay command was introduced.
+Observed mute remains absent until reported, expires after 90 seconds, and is
+refreshed alongside known volume on subscription renewal. Mute-only events leave
+volume unchanged; reordering preserves the latest value of each field.
+
+Parser and production-server/simulated-TV tests cover initial absence, combined
+atomic publication, mute-only events, true/false controls without optimistic
+output, invalid input, per-input deduplication, claim takeover with an invalid
+pending payload, renewal and atomic cleanup. A9 is implemented/tested with fake
+TVs. Physical mute notifications/controls remain unverified: no live mute or
+volume commands were sent while media was playing. Existing paths and the
+single-TV discovery/selection conventions remain unchanged.

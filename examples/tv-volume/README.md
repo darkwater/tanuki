@@ -1,22 +1,26 @@
 # TV volume bridge
 
-A native Rust example service that publishes UPnP RenderingControl volume to
-Tanuki and accepts volume requests through Tanuki. It uses GENA notifications,
-not volume polling. Developed from the user's `~/tv-volume.sh` Samsung
+A native Rust example service that publishes UPnP RenderingControl volume and
+mute state to Tanuki and accepts volume/mute requests through Tanuki. It uses
+GENA notifications, without volume polling. Developed from the user's `~/tv-volume.sh` Samsung
 `SetVolume` script; tested against a simulated TV and the real Tanuki server.
-Read-only SSDP discovery was verified on the user's LAN on 2026-11-01;
-physical-TV volume control and event delivery remain unverified.
+Read-only SSDP discovery and volume notification parsing were verified on the
+user's LAN with a receive-only probe on 2026-11-01. Physical-TV
+volume/mute controls and complete bridge deployment remain unverified.
 
 | Topic | Kind | Value |
 | --- | --- | --- |
 | `/tv/volume` | retained output | observed integer 0–100, instance 0, Master channel |
 | `/tv/desired-volume` | retained input | requested integer 0–100 |
+| `/tv/mute` | retained output | observed boolean: `true` means muted |
+| `/tv/desired-mute` | retained input | requested boolean: `true` mutes, `false` unmutes |
 
 The managed client name is `tv-volume bridge`. Paths and name are local example
 conventions, currently fixed for one TV. Use a single running instance. No
 schema is installed automatically: the bridge validates control values and logs
 invalid requests. Tanuki acceptance does not guarantee TV execution. SOAP
-success never publishes an invented actual volume.
+success never publishes invented observed volume or mute state. Mute is not
+inferred from a zero volume value.
 
 ## Run
 
@@ -49,7 +53,7 @@ cargo run -p tanuki-tv-volume -- --device '[TV] Samsung TV'
 ```
 
 These bridge commands enable the existing control behavior, including applying
-unexpired retained desired volume at startup. **Use `--discover` for read-only
+unexpired retained desired volume or mute at startup. **Use `--discover` for read-only
 checks while media is playing.** It returns before listener setup, Tanuki
 connection, input claiming or control code. Automated control tests use isolated
 loopback simulated TVs.
@@ -91,7 +95,7 @@ fetches during discovery have three-second timeouts, eight concurrent requests,
 and the existing 64 KiB body limit; at most 512 SSDP responses and 64 description
 URLs are processed.
 
-Observe changes with the inspector or SSE, and submit a requested volume:
+Observe changes with the inspector or SSE, and submit requested audio settings:
 
 ```sh
 cargo run -p tanuki-ui
@@ -99,7 +103,18 @@ curl -N 'http://127.0.0.1:5167/v1/sse?select=/tv/**'
 curl -sS -H 'Tanuki-Client: TV remote' -H 'Content-Type: application/json' \
   --data '{"operations":[{"op":"submit_desired","topic":"/tv/desired-volume","value":25,"expiry":{"mode":"set","duration":"PT30S"}}]}' \
   http://127.0.0.1:5167/v1/write
+# Mute (send false instead of true to unmute):
+curl -sS -H 'Tanuki-Client: TV remote' -H 'Content-Type: application/json' \
+  --data '{"operations":[{"op":"submit_desired","topic":"/tv/desired-mute","value":true,"expiry":{"mode":"set","duration":"PT30S"}}]}' \
+  http://127.0.0.1:5167/v1/write
 ```
+
+Desired mute requires a JSON boolean, not a numeric or string value. The bridge
+calls `SetMute` with instance 0, Master channel and `DesiredMute` 1/0. Its SOAP
+response confirms only action acceptance; observed `/tv/mute` changes only when
+a TV notification reports it. Mute-only events leave volume unchanged. An event
+containing volume and mute publishes both in one Tanuki batch, and reordered
+event coalescing preserves the latest value of each field independently.
 
 An unexpired retained request is applied once when the bridge starts/restarts.
 Subsequent submissions are applied once per observed write provenance; rapid
@@ -113,37 +128,41 @@ still-retained intent again. Give short-lived requests an expiry as above.
 
 Startup discovers/selects a device (unless explicitly configured), chooses the
 callback, fetches the description, connects to Tanuki, removes old observed state,
-and defines/claims the desired input. The callback listener starts before
+and defines/claims both desired inputs. The callback listener starts before
 `SUBSCRIBE`, so an initial notification arriving before the subscribe response
 can queue safely. The bridge waits for real subscription events and requires a
 Master volume within ten seconds. TVs that omit it are currently unsupported;
-there is no silent polling fallback or `GetVolume` bootstrap.
+there is no silent polling fallback or `GetVolume` bootstrap. Mute is optional
+in the initial report: `/tv/mute` remains absent until reported and is never
+defaulted to false. TV support for mute notifications and `SetMute` is required
+to use those features; unsupported SOAP actions are logged without retry.
 
 Subscriptions request 60 seconds and renew at half the granted interval, capped
 at 30 seconds. Only the current SID is processed. Empty `LastChange` values
 (including whitespace or empty CDATA) are accepted as no-op notifications: they
-advance the subscription sequence without changing observed volume. Duplicate
+advance the subscription sequence without changing observed audio state. Duplicate
 or late sequence numbers are ignored. Out-of-order notifications wait in a
 buffer of at most 64 events for up to one second, then apply in sequence order;
-contiguous buffered volume changes can coalesce to the latest value. An
+contiguous buffered audio changes can coalesce to the latest value per field. An
 unresolved gap or full reorder buffer ends the service so restarting gets a
 fresh initial state. A bounded 64-message callback queue returns HTTP 503 when
 full; malformed events return 400. HTTP bodies are limited to 64 KiB and outgoing
 requests have ten-second timeouts. Callback replies use UPnP HTTP status codes,
 not Tanuki JSON envelopes.
 
-Actual volume has a 90-second expiry, refreshed on events and successful
-subscription renewal. A renewal refresh repeats the last observed value; its
-Tanuki timestamp indicates bridge/subscription health, **not a new measurement**.
+Observed volume and mute have 90-second expiries, refreshed when each field is
+reported and together on successful subscription renewal (for known fields).
+A renewal refresh repeats the last observed values; their Tanuki timestamps
+indicate bridge/subscription health, **not a new measurement**.
 A TV that silently stops delivering events while accepting renewals cannot be
 detected without additional device-specific checks. This is an explicit limit
 of this notification-only example.
 
 Renewal failure, event gaps, Tanuki disconnection, or observed claim takeover
 end the service with an error. Ctrl-C/SIGTERM ends it normally. Cleanup attempts
-`UNSUBSCRIBE`, stops the callback task, removes observed volume and closes the
-session, releasing its claim. Desired intent remains. If cleanup cannot reach
-Tanuki, the published volume expires. The bridge stores nothing on disk;
+`UNSUBSCRIBE`, stops the callback task, removes both observed topics in one
+batch and closes the session, releasing both claims. Desired intent remains.
+If cleanup cannot reach Tanuki, the published audio states expire. The bridge stores nothing on disk;
 Tanuki owns any persistence. Callback and control operations are serialized in
 the bridge loop; a slow SOAP request can delay processing/renewal until timeout.
 
@@ -178,7 +197,8 @@ SSDP responder and HTTP descriptions to verify duplicate suppression, device
 filtering, GET-only access, unique name/UDN selection and callback route/port
 selection; CLI tests cover read-only listing and existing explicit-address syntax. Integration tests use actual
 HTTP callbacks, SOAP requests, WebSockets and production Tanuki server logic:
-initial/event publication, control without optimistic output, invalid intent,
+initial/event publication, atomic volume/mute updates, mute-only and reordered
+audio changes, SetMute for true/false without optimistic output, invalid intent,
 foreign subscriptions, renewal, a 130-event empty-notification burst followed by
 a valid volume update, reordered updates, duplicate/wraparound handling,
 missing-event recovery boundary, claim takeover,

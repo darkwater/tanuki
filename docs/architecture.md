@@ -586,3 +586,20 @@ and waits one second for a missing predecessor, applies contiguous changes in
 order, and publishes their latest volume. Duplicate/late arrivals cannot roll
 back output; sequence wrap skips the initial-event zero. A gap that remains
 unresolved ends this connection lifetime for supervised recovery.
+
+## TV mute increment — 2026-11-01
+
+The bridge parses `RenderingChange` with independently optional volume and mute
+fields for instance 0/Master. A field is absent until actually reported. The
+sequence buffer merges each field separately across contiguous notifications;
+a single SDK batch publishes all fields reported by the released change. The
+cached known fields are refreshed together at renewal, and both observed topics
+are removed together during startup/cleanup.
+
+`/tv/desired-volume` and `/tv/desired-mute` are defined/claimed atomically and
+observed as one selected view. Small per-input trackers check raw claim metadata
+before decoding payloads and deduplicate each input by write provenance. Both
+claims are checked before sending any action from that snapshot. A local Control
+enum selects SetVolume or SetMute XML/action/response tags. Device responses do
+not publish observed values. The parser and HTTP/SOAP client remain independent
+of Tanuki core mutation; all publications use the SDK and normal validation.

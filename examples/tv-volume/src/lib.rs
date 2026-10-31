@@ -47,40 +47,78 @@ pub enum Error {
     Protocol(&'static str),
 }
 
-/// Only instance zero's Master channel describes this example's TV volume.
-pub fn notification_volume(xml: &str) -> Result<Option<u8>, Error> {
+/// The changed fields of instance zero's Master audio channel.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RenderingChange {
+    volume: Option<u8>,
+    mute: Option<bool>,
+}
+impl RenderingChange {
+    pub fn volume(&self) -> Option<u8> {
+        self.volume
+    }
+    pub fn mute(&self) -> Option<bool> {
+        self.mute
+    }
+    fn merge(&mut self, newer: Self) {
+        if newer.volume.is_some() {
+            self.volume = newer.volume;
+        }
+        if newer.mute.is_some() {
+            self.mute = newer.mute;
+        }
+    }
+}
+
+/// Parse only reported fields; missing mute never implies an unmuted TV.
+pub fn notification_change(xml: &str) -> Result<RenderingChange, Error> {
     let outer = Document::parse(xml)?;
-    let Some(change) = outer
-        .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "LastChange")
-    else {
-        return Ok(None);
+    let Some(change) = outer.descendants().find(|n| n.has_tag_name("LastChange")) else {
+        return Ok(RenderingChange::default());
     };
     let text = change.text().unwrap_or_default().trim();
     if text.is_empty() {
-        // Samsung also sends empty LastChange events. They still carry a SEQ
-        // that the subscription loop must consume, without publishing a value.
-        tracing::debug!("empty LastChange notification has no volume update");
-        return Ok(None);
+        // Samsung also sends empty events, whose SEQ must still be consumed.
+        tracing::debug!("empty LastChange notification has no audio update");
+        return Ok(RenderingChange::default());
     }
     let inner = Document::parse(text)?;
-    for instance in inner.descendants().filter(|n| {
-        n.is_element() && n.tag_name().name() == "InstanceID" && n.attribute("val") == Some("0")
-    }) {
-        if let Some(volume) = instance.children().find(|n| {
-            n.is_element()
-                && n.tag_name().name() == "Volume"
-                && n.attribute("channel") == Some("Master")
-        }) {
-            return volume
-                .attribute("val")
-                .and_then(|s| s.parse::<u8>().ok())
-                .filter(|v| *v <= 100)
-                .map(Some)
-                .ok_or(Error::Protocol("volume must be 0..100"));
+    let mut change = RenderingChange::default();
+    for instance in inner
+        .descendants()
+        .filter(|n| n.has_tag_name("InstanceID") && n.attribute("val") == Some("0"))
+    {
+        for field in instance
+            .children()
+            .filter(|n| n.is_element() && n.attribute("channel") == Some("Master"))
+        {
+            match field.tag_name().name() {
+                "Volume" => {
+                    change.volume = Some(
+                        field
+                            .attribute("val")
+                            .and_then(|s| s.parse::<u8>().ok())
+                            .filter(|v| *v <= 100)
+                            .ok_or(Error::Protocol("volume must be 0..100"))?,
+                    )
+                }
+                "Mute" => {
+                    change.mute = Some(match field.attribute("val") {
+                        Some("0" | "false" | "no") => false,
+                        Some("1" | "true" | "yes") => true,
+                        _ => return Err(Error::Protocol("mute must be a UPnP boolean")),
+                    })
+                }
+                _ => {}
+            }
         }
     }
-    Ok(None)
+    Ok(change)
+}
+
+/// Compatibility helper for consumers interested only in volume.
+pub fn notification_volume(xml: &str) -> Result<Option<u8>, Error> {
+    Ok(notification_change(xml)?.volume)
 }
 
 #[derive(Clone, Debug)]
@@ -195,11 +233,11 @@ fn subscription(headers: &HeaderMap) -> Result<Subscription, Error> {
 struct Notification {
     sid: String,
     seq: u32,
-    volume: Option<u8>,
+    change: RenderingChange,
 }
 struct NotificationSequence {
     next: u32,
-    pending: std::collections::BTreeMap<u32, Option<u8>>,
+    pending: std::collections::BTreeMap<u32, RenderingChange>,
     gap_deadline: Option<Instant>,
 }
 impl NotificationSequence {
@@ -210,19 +248,22 @@ impl NotificationSequence {
             gap_deadline: None,
         }
     }
-    fn push(&mut self, seq: u32, volume: Option<u8>, now: Instant) -> Result<Option<u8>, Error> {
+    fn push(
+        &mut self,
+        seq: u32,
+        change: RenderingChange,
+        now: Instant,
+    ) -> Result<RenderingChange, Error> {
         // Sequence zero is reserved for the initial event; wrapped streams
         // continue at one. Ignore duplicates/late packets behind our frontier.
         if seq != self.next && (seq == 0 || seq.wrapping_sub(self.next) >= (1 << 31)) {
-            return Ok(None);
+            return Ok(RenderingChange::default());
         }
         let previous_next = self.next;
-        self.pending.entry(seq).or_insert(volume);
-        let mut latest = None;
-        while let Some(volume) = self.pending.remove(&self.next) {
-            if volume.is_some() {
-                latest = volume;
-            }
+        self.pending.entry(seq).or_insert(change);
+        let mut latest = RenderingChange::default();
+        while let Some(change) = self.pending.remove(&self.next) {
+            latest.merge(change);
             self.next = self.next.wrapping_add(1).max(1);
         }
         if self.pending.len() > 64 {
@@ -258,9 +299,9 @@ async fn notify(
     ) else {
         return StatusCode::BAD_REQUEST;
     };
-    let volume = match std::str::from_utf8(&body)
+    let change = match std::str::from_utf8(&body)
         .map_err(Error::Utf8)
-        .and_then(notification_volume)
+        .and_then(notification_change)
     {
         Ok(v) => v,
         Err(error) => {
@@ -271,7 +312,7 @@ async fn notify(
     match tx.try_send(Notification {
         sid: sid.into(),
         seq,
-        volume,
+        change,
     }) {
         Ok(()) => StatusCode::OK,
         Err(error) => {
@@ -281,46 +322,110 @@ async fn notify(
     }
 }
 
-async fn publish(actual: &StateTopic<u8>, volume: u8) -> Result<(), Error> {
+async fn publish(
+    session: &Session,
+    actual: &StateTopic<u8>,
+    mute: &StateTopic<bool>,
+    change: RenderingChange,
+) -> Result<(), Error> {
+    if change == RenderingChange::default() {
+        return Ok(());
+    }
     let lease = NonNegativeDuration::new(
         std::time::Duration::from_secs(90)
             .try_into()
             .expect("90 seconds fit"),
     )
     .expect("positive lease");
-    let receipt = actual.publish(&volume, ExpiryUpdate::Set(lease)).await?;
-    for warning in receipt.warnings {
+    let mut batch = session.batch();
+    if let Some(value) = change.volume {
+        batch.publish(actual, &value, ExpiryUpdate::Set(lease))?;
+    }
+    if let Some(value) = change.mute {
+        batch.publish(mute, &value, ExpiryUpdate::Set(lease))?;
+    }
+    for warning in batch.commit().await?.warnings {
         tracing::warn!(?warning, "Tanuki publication warning");
     }
     Ok(())
 }
 
-async fn set_volume(client: &Client, service: &Service, volume: u8) -> Result<(), Error> {
+enum Control {
+    Volume(u8),
+    Mute(bool),
+}
+async fn set_audio(client: &Client, service: &Service, control: Control) -> Result<(), Error> {
+    let (action, argument, value) = match control {
+        Control::Volume(value) => ("SetVolume", "DesiredVolume", value.to_string()),
+        Control::Mute(value) => ("SetMute", "DesiredMute", u8::from(value).to_string()),
+    };
     let body = format!(
-        "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:SetVolume xmlns:u=\"{}\"><InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>{volume}</DesiredVolume></u:SetVolume></s:Body></s:Envelope>",
+        "<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:{action} xmlns:u=\"{}\"><InstanceID>0</InstanceID><Channel>Master</Channel><{argument}>{value}</{argument}></u:{action}></s:Body></s:Envelope>",
         service.kind
     );
     let response = client
         .post(service.control.clone())
         .header("Content-Type", "text/xml; charset=\"utf-8\"")
-        .header("SOAPACTION", format!("\"{}#SetVolume\"", service.kind))
+        .header("SOAPACTION", format!("\"{}#{action}\"", service.kind))
         .body(body)
         .send()
         .await?;
     let xml = xml_body(response).await?;
     let doc = Document::parse(&xml)?;
-    if !doc
-        .descendants()
-        .any(|n| n.is_element() && n.tag_name().name() == "SetVolumeResponse")
-        || doc
-            .descendants()
-            .any(|n| n.is_element() && n.tag_name().name() == "Fault")
+    let expected = format!("{action}Response");
+    if !doc.descendants().any(|n| n.has_tag_name(expected.as_str()))
+        || doc.descendants().any(|n| n.has_tag_name("Fault"))
     {
         return Err(Error::Protocol(
-            "SetVolume did not return a successful SOAP response",
+            "audio action did not return a successful SOAP response",
         ));
     }
     Ok(())
+}
+
+/// The two typed inputs share claim checks and per-write deduplication.
+#[derive(Default)]
+struct InputTracker {
+    claim_id: Option<u64>,
+    last_write: Option<tanuki_client::protocol::ProvenanceView>,
+}
+impl InputTracker {
+    fn accept<T>(
+        &mut self,
+        raw: Option<&tanuki_client::protocol::NodeView>,
+        decoded: Result<Option<tanuki_client::DecodedNode<T>>, tanuki_client::ReadError>,
+    ) -> Result<Option<T>, Error> {
+        // Claim authority is independent of whether the pending payload decodes.
+        let claim = match raw {
+            Some(tanuki_client::protocol::NodeView::Desired {
+                claim: Some(claim), ..
+            }) => claim,
+            Some(_) => return Err(Error::Protocol("desired audio input claim was released")),
+            None => return Err(Error::Protocol("desired audio input definition removed")),
+        };
+        if claim.owner != "tv-volume bridge" || self.claim_id.is_some_and(|id| id != claim.id) {
+            return Err(Error::Protocol(
+                "desired audio input claim was taken by another controller",
+            ));
+        }
+        self.claim_id = Some(claim.id);
+        let current = match decoded {
+            Ok(Some(tanuki_client::DecodedNode::Desired { current, .. })) => current,
+            Ok(_) => return Err(Error::Protocol("desired audio input changed kind")),
+            Err(error) => {
+                tracing::warn!(%error, "invalid desired audio value");
+                return Ok(None);
+            }
+        };
+        let Some(current) = current else {
+            return Ok(None);
+        };
+        if self.last_write.as_ref() == Some(&current.last_write) {
+            return Ok(None);
+        }
+        self.last_write = Some(current.last_write);
+        Ok(Some(current.value))
+    }
 }
 
 /// One connection lifetime. On failure a supervisor can restart with a fresh
@@ -349,10 +454,11 @@ pub async fn run(
     let session = Session::connect(
         &config.tanuki_url,
         ClientName::parse("tv-volume bridge").expect("constant name"),
-        vec![Selector::parse("/tv/desired-volume").expect("constant selector")],
+        vec![Selector::parse("/tv/{desired-volume,desired-mute}").expect("constant selector")],
     )
     .await?;
     let actual = session.state::<u8>("/tv/volume")?;
+    let mute = session.state::<bool>("/tv/mute")?;
     let (tx, mut rx) = mpsc::channel(64);
     let app = Router::new()
         .route(callback.path(), any(notify))
@@ -362,17 +468,24 @@ pub async fn run(
     let mut active: Option<Subscription> = None;
     let work = async {
         // Remove a previous process's cached state before subscribing.
-        actual.remove().await?;
+        let mut clear = session.batch();
+        clear.remove(&actual)?.remove(&mute)?;
+        clear.commit().await?;
         let desired = session.desired::<u8>("/tv/desired-volume")?;
+        let desired_mute = session.desired::<bool>("/tv/desired-mute")?;
         let mut setup = session.batch();
         setup
             .define(&desired)?
-            .claim(&desired, ClaimRelease::Immediate)?;
+            .claim(&desired, ClaimRelease::Immediate)?
+            .define(&desired_mute)?
+            .claim(&desired_mute, ClaimRelease::Immediate)?;
         let setup_receipt = setup.commit().await?;
         for warning in setup_receipt.warnings {
             tracing::warn!(?warning, "Tanuki setup warning");
         }
-        let mut intent = session.observe(&desired).await?;
+        let mut intent = session
+            .observe_batch([desired.path().clone(), desired_mute.path().clone()])
+            .await?;
         let response = client
             .request(
                 Method::from_bytes(b"SUBSCRIBE").expect("constant method"),
@@ -386,10 +499,10 @@ pub async fn run(
             .error_for_status()?;
         active = Some(subscription(response.headers())?);
         tracing::info!(events = %service.events, "TV event subscription active");
-        let mut volume = None;
+        let mut observed = RenderingChange::default();
         let mut sequence = NotificationSequence::new();
-        let mut last_intent = None;
-        let mut claim_id = None;
+        let mut volume_input = InputTracker::default();
+        let mut mute_input = InputTracker::default();
         let initial_deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let sub = active.as_ref().expect("subscribed");
@@ -397,47 +510,37 @@ pub async fn run(
                 message = rx.recv() => {
                     let message = message.ok_or(Error::Protocol("callback server stopped"))?;
                     if message.sid != sub.sid { tracing::warn!(sid = %message.sid, "ignoring notification for another subscription"); continue; }
-                    if let Some(value) = sequence.push(message.seq, message.volume, Instant::now())? {
-                        publish(&actual, value).await?;
-                        volume = Some(value);
-                    }
+                    let change = sequence.push(message.seq, message.change, Instant::now())?;
+                    publish(&session, &actual, &mute, change).await?;
+                    observed.merge(change);
                 }
                 snapshot = intent.recv() => {
                     let snapshot = snapshot?.ok_or(Error::Protocol("Tanuki observer closed"))?;
                     // A write receipt can arrive before the SDK processes its update.
                     // Wait for an observed snapshot that includes our definition/claim.
                     if snapshot.sequence() < setup_receipt.sequence { continue; }
-                    match snapshot.read(&desired) {
-                        Ok(Some(node)) => {
-                            let tanuki_client::DecodedNode::Desired { claim: Some(claim), .. } = &node else {
-                                return Err(Error::Protocol("desired volume claim was released"));
-                            };
-                            if claim.owner != "tv-volume bridge" || claim_id.is_some_and(|id| id != claim.id) {
-                                return Err(Error::Protocol("desired volume claim was taken by another controller"));
-                            }
-                            claim_id = Some(claim.id);
-                            if let Some(current) = node.current() {
-                            if last_intent.as_ref() == Some(&current.last_write) { continue; }
-                            last_intent = Some(current.last_write.clone());
-                            if current.value > 100 { tracing::warn!(value = current.value, "desired volume outside 0..100"); continue; }
-                            if let Err(error) = set_volume(&client, &service, current.value).await { tracing::warn!(%error, "SetVolume failed; not retrying this request"); }
-                            }
-                        },
-                        Ok(None) => return Err(Error::Protocol("desired volume definition removed")),
-                        Err(error) => tracing::warn!(%error, "invalid desired volume"),
+                    let volume_request = volume_input.accept(snapshot.node(desired.path()), snapshot.read(&desired))?;
+                    let mute_request = mute_input.accept(snapshot.node(desired_mute.path()), snapshot.read(&desired_mute))?;
+                    if let Some(value) = volume_request {
+                        if value <= 100 {
+                            if let Err(error) = set_audio(&client, &service, Control::Volume(value)).await { tracing::warn!(%error, "SetVolume failed; not retrying this request"); }
+                        } else { tracing::warn!(value, "desired volume outside 0..100"); }
                     }
+                    if let Some(value) = mute_request
+                        && let Err(error) = set_audio(&client, &service, Control::Mute(value)).await
+                    { tracing::warn!(%error, "SetMute failed; not retrying this request"); }
                 }
                 _ = sleep_until(sub.renew_at) => {
                     let response = client.request(Method::from_bytes(b"SUBSCRIBE").expect("constant method"), service.events.clone()).header("SID", &sub.sid).header("TIMEOUT", "Second-60").send().await?.error_for_status()?;
                     let renewed = subscription(response.headers())?;
                     if renewed.sid != sub.sid { return Err(Error::Protocol("renewal changed subscription SID")); }
                     active = Some(renewed);
-                    if let Some(value) = volume { publish(&actual, value).await?; }
+                    publish(&session, &actual, &mute, observed).await?;
                 }
                 _ = sleep_until(sequence.gap_deadline.unwrap_or(initial_deadline)), if sequence.gap_deadline.is_some() => {
                     return Err(Error::Protocol("notification sequence gap persisted for one second; resubscribe to recover state"));
                 }
-                _ = sleep_until(initial_deadline), if volume.is_none() => return Err(Error::Protocol("TV sent no initial Master volume within 10 seconds")),
+                _ = sleep_until(initial_deadline), if observed.volume.is_none() => return Err(Error::Protocol("TV sent no initial Master volume within 10 seconds")),
             }
         }
     };
@@ -462,8 +565,10 @@ pub async fn run(
     }
     server.abort();
     let _ = server.await;
-    if let Err(error) = actual.remove().await {
-        tracing::warn!(%error, "could not remove observed volume; expiry will clear it");
+    let mut clear = session.batch();
+    clear.remove(&actual)?.remove(&mute)?;
+    if let Err(error) = clear.commit().await {
+        tracing::warn!(%error, "could not remove observed audio; expiry will clear it");
     }
     if let Err(error) = session.close().await {
         tracing::warn!(%error, "Tanuki session close failed");
@@ -482,36 +587,90 @@ mod tests {
     }
 
     #[test]
+    fn notifications_expose_master_mute_with_volume_or_on_its_own() {
+        let change = notification_change(&event("<InstanceID val='1'><Mute channel='Master' val='1'/></InstanceID><InstanceID val='0'><Mute channel='LF' val='1'/><Volume channel='Master' val='25'/><Mute channel='Master' val='0'/></InstanceID>")).unwrap();
+        assert_eq!(change.volume(), Some(25));
+        assert_eq!(change.mute(), Some(false));
+        for (text, expected) in [
+            ("1", true),
+            ("0", false),
+            ("true", true),
+            ("false", false),
+            ("yes", true),
+            ("no", false),
+        ] {
+            let change = notification_change(&event(&format!(
+                "<InstanceID val='0'><Mute channel='Master' val='{text}'/></InstanceID>"
+            )))
+            .unwrap();
+            assert_eq!(change.volume(), None);
+            assert_eq!(change.mute(), Some(expected));
+        }
+        assert!(
+            notification_change(&event(
+                "<InstanceID val='0'><Mute channel='Master' val='2'/></InstanceID>"
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn reordered_notifications_preserve_volume_order_and_duplicates_do_not_roll_back() {
         let now = Instant::now();
+        let change = |volume| RenderingChange { volume, mute: None };
         let mut sequence = NotificationSequence::new();
-        assert_eq!(sequence.push(0, Some(25), now).unwrap(), Some(25));
-        assert_eq!(sequence.push(2, Some(40), now).unwrap(), None);
+        assert_eq!(
+            sequence.push(0, change(Some(25)), now).unwrap(),
+            change(Some(25))
+        );
+        assert_eq!(
+            sequence.push(2, change(Some(40)), now).unwrap(),
+            change(None)
+        );
         assert!(sequence.gap_deadline.is_some());
-        assert_eq!(sequence.push(1, Some(30), now).unwrap(), Some(40));
+        assert_eq!(
+            sequence.push(1, change(Some(30)), now).unwrap(),
+            change(Some(40))
+        );
         assert!(sequence.gap_deadline.is_none());
-        assert_eq!(sequence.push(1, Some(99), now).unwrap(), None);
-        assert_eq!(sequence.push(4, None, now).unwrap(), None);
-        assert_eq!(sequence.push(3, Some(39), now).unwrap(), Some(39));
+        assert_eq!(
+            sequence.push(1, change(Some(99)), now).unwrap(),
+            change(None)
+        );
+        assert_eq!(sequence.push(4, change(None), now).unwrap(), change(None));
+        assert_eq!(
+            sequence.push(3, change(Some(39)), now).unwrap(),
+            change(Some(39))
+        );
         assert!(sequence.gap_deadline.is_none());
     }
 
     #[test]
     fn missing_events_have_a_bounded_wait_and_reorder_capacity() {
         let now = Instant::now();
+        let change = |volume| RenderingChange { volume, mute: None };
         let mut sequence = NotificationSequence::new();
-        sequence.push(0, None, now).unwrap();
+        sequence.push(0, change(None), now).unwrap();
         for seq in 2..=65 {
-            assert_eq!(sequence.push(seq, None, now).unwrap(), None);
+            assert_eq!(sequence.push(seq, change(None), now).unwrap(), change(None));
         }
         assert_eq!(sequence.gap_deadline, Some(now + Duration::from_secs(1)));
-        assert!(sequence.push(66, None, now).is_err());
+        assert!(sequence.push(66, change(None), now).is_err());
         let mut sequence = NotificationSequence::new();
         sequence.next = u32::MAX;
-        assert_eq!(sequence.push(1, Some(11), now).unwrap(), None);
-        assert_eq!(sequence.push(u32::MAX, Some(10), now).unwrap(), Some(11));
+        assert_eq!(
+            sequence.push(1, change(Some(11)), now).unwrap(),
+            change(None)
+        );
+        assert_eq!(
+            sequence.push(u32::MAX, change(Some(10)), now).unwrap(),
+            change(Some(11))
+        );
         assert_eq!(sequence.next, 2);
-        assert_eq!(sequence.push(u32::MAX, Some(99), now).unwrap(), None);
+        assert_eq!(
+            sequence.push(u32::MAX, change(Some(99)), now).unwrap(),
+            change(None)
+        );
     }
 
     #[test]

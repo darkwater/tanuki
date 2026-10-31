@@ -670,3 +670,24 @@ unsubscribe (HTTP 200 on exit). It had no Tanuki session or SOAP control path;
 all live volume changes were made by the user. The complete reorder/mutation
 flow was verified against production Tanuki with a simulated TV, not by running
 a live controller against the playing TV. No compiler/dependency changes.
+
+## TV mute — 2026-11-01
+
+The red parser test observed missing mute after a combined volume/mute report;
+the red production-server/loopback-TV test also failed because `/tv/mute` was
+absent from that report. The implementation now extracts both Master/instance-0
+fields and publishes a combined change atomically. Tests cover UPnP boolean
+forms, missing/invalid mute, absent-until-observed state, SetMute true/false,
+no optimistic publication, mute-only updates, per-field reorder merging,
+boolean-only desired input, renewal, deduplication and atomic cleanup.
+
+A takeover test with an invalid pending mute payload initially timed out:
+payload decoding hid claim replacement. Both input trackers now check raw claim
+metadata before decoding and check both claims before acting on a snapshot.
+The same real-server test verifies takeover stops the bridge in this condition.
+
+All 24 example tests (13 library, two CLI, nine integration) pass in debug and
+release, with workspace/all-target Clippy `-D warnings`, rustfmt and diff checks.
+Only loopback simulated TVs received control commands. No live TV mute/volume
+commands were sent; physical mute support remains unverified. Toolchain and
+Cargo dependency graph are unchanged.

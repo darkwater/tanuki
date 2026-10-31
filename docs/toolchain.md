@@ -213,3 +213,11 @@ feature gates are unchanged; parser and loopback regression tests exercise the
 same compiled bridge in debug and release modes. A standard `BTreeMap` and
 Tokio `Instant`/`sleep_until` provide bounded notification reordering; no
 additional dependency or runtime task is introduced.
+
+Mute support (2026-11-01) reuses the existing compiler and dependencies with no
+new feature gates. The RenderingControl v1 specification confirms SetMute's
+InstanceID, Channel and DesiredMute arguments. Existing SDK typed bool handles,
+atomic batches, raw NodeView claim metadata and fallible payload decoding were
+checked in repository source and compiled in debug/release tests. A generic
+local tracker operates on already decoded payloads without adding Serde bounds,
+a new dependency or an async trait.

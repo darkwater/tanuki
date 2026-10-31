@@ -389,3 +389,11 @@ callback queue overflow still requires the documented fresh subscription/restart
 procedure. Live diagnostics while media is playing must
 use a receive-only subscriber; starting the regular bridge can apply retained
 control intent.
+
+The bridge also claims `/tv/desired-mute` and publishes `/tv/mute`. Submit a
+boolean desired value to mute/unmute; still-unexpired intent can be applied at
+startup just like desired volume. No live control tests should run while media
+is playing. Mute remains absent until reported, then has the same 90-second
+expiry/renewal policy. Volume/mute reports and cleanup use atomic batches where
+both fields change. Claim loss on either input stops the service, even when its
+pending payload is invalid; shutdown releases both claims and retains intent.

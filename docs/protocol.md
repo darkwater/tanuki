@@ -369,3 +369,12 @@ The TV adapter accepts empty `LastChange` event values as no-op UPnP
 notifications. HTTP 200 acknowledges their subscription sequence; they do not
 publish a Tanuki value. This is an adapter compatibility rule and adds no new
 Tanuki message or operation.
+
+The mute increment adds application-convention paths `/tv/mute` (retained output
+boolean) and `/tv/desired-mute` (claimed retained input boolean). `true` means
+muted/request mute; `false` means unmuted/request unmute. Missing observed mute
+means unknown, not false. String/numeric input is logged and ignored by the
+adapter, while server acceptance still follows installed schemas. No automatic
+schema is added. Combined observed audio fields are one accepted write batch;
+SOAP acceptance never substitutes for a TV report. Existing protocol operations
+and encodings are unchanged.

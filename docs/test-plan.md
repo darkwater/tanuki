@@ -305,7 +305,7 @@ stalled handshake for browser timer testing; it does not substitute for the real
 server's behavior. Browser TLS deployment, other engines and rendered web UI
 remain unverified. See [test evidence](testing.md#browser-sdk-acceptance--2026-10-31).
 
-## TV volume example acceptance — US-03.A5–A8
+## TV volume example acceptance — US-03.A5–A9
 
 Run `cargo test -p tanuki-tv-volume` and its `--release` equivalent. XML unit
 scenarios select instance 0/Master, reject invalid volume and malformed XML,
@@ -343,3 +343,11 @@ real callback/production-server path with reordered volume updates. Unit tests
 cover no-op predecessors, duplicate/late events, sequence wrap skipping zero,
 the one-second gap deadline and 64-event reorder capacity. The existing missing-
 event integration scenario must still end the service when that deadline fires.
+
+US-03.A9 covers Master/instance-0 mute parsing (UPnP 0/1, true/false, yes/no),
+invalid mute rejection, absent-until-observed state, mute-only and combined
+atomic reports, SetMute true/false, no optimistic state, wrong desired payload
+type, input deduplication, reordered changes preserving both fields, renewal,
+claim takeover with invalid pending intent, and atomic observed-state cleanup.
+Run the example debug/release suites; tests use production Tanuki and isolated
+loopback TV callbacks/actions. Physical mute control remains manual/unverified.
