@@ -289,3 +289,14 @@ Link management rejects names `.` and `..` with `invalid_link`; other existing
 valid punctuation, spaces, and Unicode names remain supported. Restore rejects
 reserved canonical nodes and denying policy violations before exposing state;
 warning policies still accept without casting stored data.
+
+## Inspector foundation consumer — Task 01
+
+The headless `tanuki-ui` model consumes existing `SnapshotView`/`UpdateView` and
+`NodeView` DTOs through `SelectedView`; it introduces no endpoint or wire change.
+It accepts increasing sequence gaps, applies complete batches, and keeps instant
+occurrences out of retained state. Invalid topic strings are rejected before
+cache mutation. Schema/link enumeration and explanation are still unavailable;
+the detail formatter explicitly labels schema information unavailable rather
+than claiming no schema applies. Live subscription/system-namespace scope will
+be verified through real transport in Task 02.

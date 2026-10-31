@@ -433,3 +433,27 @@ server joins any periodic save and attempts the final snapshot. No runtime
 mutation can follow that final capture. Dropping the runtime also closes
 admission and aborts its scheduler, even if adapter handles remain alive. External holders of the injectable
 `SharedCore` test seam must respect server lifetime themselves.
+
+## Inspector Task 01 — pure UI foundation
+
+`tanuki-ui` is a root workspace package with `model` and `format` modules and
+a thin status-only binary. Its production dependencies are protocol and
+thiserror; there is no dependency on server internals. SDK ownership is Task 02;
+application/terminal modules will be added when needed, rather than as empty
+layers. No server logic or wire format changes in this task.
+
+`Model` privately owns one `SelectedView`, selected `TopicPath`, expanded
+prefixes, filter, connection display state and derived visible rows. External
+snapshot/update path DTOs are validated before cache mutation. A complete
+SelectedView batch applies before rebuilding rows or exposing details. Prefixes
+have no fabricated nodes; selection resolves current node data from the cache,
+so removal cannot retain stale details. Expansion/selection survive updates by
+full path, not row position. Search reveals ancestors temporarily. A sorted
+segment-path traversal skips collapsed subtrees without comparing every pair.
+
+`format` produces safe display strings without changing values. Node kind and
+payload type are separate; missing desired payload, explicit Null, no node and
+instant metadata are distinct. Detail lines remain complete for later scrolling.
+Control and directional formatting characters are escaped, including strings
+inside collections and attribution. The preview budget counts Unicode scalars;
+terminal display-cell clipping remains the future renderer's responsibility.

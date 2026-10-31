@@ -24,6 +24,7 @@ at the root:
 - `tanuki/` — authoritative server library, binary and integration tests
 - `tanuki-protocol/` — shared wire types/codecs and validated primitives
 - `tanuki-client/` — native Rust SDK, examples and client tests
+- `tanuki-ui/` — inspector model/formatting library and foundation-only binary
 
 Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the
 workspace root. See [the SDK guide](tanuki-client/README.md) for typed publication,
@@ -68,6 +69,16 @@ informational commit sequences, not replay cursors.
 operations are `publish_state`, `publish_event`, `define_input`, `claim_input`,
 `submit_desired`, `submit_command`, `clear_desired`, and `remove_node`.
 Stateless HTTP can define or submit inputs but cannot claim them.
+
+## Inspector foundation
+
+Checkpoint A is confirmed: a read-only Rust terminal inspector covering public
+ordinary topics and exposed system branches, with schema/link inspection later.
+[Inspector Task 01](docs/inspector-implementation-plan.md) implements only the
+pure tree/selection model and terminal-safe formatting. `cargo run -p tanuki-ui`
+currently prints a foundation status message; it does not connect or open an
+interactive terminal. Live ownership is Task 02 and rendering/controls are
+Task 03. See [tanuki-ui/README.md](tanuki-ui/README.md).
 
 ## Schemas
 

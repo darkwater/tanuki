@@ -259,3 +259,20 @@ command queue with `SessionGone`: those frames never reached the socket writer.
 Writes already handed to that writer retain unknown-outcome semantics. A stop
 signal observed before the driver runs takes precedence over queued commands.
 Termination is published only after command admission has closed.
+
+## Inspector model procedures — Task 01
+
+Construct `tanuki_ui::model::Model` from a validated-path snapshot. Branches
+start collapsed and the first visible row is selected, or the explicit empty
+state is shown. Apply one complete update, rebuild rows, prune expansion for
+vanished prefixes, and preserve selection by full path. If selection disappears,
+prefer its nearest visible ancestor, then nearest surviving old row (preceding
+on ties), then first new row. A prefix may survive without a real node; details
+then explicitly show no node. Filtering is a case-sensitive path substring and
+temporarily exposes matching ancestor context without changing saved expansion.
+
+The model retains cached data when its connection display status changes.
+No connection lifecycle, startup/recovery, reconnect, disconnect detection,
+expiry scheduler or shutdown tasks are owned by this foundation; Task 02 will
+feed their observable effects through snapshots/batches and status changes.
+The binary only prints its implementation status and acquires no terminal state.

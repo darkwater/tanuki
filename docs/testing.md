@@ -389,3 +389,35 @@ Server review completion: all 175 workspace tests passed in debug and release,
 with no ignored tests. Formatting, all-target workspace Clippy with warnings
 denied, and `git diff --check` also passed. No compiler, dependency, protocol
 version, or snapshot format version changed.
+
+## Inspector Task 01 — pure model and formatting
+
+`cargo test -p tanuki-ui` runs 11 headless tests in
+`tanuki-ui/tests/inspector.rs`, using actual protocol DTOs and SelectedView,
+without a terminal or server. These provide partial US-13.A1/A2 evidence:
+
+- explicit empty state and real parent/child node inspection;
+- four distinct kinds, separate value types, missing desired payload versus
+  Null, absent/prefix nodes, and instant metadata without retained occurrences;
+- atomic paired updates, removal without stale details, metadata-only updates
+  and legal sequence gaps; out-of-order/invalid-path rejection without mutation;
+- ancestor-preserving filtering, collapse, expansion/selection preservation,
+  clamped navigation and nearest surviving selection after multiple removals;
+- bytes and semantic timestamps/durations, readable claims/expiry/provenance,
+  terminal-safe controls in paths/values/clients, Unicode preview truncation,
+  unchanged DTOs and complete detail text for later scrolling.
+
+The initial behavioral red run compiled and failed all seven original scenario
+tests against inert APIs (empty rows, missing labels/formatting and selection).
+A subsequent regression test showed removal selecting `/f` instead of the nearer
+surviving `/c`; reconciliation was corrected without changing the criterion.
+All 11 now pass. No live UI, terminal scrolling/restoration, schema enumeration,
+or deployment is claimed. Task 02 supplies real-server lifecycle tests; Task 03
+supplies terminal backend and interactive smoke checks.
+
+Task 01 completion checks passed on the pinned nightly: `cargo fmt --all --
+--check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+-p tanuki-ui` and `cargo test -p tanuki-ui --release` (11 tests each), `cargo
+build -p tanuki-ui`, foundation-only `cargo run -q -p tanuki-ui`, and `git diff
+--check`. Workspace debug/release transport suites are reserved for the planned
+milestone gates; this task changes only the UI package and workspace membership.

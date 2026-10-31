@@ -99,3 +99,12 @@ APIs were checked in the pinned dependency source and compiled against the pin:
 [Axum listener](https://docs.rs/axum/latest/axum/serve/trait.Listener.html),
 and [Tokio AsyncRead](https://docs.rs/tokio/latest/tokio/io/trait.AsyncRead.html).
 The pages resolve to Tokio 1.53.2 and Axum 0.8.9 at verification time.
+
+## Inspector Task 01 — 2026-10-31
+
+`tanuki-ui` uses the existing `nightly-2026-10-01`, protocol crate and pinned
+thiserror 2.0.21 (serde_json 1.0.151 only for test fixtures). Cargo.lock includes
+the new package; no existing dependency versions change and no feature gates
+are added. Tree/selection/formatting use ordinary standard-library collections,
+string formatting and Unicode character iteration. Ratatui/Crossterm API/version
+evaluation is deferred until terminal implementation; this task needs neither.

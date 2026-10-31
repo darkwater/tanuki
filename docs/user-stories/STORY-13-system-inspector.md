@@ -1,6 +1,6 @@
 # US-13 — Live system inspector
 
-- **Status:** requested future UI; implementation and deployment unverified.
+- **Status:** terminal scope confirmed; pure model/formatting tested; live UI and deployment unverified.
 - **Origin:** User request, 2026-10-31; mqttui interaction reference.
 - **Last updated:** 2026-10-31.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
@@ -26,11 +26,13 @@ explore and understand the running system.
 
 ## Proposed delivery and open choices
 
-A read-only live tree with search/filtering and a node detail pane is a
-proposed first increment, showing values, metadata, claims, expiry and exposed
-diagnostics. A terminal UI using the native SDK is an interpretation of the
-[mqttui reference](https://github.com/EdJoPaTo/mqttui), not a confirmed format
-or toolkit. Implementation timing remains open; editing is not yet requested.
+Checkpoint A was confirmed on 2026-10-31: a read-only native Rust terminal
+application named `tanuki-ui`, using the native SDK, with a live topic tree,
+search, detail pane and connection/help status. This follows the
+[mqttui reference](https://github.com/EdJoPaTo/mqttui). Ratatui/Crossterm is the
+candidate toolkit, pending API/version evaluation. The first milestone shows
+values, metadata, claims, expiry and exposed diagnostics; schema information
+must be labeled unavailable. Editing is outside scope.
 
 Follow with public schema/link enumeration and node policy explanations,
 including alias versus canonical policy and definitions matching no current
@@ -38,9 +40,11 @@ nodes. Review how policy changes are observed and correlated with data before
 implementing that API. Do not duplicate server validation in the UI or present
 stale policy as current.
 
-Clarify whether “public” means ordinary topics or all externally inspectable
-state, including reserved system branches and configuration. This story adds
-no authentication, permissions framework, private-runtime exposure or event
+Confirmed public scope includes ordinary topics, protocol-exposed reserved
+system branches and eventual public configuration inspection. It excludes
+private process memory. The exact complete-state inventory remains to be
+verified before claiming A4. This story adds no authentication, permissions
+framework, private-runtime exposure or event
 replay requirement. It preserves the existing specification's semantics.
 
 ## Implementation and evidence
@@ -49,7 +53,17 @@ Existing snapshots/subscriptions expose node kinds and metadata. Schema
 installation and link installation/removal exist, but public enumeration and
 per-node policy explanation APIs are missing. Existing dashboard tests prove
 transport prerequisites, not UI acceptance. All US-13 criteria remain
-unverified for an inspector.
+unverified end to end for an inspector.
+
+Task 01 evidence: `tanuki-ui/tests/inspector.rs` contains 11 headless tests
+covering empty state, real parent and child nodes, all four kinds, absent versus
+Null payloads, atomic batches/removals, search/collapse/selection, metadata and
+sequence gaps, malformed paths, terminal controls, bytes/time and untruncated
+details. This is partial A1/A2 model evidence, not a live inspector or deployment.
+A3/A4 remain unmet. Provisional defaults are collapsed branches, case-sensitive
+path filtering and nearest surviving selection. No occurrence history is stored;
+instant details explicitly say there is no retained payload. Full text is
+available to a future scrolling pane; scrolling itself is Task 03.
 
 Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 [US-11](STORY-11-diagnostics.md) for operational diagnostics.
@@ -57,5 +71,9 @@ Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 ## Change notes
 
 - 2026-10-31: Recorded requested direction, proposed first scope and API gaps.
+
+- 2026-10-31: User confirmed checkpoint A; Task 01 delivered the headless
+  model/formatting foundation. Live connections and terminal rendering remain
+  pending.
 
 Implementation planning: [bounded inspector handoff](../inspector-implementation-plan.md).

@@ -1,9 +1,25 @@
 # Tanuki system inspector — implementation handoff
 
-2026-10-31. Planning document, not evidence of implemented behaviour.
+2026-10-31. Task definitions and proposed defaults; implementation evidence is
+recorded separately below.
 User goal: a UI similar to mqttui that eventually shows the entire public
 server state, including node kinds and applicable schemas. See
 [US-13](user-stories/STORY-13-system-inspector.md).
+
+## Progress — 2026-10-31
+
+- Checkpoint A confirmed by the user: native read-only terminal application,
+  public ordinary topics and exposed reserved branches, incremental delivery,
+  explicit reconnect and the other checkpoint defaults below.
+- Task 01 implemented and headlessly tested in `tanuki-ui`: one SelectedView,
+  path-based selection/tree/filtering and safe, untruncated detail formatting.
+  See [testing.md](testing.md#inspector-task-01--pure-model-and-formatting).
+- Provisional local defaults: initially collapsed branches; case-sensitive full
+  path substring search temporarily expands matching ancestor context; selection
+  prefers a visible ancestor, then nearest surviving old row (preceding on ties),
+  then first new row. No network or interactive terminal implementation yet.
+- Next: Task 02 only. Ratatui/Crossterm evaluation belongs with terminal work;
+  Task 01 adds no terminal dependency and does not change the pinned compiler.
 
 ## Instructions to the implementing model
 
