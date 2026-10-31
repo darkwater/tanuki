@@ -452,3 +452,7 @@ using existing snapshots/updates is a proposed first increment; full coverage
 needs public schema/link introspection and a defined public inspection surface.
 Review those APIs and their consistency model before implementing them. This
 direction does not reopen tasks 00–12 or imply a delivered UI.
+
+The [inspector implementation handoff](inspector-implementation-plan.md) breaks
+this direction into six bounded tasks with two architecture checkpoints. Its
+terminal UI and delivery defaults are proposals pending checkpoint A.

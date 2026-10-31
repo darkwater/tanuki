@@ -57,3 +57,5 @@ Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 ## Change notes
 
 - 2026-10-31: Recorded requested direction, proposed first scope and API gaps.
+
+Implementation planning: [bounded inspector handoff](../inspector-implementation-plan.md).
