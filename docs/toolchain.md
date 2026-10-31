@@ -206,3 +206,10 @@ compiler pin or unstable gates change. APIs were checked against
 and the UPnP Device Architecture discovery specification. UDP connect/local_addr
 chooses a callback route without sending a datagram. Loopback compile/runtime
 tests verify the pinned APIs; production discovery uses IPv4 multicast.
+
+The empty-notification fix (2026-11-01) uses existing roxmltree text extraction
+and standard `str::trim` to classify empty events. Compiler, dependency pins and
+feature gates are unchanged; parser and loopback regression tests exercise the
+same compiled bridge in debug and release modes. A standard `BTreeMap` and
+Tokio `Instant`/`sleep_until` provide bounded notification reordering; no
+additional dependency or runtime task is introduced.

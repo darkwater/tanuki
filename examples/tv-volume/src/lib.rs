@@ -56,7 +56,14 @@ pub fn notification_volume(xml: &str) -> Result<Option<u8>, Error> {
     else {
         return Ok(None);
     };
-    let inner = Document::parse(change.text().ok_or(Error::Protocol("empty LastChange"))?)?;
+    let text = change.text().unwrap_or_default().trim();
+    if text.is_empty() {
+        // Samsung also sends empty LastChange events. They still carry a SEQ
+        // that the subscription loop must consume, without publishing a value.
+        tracing::debug!("empty LastChange notification has no volume update");
+        return Ok(None);
+    }
+    let inner = Document::parse(text)?;
     for instance in inner.descendants().filter(|n| {
         n.is_element() && n.tag_name().name() == "InstanceID" && n.attribute("val") == Some("0")
     }) {
@@ -190,6 +197,48 @@ struct Notification {
     seq: u32,
     volume: Option<u8>,
 }
+struct NotificationSequence {
+    next: u32,
+    pending: std::collections::BTreeMap<u32, Option<u8>>,
+    gap_deadline: Option<Instant>,
+}
+impl NotificationSequence {
+    fn new() -> Self {
+        Self {
+            next: 0,
+            pending: Default::default(),
+            gap_deadline: None,
+        }
+    }
+    fn push(&mut self, seq: u32, volume: Option<u8>, now: Instant) -> Result<Option<u8>, Error> {
+        // Sequence zero is reserved for the initial event; wrapped streams
+        // continue at one. Ignore duplicates/late packets behind our frontier.
+        if seq != self.next && (seq == 0 || seq.wrapping_sub(self.next) >= (1 << 31)) {
+            return Ok(None);
+        }
+        let previous_next = self.next;
+        self.pending.entry(seq).or_insert(volume);
+        let mut latest = None;
+        while let Some(volume) = self.pending.remove(&self.next) {
+            if volume.is_some() {
+                latest = volume;
+            }
+            self.next = self.next.wrapping_add(1).max(1);
+        }
+        if self.pending.len() > 64 {
+            return Err(Error::Protocol(
+                "notification reorder buffer full; resubscribe to recover state",
+            ));
+        }
+        if self.pending.is_empty() {
+            self.gap_deadline = None;
+        } else if self.next != previous_next || self.gap_deadline.is_none() {
+            self.gap_deadline = Some(now + Duration::from_secs(1));
+        }
+        Ok(latest)
+    }
+}
+
 async fn notify(
     State(tx): State<mpsc::Sender<Notification>>,
     method: Method,
@@ -338,7 +387,7 @@ pub async fn run(
         active = Some(subscription(response.headers())?);
         tracing::info!(events = %service.events, "TV event subscription active");
         let mut volume = None;
-        let mut last_seq = None;
+        let mut sequence = NotificationSequence::new();
         let mut last_intent = None;
         let mut claim_id = None;
         let initial_deadline = Instant::now() + Duration::from_secs(10);
@@ -348,11 +397,10 @@ pub async fn run(
                 message = rx.recv() => {
                     let message = message.ok_or(Error::Protocol("callback server stopped"))?;
                     if message.sid != sub.sid { tracing::warn!(sid = %message.sid, "ignoring notification for another subscription"); continue; }
-                    if last_seq == Some(message.seq) { continue; }
-                    let expected = last_seq.map(|n: u32| if n == u32::MAX { 1 } else { n + 1 }).unwrap_or(0);
-                    if message.seq != expected { return Err(Error::Protocol("notification sequence gap; resubscribe to recover state")); }
-                    last_seq = Some(message.seq);
-                    if let Some(value) = message.volume { publish(&actual, value).await?; volume = Some(value); }
+                    if let Some(value) = sequence.push(message.seq, message.volume, Instant::now())? {
+                        publish(&actual, value).await?;
+                        volume = Some(value);
+                    }
                 }
                 snapshot = intent.recv() => {
                     let snapshot = snapshot?.ok_or(Error::Protocol("Tanuki observer closed"))?;
@@ -385,6 +433,9 @@ pub async fn run(
                     if renewed.sid != sub.sid { return Err(Error::Protocol("renewal changed subscription SID")); }
                     active = Some(renewed);
                     if let Some(value) = volume { publish(&actual, value).await?; }
+                }
+                _ = sleep_until(sequence.gap_deadline.unwrap_or(initial_deadline)), if sequence.gap_deadline.is_some() => {
+                    return Err(Error::Protocol("notification sequence gap persisted for one second; resubscribe to recover state"));
                 }
                 _ = sleep_until(initial_deadline), if volume.is_none() => return Err(Error::Protocol("TV sent no initial Master volume within 10 seconds")),
             }
@@ -428,6 +479,55 @@ mod tests {
         format!(
             "<e:propertyset xmlns:e='urn:schemas-upnp-org:event-1-0'><e:property><LastChange><![CDATA[<Event xmlns='urn:schemas-upnp-org:metadata-1-0/RCS/'>{inner}</Event>]]></LastChange></e:property></e:propertyset>"
         )
+    }
+
+    #[test]
+    fn reordered_notifications_preserve_volume_order_and_duplicates_do_not_roll_back() {
+        let now = Instant::now();
+        let mut sequence = NotificationSequence::new();
+        assert_eq!(sequence.push(0, Some(25), now).unwrap(), Some(25));
+        assert_eq!(sequence.push(2, Some(40), now).unwrap(), None);
+        assert!(sequence.gap_deadline.is_some());
+        assert_eq!(sequence.push(1, Some(30), now).unwrap(), Some(40));
+        assert!(sequence.gap_deadline.is_none());
+        assert_eq!(sequence.push(1, Some(99), now).unwrap(), None);
+        assert_eq!(sequence.push(4, None, now).unwrap(), None);
+        assert_eq!(sequence.push(3, Some(39), now).unwrap(), Some(39));
+        assert!(sequence.gap_deadline.is_none());
+    }
+
+    #[test]
+    fn missing_events_have_a_bounded_wait_and_reorder_capacity() {
+        let now = Instant::now();
+        let mut sequence = NotificationSequence::new();
+        sequence.push(0, None, now).unwrap();
+        for seq in 2..=65 {
+            assert_eq!(sequence.push(seq, None, now).unwrap(), None);
+        }
+        assert_eq!(sequence.gap_deadline, Some(now + Duration::from_secs(1)));
+        assert!(sequence.push(66, None, now).is_err());
+        let mut sequence = NotificationSequence::new();
+        sequence.next = u32::MAX;
+        assert_eq!(sequence.push(1, Some(11), now).unwrap(), None);
+        assert_eq!(sequence.push(u32::MAX, Some(10), now).unwrap(), Some(11));
+        assert_eq!(sequence.next, 2);
+        assert_eq!(sequence.push(u32::MAX, Some(99), now).unwrap(), None);
+    }
+
+    #[test]
+    fn empty_last_change_is_a_no_op_including_whitespace_and_empty_cdata() {
+        for change in [
+            "<LastChange/>",
+            "<LastChange></LastChange>",
+            "<LastChange> \n\t </LastChange>",
+            "<LastChange><![CDATA[]]></LastChange>",
+            "<LastChange><![CDATA[ \n ]]></LastChange>",
+        ] {
+            let xml = format!(
+                "<e:propertyset xmlns:e='urn:schemas-upnp-org:event-1-0'><e:property>{change}</e:property></e:propertyset>"
+            );
+            assert_eq!(notification_volume(&xml).unwrap(), None, "{change}");
+        }
     }
 
     #[test]

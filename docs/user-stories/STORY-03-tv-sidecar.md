@@ -92,3 +92,26 @@ that the playing TV's volume not be set during testing; the live bridge was
 not launched. Physical-TV notifications, controls, callback reachability and
 systemd deployment remain unverified. Discovery does not span VLANs or enumerate
 multiple network interfaces; explicit callback/URL overrides remain available.
+
+## Samsung empty-event regression — 2026-11-01
+
+The user reported a running subscription to
+`http://192.168.0.152:9197/upnp/event/RenderingControl1`, then an `empty LastChange`
+warning followed by a fatal sequence-gap error. This establishes that a real
+subscription was active; it does not by itself verify all control/deployment
+criteria. The failure reproduces with one empty notification, without requiring
+queue saturation. The parser rejected that event before its sequence could
+reach the subscription loop.
+
+US-03.A5 now has regression coverage for empty `LastChange` forms and a
+130-notification sequential burst followed by a valid volume update. No-op events
+preserve observed volume while advancing SEQ. Genuine lost events still follow
+the documented restart policy. User-assisted receive-only verification accepted over 300 notifications using
+the fixed parser, including many no-op events, while the user changed volume.
+It also captured out-of-order pairs 78/77 and 169/168, prompting a bounded
+one-second/64-event reorder buffer with unit and real-server regression tests.
+The probe renewed successfully and unsubscribed with HTTP 200 on shutdown.
+It used no Tanuki session or SOAP commands; all live volume changes came from
+the user. This verifies notification parsing on the physical TV, while complete
+bridge operation under reordering is tested with simulated-TV/production-server
+fixtures. No volume-setting live test is authorized while media is playing.

@@ -574,3 +574,15 @@ binds its listener and chooses the callback IP from the OS route to the TV;
 explicit callback overrides and the original positional configuration remain.
 `--discover` returns before any SDK connection or control execution. Description
 fetches are bounded and concurrent; Tokio JoinSet owns/cancels their tasks.
+
+The Samsung empty-event fix (2026-11-01) represents an empty `LastChange` as the
+existing `Notification { volume: None, .. }`. It follows the same callback queue
+and SID/SEQ validation as mute-only or unrelated events. Consequently it
+advances sequence tracking without a Tanuki publication; the parser does not
+manufacture a missing event or a volume value. Invalid XML and out-of-range
+volumes retain their error behavior. A bounded sequence buffer tolerates out-of-order arrivals observed during live
+testing (78 before 77, and 169 before 168). It holds at most 64 pending events
+and waits one second for a missing predecessor, applies contiguous changes in
+order, and publishes their latest volume. Duplicate/late arrivals cannot roll
+back output; sequence wrap skips the initial-event zero. A gap that remains
+unresolved ends this connection lifetime for supervised recovery.

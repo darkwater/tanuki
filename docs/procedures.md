@@ -380,3 +380,12 @@ subscription; stale output expires if cleanup cannot reach Tanuki. Read-only
 LAN discovery was verified on 2026-11-01. Volume control and event delivery still
 have simulated-device acceptance only. Read-only listing exits
 before connecting to Tanuki or applying retained control intent.
+
+Samsung notifications containing empty/whitespace `LastChange` are acknowledged
+and counted in subscription order while retaining the last observed volume.
+They no longer cause the next real event to look like a sequence gap. Out-of-order arrivals wait up to one second in a 64-event reorder buffer. A
+missing event that does not arrive in that interval, a full reorder buffer, or
+callback queue overflow still requires the documented fresh subscription/restart
+procedure. Live diagnostics while media is playing must
+use a receive-only subscriber; starting the regular bridge can apply retained
+control intent.

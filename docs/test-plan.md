@@ -327,3 +327,19 @@ LAN verification: no SDK session, subscriptions or SOAP commands. Media playback
 must not be disturbed by live control tests. Bridge tests continue using fake
 TVs bound to loopback. Actual callbacks and controls on the Samsung TV remain
 manual/unverified.
+
+US-03.A5 regression: a Samsung TV can send an empty `LastChange` between real
+volume updates. Accept self-closing, empty text, whitespace and empty/whitespace
+CDATA as no-volume updates. These notifications must receive HTTP 200 and still
+advance SEQ. Parser tests cover each form; the real-server regression
+`empty_notification_burst_preserves_sequence_and_next_volume` delivers 130
+sequential no-op notifications followed by a valid volume change, verifying
+continued publication and no SOAP control requests. Actual queue saturation
+and genuinely missing sequence numbers remain distinct failure conditions.
+
+Live receive-only testing also found out-of-order sequences (78/77 and 169/168).
+`reordered_notifications_preserve_latest_volume_without_restart` exercises the
+real callback/production-server path with reordered volume updates. Unit tests
+cover no-op predecessors, duplicate/late events, sequence wrap skipping zero,
+the one-second gap deadline and 64-event reorder capacity. The existing missing-
+event integration scenario must still end the service when that deadline fires.

@@ -364,3 +364,8 @@ last observed value, rather than establishing a new physical measurement.
 SSDP discovery (2026-11-01) adds no Tanuki protocol messages. The bridge resolves
 its TV address and callback before connecting; `--discover` is a read-only
 SSDP/HTTP description listing with no Tanuki session or desired-input handling.
+
+The TV adapter accepts empty `LastChange` event values as no-op UPnP
+notifications. HTTP 200 acknowledges their subscription sequence; they do not
+publish a Tanuki value. This is an adapter compatibility rule and adds no new
+Tanuki message or operation.

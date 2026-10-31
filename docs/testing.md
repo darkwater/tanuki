@@ -645,3 +645,28 @@ were made. Live `cargo run -p tanuki-tv-volume --offline -- --discover` found
 renderers. Live testing used only SSDP and HTTP description GETs: the bridge was
 not launched and no volume-setting request was sent to the playing TV. Physical
 notification/control behavior remains unverified.
+
+## Samsung empty/reordered notifications — 2026-11-01
+
+The parser regression first failed with `Protocol("empty LastChange")`, and the
+real HTTP callback regression received 400 for the first empty event. The fix
+accepts self-closing, empty, whitespace and empty/whitespace CDATA as no-op
+notifications that still advance SEQ. A 130-event sequential burst followed by
+a valid volume report now keeps the production bridge/server session alive.
+
+With the user's assistance, a temporary receive-only probe using the actual
+fixed parser accepted over 300 physical-TV notifications, with successful
+subscription renewals and no parser rejections. It exposed arrivals 78 before
+77 and 169 before 168. This prompted a second red regression (an out-of-order
+volume must wait for its predecessor) and a bounded 64-event, one-second reorder
+buffer. Tests cover later volume winning in sequence order, no-op predecessors,
+duplicate/late suppression, wraparound, capacity and unresolved-gap expiry.
+
+All 21 example tests passed in debug and release, as did workspace/all-target
+Clippy (`-D warnings`), rustfmt and `git diff --check`. Socket tests require
+sandbox network permission and bind only loopback. The temporary live probe
+performed only event subscription, reception/acknowledgement, renewal and
+unsubscribe (HTTP 200 on exit). It had no Tanuki session or SOAP control path;
+all live volume changes were made by the user. The complete reorder/mutation
+flow was verified against production Tanuki with a simulated TV, not by running
+a live controller against the playing TV. No compiler/dependency changes.

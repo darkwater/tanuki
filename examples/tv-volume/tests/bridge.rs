@@ -59,11 +59,21 @@ async fn tv(
     }
 }
 async fn notify(tv: &Tv, sid: &str, seq: u32, volume: u8) -> StatusCode {
+    notify_body(tv, sid, seq, format!("<e:propertyset xmlns:e='urn:schemas-upnp-org:event-1-0'><e:property><LastChange>&lt;Event xmlns='urn:schemas-upnp-org:metadata-1-0/RCS/'&gt;&lt;InstanceID val='0'&gt;&lt;Volume channel='Master' val='{volume}'/&gt;&lt;/InstanceID&gt;&lt;/Event&gt;</LastChange></e:property></e:propertyset>")).await
+}
+async fn notify_body(tv: &Tv, sid: &str, seq: u32, body: String) -> StatusCode {
     let callback = tv.callback.lock().unwrap().clone().unwrap();
-    reqwest::Client::new().request(Method::from_bytes(b"NOTIFY").unwrap(), callback)
-        .header("sid", sid).header("seq", seq.to_string()).header("nt", "upnp:event").header("nts", "upnp:propchange")
-        .body(format!("<e:propertyset xmlns:e='urn:schemas-upnp-org:event-1-0'><e:property><LastChange>&lt;Event xmlns='urn:schemas-upnp-org:metadata-1-0/RCS/'&gt;&lt;InstanceID val='0'&gt;&lt;Volume channel='Master' val='{volume}'/&gt;&lt;/InstanceID&gt;&lt;/Event&gt;</LastChange></e:property></e:propertyset>"))
-        .send().await.unwrap().status()
+    reqwest::Client::new()
+        .request(Method::from_bytes(b"NOTIFY").unwrap(), callback)
+        .header("sid", sid)
+        .header("seq", seq.to_string())
+        .header("nt", "upnp:event")
+        .header("nts", "upnp:propchange")
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .status()
 }
 
 #[derive(Clone, Copy)]
@@ -73,6 +83,8 @@ enum Ending {
     RenewalFailure,
     ClaimTaken,
     NoInitialEvent,
+    EmptyNotifications,
+    ReorderedNotifications,
 }
 
 #[tokio::test]
@@ -95,6 +107,16 @@ async fn displaced_controller_exits_and_releases_session() {
 #[tokio::test]
 async fn tv_without_initial_volume_fails_instead_of_polling() {
     scenario(Ending::NoInitialEvent).await;
+}
+
+#[tokio::test]
+async fn empty_notification_burst_preserves_sequence_and_next_volume() {
+    scenario(Ending::EmptyNotifications).await;
+}
+
+#[tokio::test]
+async fn reordered_notifications_preserve_latest_volume_without_restart() {
+    scenario(Ending::ReorderedNotifications).await;
 }
 
 async fn scenario(ending: Ending) {
@@ -185,6 +207,36 @@ async fn scenario(ending: Ending) {
                 .value,
             25
         );
+        if matches!(ending, Ending::EmptyNotifications | Ending::ReorderedNotifications) {
+            if matches!(ending, Ending::ReorderedNotifications) {
+                assert_eq!(notify(&tv_state, "uuid:test", 2, 40).await, StatusCode::OK);
+                assert_eq!(notify(&tv_state, "uuid:test", 1, 30).await, StatusCode::OK);
+            } else {
+            // More events than the queue capacity, delivered as an ordinary
+            // sequential HTTP burst. Empty events must still advance SEQ.
+            let changes = ["<LastChange/>", "<LastChange></LastChange>", "<LastChange> \n </LastChange>", "<LastChange><![CDATA[]]></LastChange>", "<LastChange><![CDATA[ \t ]]></LastChange>"];
+            for seq in 1..=130 {
+                let change = changes[(seq as usize - 1) % changes.len()];
+                let body = format!("<e:propertyset xmlns:e='urn:schemas-upnp-org:event-1-0'><e:property>{change}</e:property></e:propertyset>");
+                assert_eq!(notify_body(&tv_state, "uuid:test", seq, body).await, StatusCode::OK, "empty notification {seq} must be accepted");
+            }
+            assert!(!bridge.is_finished());
+            assert_eq!(notify(&tv_state, "uuid:test", 131, 30).await, StatusCode::OK);
+            }
+            let expected = if matches!(ending, Ending::ReorderedNotifications) { 40 } else { 30 };
+            loop {
+                if view.recv().await.unwrap().unwrap().read(&actual).unwrap().unwrap().current().unwrap().value == expected { break; }
+            }
+            assert!(command_rx.try_recv().is_err(), "notification handling must not issue SOAP control requests");
+            stop.send(()).unwrap();
+            bridge.await.unwrap().unwrap();
+            while sub_rx.recv().await.unwrap() != "unsubscribe" {}
+            client.close().await.unwrap();
+            server_stop.send(()).unwrap();
+            server.await.unwrap().unwrap();
+            tv_task.abort();
+            return;
+        }
         let expires = snapshot.read(&actual).unwrap().unwrap().current().unwrap().expires_at.clone().unwrap();
         let remaining = expires.parse::<jiff::Timestamp>().unwrap().since(jiff::Timestamp::now()).unwrap().get_seconds();
         assert!((88..=90).contains(&remaining), "observed volume must expire after bridge failure");
@@ -227,7 +279,7 @@ async fn scenario(ending: Ending) {
             39
         );
         match ending {
-            Ending::NoInitialEvent => unreachable!("handled above"),
+            Ending::NoInitialEvent | Ending::EmptyNotifications | Ending::ReorderedNotifications => unreachable!("handled above"),
             Ending::Shutdown => {
                 assert_eq!(sub_rx.recv().await.unwrap(), "renew");
                 stop.send(()).unwrap();

@@ -120,8 +120,13 @@ Master volume within ten seconds. TVs that omit it are currently unsupported;
 there is no silent polling fallback or `GetVolume` bootstrap.
 
 Subscriptions request 60 seconds and renew at half the granted interval, capped
-at 30 seconds. Only the current SID is processed. Duplicate sequence numbers
-are ignored; gaps or out-of-order numbers end the service so restarting gets a
+at 30 seconds. Only the current SID is processed. Empty `LastChange` values
+(including whitespace or empty CDATA) are accepted as no-op notifications: they
+advance the subscription sequence without changing observed volume. Duplicate
+or late sequence numbers are ignored. Out-of-order notifications wait in a
+buffer of at most 64 events for up to one second, then apply in sequence order;
+contiguous buffered volume changes can coalesce to the latest value. An
+unresolved gap or full reorder buffer ends the service so restarting gets a
 fresh initial state. A bounded 64-message callback queue returns HTTP 503 when
 full; malformed events return 400. HTTP bodies are limited to 64 KiB and outgoing
 requests have ten-second timeouts. Callback replies use UPnP HTTP status codes,
@@ -174,7 +179,9 @@ filtering, GET-only access, unique name/UDN selection and callback route/port
 selection; CLI tests cover read-only listing and existing explicit-address syntax. Integration tests use actual
 HTTP callbacks, SOAP requests, WebSockets and production Tanuki server logic:
 initial/event publication, control without optimistic output, invalid intent,
-foreign subscriptions, renewal, missing-event recovery boundary, claim takeover,
+foreign subscriptions, renewal, a 130-event empty-notification burst followed by
+a valid volume update, reordered updates, duplicate/wraparound handling,
+missing-event recovery boundary, claim takeover,
 shutdown and stale-state removal. Hardware acceptance remains manual: subscribe,
 press the physical remote, submit Tanuki intent, switch the TV off/on and confirm
 recovery through the configured supervisor.
