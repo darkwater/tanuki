@@ -1,3 +1,5 @@
+pub mod discovery;
+
 use axum::{
     Router,
     body::Bytes,
@@ -21,6 +23,10 @@ use roxmltree::Document;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("discovery description task failed: {0}")]
+    DiscoveryTask(#[source] tokio::task::JoinError),
+    #[error(transparent)]
+    Selection(#[from] discovery::SelectionError),
     #[error("Tanuki session ended: {0}")]
     Session(#[from] tanuki_client::SessionEnd),
     #[error("HTTP: {0}")]

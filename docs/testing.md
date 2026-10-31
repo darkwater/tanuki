@@ -624,3 +624,24 @@ sequence gap, renewal failure, claim displacement, invalid/duplicate events,
 lease metadata and orderly cleanup. The binary's `--help` command also ran.
 Loopback tests require permission to bind local sockets in restricted sandboxes.
 No actual TV, systemd installation or new browser behavior was tested.
+
+## TV discovery — 2026-11-01
+
+The red phase showed missing SSDP LOCATION extraction, missing device identity,
+and arbitrary selection with multiple renderers. CLI tests also demonstrated
+that the stub ignored `--discover` and `--device`. Implementation now passes
+16 example tests in both debug and release: nine library tests, two binary
+argument tests and the five existing production-server/loopback-TV scenarios.
+The new real-socket discovery test checks M-SEARCH packets, repeated/duplicate
+locations and UDNs, filtering non-renderers, and HTTP GET-only access; route
+selection checks the actual callback port. No live LAN endpoints appear in
+these automated fixtures.
+
+`cargo fmt --all -- --check`, workspace/all-target Clippy with `-D warnings`,
+`cargo test -p tanuki-tv-volume --offline` and its release equivalent passed on
+the unchanged nightly pin. No shared protocol/server code or dependency changes
+were made. Live `cargo run -p tanuki-tv-volume --offline -- --discover` found
+`[TV] Samsung TV` (`uuid:b79e314d-c9c0-4dc1-8ac3-1c46fee17138`) and two other
+renderers. Live testing used only SSDP and HTTP description GETs: the bridge was
+not launched and no volume-setting request was sent to the playing TV. Physical
+notification/control behavior remains unverified.

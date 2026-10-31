@@ -565,3 +565,12 @@ the setup write's update, so claim checks wait for an observed snapshot at least
 as new as that write. Later claim takeover stops the bridge. Renewal refreshes
 the output lease from the last observed value; details and limitations are in
 [the example guide](../examples/tv-volume/README.md).
+
+The 2026-11-01 `discovery` module adds read-only SSDP search, HTTP description
+filtering and UDN deduplication before bridge startup. It owns no Tanuki state.
+Selection requires a single renderer, exact stable UDN, or unique friendly name.
+Default IPv4 discovery runs again after each supervised restart. The binary
+binds its listener and chooses the callback IP from the OS route to the TV;
+explicit callback overrides and the original positional configuration remain.
+`--discover` returns before any SDK connection or control execution. Description
+fetches are bounded and concurrent; Tokio JoinSet owns/cancels their tasks.

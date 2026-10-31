@@ -305,7 +305,7 @@ stalled handshake for browser timer testing; it does not substitute for the real
 server's behavior. Browser TLS deployment, other engines and rendered web UI
 remain unverified. See [test evidence](testing.md#browser-sdk-acceptance--2026-10-31).
 
-## TV volume example acceptance — US-03.A5–A7
+## TV volume example acceptance — US-03.A5–A8
 
 Run `cargo test -p tanuki-tv-volume` and its `--release` equivalent. XML unit
 scenarios select instance 0/Master, reject invalid volume and malformed XML,
@@ -317,3 +317,13 @@ sequence-gap and renewal-failure exit, claim takeover, and output removal.
 These do not certify a physical TV or tablet. Hardware notification behavior,
 crash expiry and systemd recovery remain manual checks in the example guide;
 US-03's power/HDMI criteria are still deferred.
+
+US-03.A8 adds SSDP response parsing, GET-only device-description fetching,
+URL/UDN duplicate handling, unrelated-device filtering, ambiguous/missing-device
+errors, stable-ID/friendly-name selection and automatic callback routing/port
+selection. Discovery socket tests use an isolated loopback responder, never the
+LAN multicast destination. `--discover` is the only command used for read-only
+LAN verification: no SDK session, subscriptions or SOAP commands. Media playback
+must not be disturbed by live control tests. Bridge tests continue using fake
+TVs bound to loopback. Actual callbacks and controls on the Samsung TV remain
+manual/unverified.

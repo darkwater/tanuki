@@ -4,7 +4,8 @@ A native Rust example service that publishes UPnP RenderingControl volume to
 Tanuki and accepts volume requests through Tanuki. It uses GENA notifications,
 not volume polling. Developed from the user's `~/tv-volume.sh` Samsung
 `SetVolume` script; tested against a simulated TV and the real Tanuki server.
-No physical TV has been verified yet.
+Read-only SSDP discovery was verified on the user's LAN on 2026-11-01;
+physical-TV volume control and event delivery remain unverified.
 
 | Topic | Kind | Value |
 | --- | --- | --- |
@@ -19,52 +20,76 @@ success never publishes an invented actual volume.
 
 ## Run
 
-Start Tanuki, find the TV's device-description URL, and choose this machine's
-LAN address (reachable **from the TV**):
+Start Tanuki and discover available devices:
 
 ```sh
 cargo run -p tanuki
-# In another terminal; substitute actual addresses and description path:
+# In another terminal: read-only listing; never connects to Tanuki or sends SOAP.
+cargo run -p tanuki-tv-volume -- --discover
+```
+
+Discovery sends two SSDP `M-SEARCH` requests to `239.255.255.250:1900`, waits four
+seconds for replies, then fetches their advertised description URLs using HTTP
+GET. It keeps devices with a supported RenderingControl service and deduplicates
+repeated advertisements/URLs by device UDN. The listing includes friendly name,
+stable UDN and current description URL. Routers and other unrelated UPnP devices
+are excluded.
+
+Run without arguments if exactly one renderer is present, or choose one by its
+exact name or stable UDN. Selecting by UDN survives DHCP address changes and
+renaming. If multiple renderers match, startup lists the choices and exits
+instead of choosing one arbitrarily.
+
+```sh
+cargo run -p tanuki-tv-volume
+# Or choose the user's TV discovered on 2026-11-01:
+cargo run -p tanuki-tv-volume -- --device uuid:b79e314d-c9c0-4dc1-8ac3-1c46fee17138
+# Friendly names also work:
+cargo run -p tanuki-tv-volume -- --device '[TV] Samsung TV'
+```
+
+These bridge commands enable the existing control behavior, including applying
+unexpired retained desired volume at startup. **Use `--discover` for read-only
+checks while media is playing.** It returns before listener setup, Tanuki
+connection, input claiming or control code. Automated control tests use isolated
+loopback simulated TVs.
+
+The callback address is chosen automatically from this machine's route to the
+selected TV, using the actual bound listener port and `/notify`. No UDP datagram
+is sent to determine that local address. Defaults are listener `0.0.0.0:9198` and
+Tanuki `ws://127.0.0.1:5167/v1/ws`. Override these when necessary:
+
+```sh
+cargo run -p tanuki-tv-volume -- --device '[TV] Samsung TV' \
+  --listen 0.0.0.0:9198 --tanuki-url ws://127.0.0.1:5167/v1/ws
+# Routed/NAT setups can supply --callback-url http://REACHABLE_HOST:9198/notify.
+```
+
+Discovery uses the default IPv4 multicast route; it does not enumerate every
+network interface or search across VLANs. An offline TV or blocked multicast
+produces no match. Every supervised restart discovers again. Explicit device
+and callback URLs remain supported for networks where discovery is unavailable:
+
+```sh
 cargo run -p tanuki-tv-volume -- \
   http://192.168.1.50:9197/description.xml \
   http://192.168.1.20:9198/notify \
-  0.0.0.0:9198 \
-  ws://127.0.0.1:5167/v1/ws
+  0.0.0.0:9198 ws://127.0.0.1:5167/v1/ws
 ```
 
-The description URL above is a placeholder, not a known Samsung endpoint.
-Use the `LOCATION` URL from the TV's SSDP advertisement/search response. For
-example, this Python standard-library snippet prints device-description URLs
-advertised by UPnP devices on the local network (identify the TV by responder IP):
-
-```sh
-python3 - <<'PY'
-import socket, time
-with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-    s.settimeout(0.5)
-    s.sendto(b'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: "ssdp:discover"\r\nMX: 2\r\nST: upnp:rootdevice\r\n\r\n', ('239.255.255.250', 1900))
-    until = time.monotonic() + 4
-    seen = set()
-    while time.monotonic() < until:
-        try:
-            data, address = s.recvfrom(65535)
-        except socket.timeout:
-            continue
-        for line in data.decode(errors='replace').splitlines():
-            if line.lower().startswith('location:'):
-                item = (address[0], line.split(':', 1)[1].strip())
-                if item not in seen:
-                    print(*item)
-                    seen.add(item)
-PY
-```
+These explicit addresses are placeholders. The user's actual read-only discovery
+found `[TV] Samsung TV` at `http://192.168.0.152:9197/dmr` on 2026-11-01, alongside
+`Sinon Satellite` and `Tetsuya`. The UUID selector above avoids depending on that
+TV IP. No live bridge, subscription or volume command was run during this check.
 
 The bridge reads the first RenderingControl v1/v2/v3 service's `controlURL` and
 `eventSubURL`, resolving relative paths and optional `URLBase`. It does not guess
 ports or event paths. Both TV URLs and the callback must use HTTP. The callback
 path must be `/notify`, without a query, and its advertised port must route to
-the listener. Binding defaults to `0.0.0.0:9198`; the Tanuki URL defaults to the
-loopback URL shown above. HTTP requests bypass proxy environment variables.
+the listener. HTTP requests bypass proxy environment variables. Description
+fetches during discovery have three-second timeouts, eight concurrent requests,
+and the existing 64 KiB body limit; at most 512 SSDP responses and 64 description
+URLs are processed.
 
 Observe changes with the inspector or SSE, and submit a requested volume:
 
@@ -86,7 +111,8 @@ still-retained intent again. Give short-lived requests an expiry as above.
 
 ## Lifetime and failure behavior
 
-Startup fetches the description, connects to Tanuki, removes old observed state,
+Startup discovers/selects a device (unless explicitly configured), chooses the
+callback, fetches the description, connects to Tanuki, removes old observed state,
 and defines/claims the desired input. The callback listener starts before
 `SUBSCRIBE`, so an initial notification arriving before the subscribe response
 can queue safely. The bridge waits for real subscription events and requires a
@@ -120,8 +146,8 @@ the bridge loop; a slow SOAP request can delay processing/renewal until timeout.
 
 Build with `cargo build --release -p tanuki-tv-volume`. Copy and edit
 [tv-volume.service](tv-volume.service) into
-`~/.config/systemd/user/tanuki-tv-volume.service`, using the actual executable,
-TV description, callback and Tanuki addresses. The unit is a template, not
+`~/.config/systemd/user/tanuki-tv-volume.service`, using the actual executable and the stable TV UDN from `--discover`. The template
+automatically discovers its current address and chooses the callback. The unit is a template, not
 installed by this example.
 
 ```sh
@@ -142,7 +168,10 @@ cargo test -p tanuki-tv-volume --release
 ```
 
 Unit tests cover XML channel/instance selection, malformed/range checks,
-URL resolution and granted subscription duration. Integration tests use actual
+URL resolution and granted subscription duration. Discovery tests use a loopback
+SSDP responder and HTTP descriptions to verify duplicate suppression, device
+filtering, GET-only access, unique name/UDN selection and callback route/port
+selection; CLI tests cover read-only listing and existing explicit-address syntax. Integration tests use actual
 HTTP callbacks, SOAP requests, WebSockets and production Tanuki server logic:
 initial/event publication, control without optimistic output, invalid intent,
 foreign subscriptions, renewal, missing-event recovery boundary, claim takeover,

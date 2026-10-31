@@ -198,3 +198,11 @@ API checks used [Reqwest redirect policy](https://docs.rs/reqwest/0.13.5/reqwest
 and pinned source for `Node::has_tag_name`, `Response::chunk` and SDK observers.
 Named XML tags match regardless of namespace prefix. Parser defaults disallow
 DTDs. Compile, Clippy and integration checks exercise the actual pinned APIs.
+
+TV discovery (2026-11-01) reuses the existing pinned Tokio UDP sockets,
+`lookup_host`, `timeout_at` and `JoinSet`, plus Reqwest/roxmltree. No dependencies,
+compiler pin or unstable gates change. APIs were checked against
+[Tokio UdpSocket](https://docs.rs/tokio/1.53.2/tokio/net/struct.UdpSocket.html)
+and the UPnP Device Architecture discovery specification. UDP connect/local_addr
+chooses a callback route without sending a datagram. Loopback compile/runtime
+tests verify the pinned APIs; production discovery uses IPv4 multicast.

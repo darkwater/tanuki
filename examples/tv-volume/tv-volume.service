@@ -2,8 +2,9 @@
 Description=TV volume bridge for Tanuki
 
 [Service]
-# Replace these paths/addresses. The description path is a placeholder.
-ExecStart=%h/github/darkwater/tanuki/target/release/tanuki-tv-volume http://192.168.1.50:9197/description.xml http://192.168.1.20:9198/notify 0.0.0.0:9198 ws://127.0.0.1:5167/v1/ws
+# Replace the executable path and TV UDN from --discover.
+# Discovery and callback selection run on each startup; no TV IP is stored.
+ExecStart=%h/github/darkwater/tanuki/target/release/tanuki-tv-volume --device uuid:YOUR-TV-ID
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=40

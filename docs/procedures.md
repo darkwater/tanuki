@@ -366,11 +366,17 @@ for its readiness log, runs browser tests and then sends SIGINT and joins it.
 ## TV volume bridge
 
 See [configuration, discovery and service instructions](../examples/tv-volume/README.md).
-Run `cargo run -p tanuki-tv-volume -- DESCRIPTION_URL CALLBACK_URL [LISTEN_ADDR]
-[TANUKI_WS_URL]`; the callback must reach `/notify` from the TV. No service is
-automatically installed. A supplied systemd user-unit template restarts failures.
+Run `cargo run -p tanuki-tv-volume -- --discover` for read-only SSDP listing,
+then `cargo run -p tanuki-tv-volume -- --device UDN_OR_NAME` to start. A single
+discovered renderer also permits no-argument startup. Callback address/port
+selection is automatic; `--callback-url`, `--listen` and `--tanuki-url` override
+it. The callback must reach `/notify` from the TV. The previous explicit
+`DESCRIPTION_URL CALLBACK_URL [LISTEN_ADDR] [TANUKI_WS_URL]` syntax still works.
+No service is automatically installed. A supplied systemd user-unit template restarts failures.
 Startup subscribes and explicitly claims retained intent. Shutdown attempts
 unsubscribe, callback-task termination, output removal and session close;
 input definition/value survive. Lost subscriptions require a fresh process
-subscription; stale output expires if cleanup cannot reach Tanuki. This example
-has simulated-device acceptance only, not verified physical-TV deployment.
+subscription; stale output expires if cleanup cannot reach Tanuki. Read-only
+LAN discovery was verified on 2026-11-01. Volume control and event delivery still
+have simulated-device acceptance only. Read-only listing exits
+before connecting to Tanuki or applying retained control intent.

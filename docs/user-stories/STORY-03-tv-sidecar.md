@@ -1,8 +1,8 @@
 # US-03 — TV state and sidecar display
 
-- **Status:** volume bridge implemented with simulated-TV/real-server tests; source/power sidecar and hardware deployment remain unverified.
+- **Status:** volume bridge implemented with simulated-TV/real-server tests; read-only LAN discovery verified; source/power sidecar and hardware controls remain unverified.
 - **Origin:** User use case.
-- **Last updated:** 2026-10-31.
+- **Last updated:** 2026-11-01.
 - **Lifecycle:** maintained under [USER-STORIES.md](USER-STORIES.md).
 
 ## User story
@@ -32,7 +32,7 @@ TV interface, supported HDMI identifiers, tablet app and display/sleep behaviour
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, L1, T1; E1 TV observer; add sidecar projection fixture.
 - Story-specific tests: `cargo test -p tanuki-tv-volume`; A5–A7 coverage is detailed below. A1–A4 remain deferred.
-- Real client: the TV volume example below, derived from `~/tv-volume.sh`; configured addresses and hardware deployment are not yet verified.
+- Real client: the TV volume example below, derived from `~/tv-volume.sh`; LAN discovery is verified below; physical volume control/event delivery and service deployment remain unverified.
 - Observed behaviour: volume publication/control is tested with a simulated TV and production Tanuki. Passing these tests does not establish real deployment.
 
 ## Change notes
@@ -67,5 +67,28 @@ projection have not been implemented by this example.
 
 The example requires an initial Master volume event. It refreshes its 90-second
 output lease on subscription renewals, which establish subscription health but
-cannot prove a TV has delivered every physical change. No polling fallback,
-continuous desired/actual reconciliation or automatic SSDP selection is added.
+cannot prove a TV has delivered every physical change. No polling fallback or continuous desired/actual reconciliation is added.
+Automatic SSDP selection was added in the next increment below.
+
+## Address-free discovery — 2026-11-01
+
+- **US-03.A8:** The volume service discovers a TV without a configured IP,
+  selects it by stable UDN or unique friendly name when several renderers exist,
+  and chooses a reachable local callback address. A read-only listing must not
+  connect to Tanuki, apply retained volume intent or send volume commands.
+
+Implemented as `--discover`, no-argument startup for one renderer, and
+`--device UDN_OR_NAME`. The default IPv4 multicast route is searched on every
+startup. Discovery and automatic callback tests live in
+`examples/tv-volume/src/discovery.rs`; binary argument tests cover read-only mode
+and explicit-URL compatibility. Duplicate devices are grouped by UDN. Multiple
+matches require an explicit choice; no arbitrary device is controlled.
+
+Read-only LAN verification found `[TV] Samsung TV`,
+UDN `uuid:b79e314d-c9c0-4dc1-8ac3-1c46fee17138`, description
+`http://192.168.0.152:9197/dmr`, plus renderers `Sinon Satellite` and `Tetsuya`.
+Only SSDP searches and HTTP GETs were performed. The user explicitly required
+that the playing TV's volume not be set during testing; the live bridge was
+not launched. Physical-TV notifications, controls, callback reachability and
+systemd deployment remain unverified. Discovery does not span VLANs or enumerate
+multiple network interfaces; explicit callback/URL overrides remain available.

@@ -360,3 +360,7 @@ by the adapter and not sent to the TV; absent a configured denying schema, a
 Tanuki write receipt still means publication acceptance. Actual output comes
 only from TV notifications. A lease refresh on subscription renewal repeats the
 last observed value, rather than establishing a new physical measurement.
+
+SSDP discovery (2026-11-01) adds no Tanuki protocol messages. The bridge resolves
+its TV address and callback before connecting; `--discover` is a read-only
+SSDP/HTTP description listing with no Tanuki session or desired-input handling.
