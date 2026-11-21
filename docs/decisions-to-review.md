@@ -22,6 +22,8 @@ A retained input can be defined but never submitted to, lose its desired value t
 - Restore input definitions and unexpired retained values after restart; clear session claims. Instant commands are gone.
 - On a freeform topic with no applicable schema, an implicit node-kind change is accepted with a warning. Incompatible state belonging to the old kind is discarded. Applicable schema policy may deny the change atomically.
 
+**Accepted 2026-11-21 (delegated by the user):** an omitted retained-value expiry means no deadline. Preserving an existing deadline is the explicit `preserve` mode and keeps only a deadline of the same node kind.
+
 **Remaining small policy choice:** instant-output metadata persistence.
 Ordinary output publication creates its corresponding kind when absent. The
 user's acceptance of the examples does not implicitly approve every earlier

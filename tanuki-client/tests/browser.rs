@@ -31,6 +31,7 @@ fn hello(name: &str) -> ClientMessage {
         request_id: RequestId::new("hello".into()),
         client: ClientName::parse(name).unwrap(),
         selectors: vec![],
+        session: SessionMode::Managed,
     }
 }
 

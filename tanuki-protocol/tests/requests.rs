@@ -6,9 +6,20 @@ fn requests_round_trip_both_codecs_without_losing_tags_or_limits() {
         request_id: RequestId::new("hello".into()),
         client: ClientName::parse("native client").unwrap(),
         selectors: vec![Selector::parse("/lamp/{hue,brightness}").unwrap()],
+        session: SessionMode::Managed,
     };
     let requests = [
         hello,
+        ClientMessage::Hello {
+            request_id: RequestId::new("tab".into()),
+            client: ClientName::parse("dashboard").unwrap(),
+            selectors: vec![],
+            session: SessionMode::Stateless,
+        },
+        ClientMessage::Select {
+            request_id: RequestId::new("select".into()),
+            selectors: vec![Selector::parse("/battery/*").unwrap()],
+        },
         ClientMessage::Write {
             request_id: RequestId::new("write".into()),
             operations: vec![
@@ -77,6 +88,21 @@ fn null_payload_presence_and_discriminator_order_are_preserved() {
             .unwrap(),
         ServerMessage::Reply {
             result: serde_json::Value::Null,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_hello_without_session_mode_is_managed() {
+    let hello: ClientMessage = serde_json::from_str(
+        r#"{"type":"hello","request_id":"h","client":"laptop","selectors":[]}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        hello,
+        ClientMessage::Hello {
+            session: SessionMode::Managed,
             ..
         }
     ));

@@ -86,7 +86,7 @@ Repeated writes of an identical value still update `last_updated`, provenance, a
 
 Clients identify themselves with a supplied name, such as `phone tasker battery script`. These names are attribution labels, not authentication credentials.
 
-An adapter starts a managed session when relevant. Managed sessions are exposed under `/$connections/<connection_name>/...`. Duplicate names follow the shared warn-and-replace/kick policy. Internal unique session identity must prevent displaced sessions or their cleanup from affecting replacements.
+An adapter starts a managed session when relevant. Managed sessions are exposed under `/$connections/<connection_name>/...`. Duplicate names follow the shared warn-and-replace/kick policy. A WebSocket client may instead connect statelessly: attributed like one-off HTTP writes, unable to claim, and never replacing or replaced, so read-mostly clients such as dashboards and inspectors can share names. Internal unique session identity must prevent displaced sessions or their cleanup from affecting replacements.
 
 A physical HTTP connection is not automatically a managed session. Read-only endpoints can operate without a name or managed session. Basic one-off HTTP writes carry attribution but do not create a managed session and cannot kick off duplicate clients. Client name and optional session identity must be separate in the mutation context (D2).
 
@@ -148,7 +148,7 @@ A relative expiry supplied by a client becomes a server timestamp deadline. `las
 
 Expiry scheduling follows the earliest deadline, wakes when the schedule changes, and rechecks current identity/deadline before applying an expiry. An old timer must not delete refreshed data. Already-expired values must not appear in startup snapshots.
 
-Value expiry, input-claim release, connection liveness, and overdue freshness are separate mechanisms. Instant payloads have no value expiry. Input expiry clears only its value; claim release clears only its ownership. Omitted-expiry behaviour remains a small policy choice in D1.
+Value expiry, input-claim release, connection liveness, and overdue freshness are separate mechanisms. Instant payloads have no value expiry. Input expiry clears only its value; claim release clears only its ownership. An omitted expiry means no deadline; keeping an existing deadline is explicit (D1).
 
 Schema rules may express a positive fixed expected update interval for retained
 state and present desired values; the shortest matching interval applies.
@@ -247,7 +247,7 @@ Start with basic HTTP reads/writes, then quickly build WebSocket as the first co
 
 HTTP should support convenient single writes and reads and multi-topic operations. URL parameters may provide shorthands such as `expire=1h`, but adapters must translate to common values and operations. Exact verbs and string conversion rules remain open (D8).
 
-WebSocket and HTTP SSE reads are subscriptions; unsubscribe is not an initial priority. Raw TCP and MQTT can follow later. TCP framing and protocol detection need not delay WebSocket.
+WebSocket and HTTP SSE reads are subscriptions. A WebSocket connection can replace its selection with a `select` message answered by a fresh snapshot; SSE selections are fixed per stream. Raw TCP and MQTT can follow later. TCP framing and protocol detection need not delay WebSocket.
 
 ## Rust browser SDK delivery — 2026-10-31
 

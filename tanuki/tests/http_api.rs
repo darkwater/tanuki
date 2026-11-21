@@ -675,23 +675,10 @@ async fn same_name_http_write_does_not_displace_a_managed_session() {
     assert_eq!(core.lock().unwrap().managed_session_count(), 1);
 }
 
-#[tokio::test]
-async fn omitted_expiry_preserves_an_existing_absolute_deadline() {
-    let (app, core, _runtime) = test_app();
-    let mut first = json_request(
-        "POST",
-        "/v1/state/battery/phone",
-        json!({"value": 70, "expiry": {"mode": "set", "duration": "PT1H"}}),
-    );
-    first
-        .headers_mut()
-        .insert("tanuki-client", "phone".parse().unwrap());
-    assert_eq!(
-        app.clone().oneshot(first).await.unwrap().status(),
-        StatusCode::OK
-    );
-    let original_deadline = core
-        .lock()
+fn phone_battery_deadline(
+    core: &tanuki::transport::SharedCore,
+) -> Option<tanuki::domain::Deadline> {
+    core.lock()
         .unwrap()
         .read(&tanuki::domain::Selection::new(vec![
             tanuki::domain::Selector::parse("/battery/phone").unwrap(),
@@ -701,27 +688,51 @@ async fn omitted_expiry_preserves_an_existing_absolute_deadline() {
         .unwrap()
         .retained_value()
         .unwrap()
-        .expires_at();
+        .expires_at()
+}
 
-    let mut refresh = json_request("POST", "/v1/state/battery/phone", json!({"value": 71}));
-    refresh
-        .headers_mut()
-        .insert("tanuki-client", "phone".parse().unwrap());
-    assert_eq!(app.oneshot(refresh).await.unwrap().status(), StatusCode::OK);
-    let snapshot = core
-        .lock()
-        .unwrap()
-        .read(&tanuki::domain::Selection::new(vec![
-            tanuki::domain::Selector::parse("/battery/phone").unwrap(),
-        ]));
-    let retained = snapshot
-        .nodes()
-        .get(&TopicPath::parse("/battery/phone").unwrap())
-        .unwrap()
-        .retained_value()
-        .unwrap();
-    assert_eq!(retained.value(), &Value::Integer(71));
-    assert_eq!(retained.expires_at(), original_deadline);
+#[tokio::test]
+async fn omitted_expiry_clears_and_explicit_preserve_keeps_the_deadline() {
+    let (app, core, _runtime) = test_app();
+    let post = |body| {
+        let mut request = json_request("POST", "/v1/state/battery/phone", body);
+        request
+            .headers_mut()
+            .insert("tanuki-client", "phone".parse().unwrap());
+        request
+    };
+    let leased = json!({"value": 70, "expiry": {"mode": "set", "duration": "PT1H"}});
+    assert_eq!(
+        app.clone()
+            .oneshot(post(leased.clone()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let deadline = phone_battery_deadline(&core);
+    assert!(deadline.is_some());
+
+    // A write that says nothing about expiry must not vanish at a deadline
+    // some earlier writer chose.
+    let plain = json!({"value": 71});
+    assert_eq!(
+        app.clone().oneshot(post(plain)).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(phone_battery_deadline(&core), None);
+
+    assert_eq!(
+        app.clone().oneshot(post(leased)).await.unwrap().status(),
+        StatusCode::OK
+    );
+    let leased_deadline = phone_battery_deadline(&core);
+    let keep = json!({"value": 72, "expiry": {"mode": "preserve"}});
+    assert_eq!(
+        app.oneshot(post(keep)).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(phone_battery_deadline(&core), leased_deadline);
 }
 
 #[tokio::test]

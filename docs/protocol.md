@@ -57,9 +57,10 @@ Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
 `define_input`, `claim_input`, `submit_desired`, `submit_command`,
 `clear_desired`, and `remove_node`. Retained writes accept an expiry object:
 `{"mode":"preserve"}`, `{"mode":"clear"}`, or
-`{"mode":"set","duration":"PT1H"}`. Omission provisionally means
-`preserve`: keep the existing absolute deadline, or use no deadline for a new
-value. Only a deadline of the same node kind is kept: publishing state over a
+`{"mode":"set","duration":"PT1H"}`. Omission means `clear`: a writer that
+says nothing about expiry never inherits a deadline another writer chose.
+`preserve` explicitly keeps the existing absolute deadline (none for a new
+value). Only a deadline of the same node kind is kept: publishing state over a
 desired node discards the desired payload and its deadline together. Claim releases similarly use `immediate` or `after` with a nonnegative
 fixed ISO-8601 duration.
 
@@ -202,13 +203,35 @@ Every text frame contains JSON and every binary frame contains MessagePack,
 including when a client mixes them on one connection. A request-correlated
 reply uses the request frame's codec. A successful
 hello receives exactly one correlated `snapshot` before ordinary replies or
-updates. The snapshot's `warnings` include managed-session replacement. Later
-client messages are `write` messages whose `operations` array is identical to
-the HTTP batch operation array:
+updates. The snapshot's `warnings` include managed-session replacement.
+
+Hello's optional `session` field chooses what the connection establishes
+besides its subscription:
+
+- `"managed"` (the default when omitted) opens a managed session. It can claim
+  inputs, and a later managed hello with the same client name replaces it.
+- `"stateless"` attributes writes to the client name exactly like a stateless
+  HTTP request. It cannot claim inputs and neither replaces nor is replaced by
+  any other connection, so dashboards, inspectors and browser tabs can share a
+  name. Its write provenance carries no session.
+
+Later client messages are `write` messages whose `operations` array is
+identical to the HTTP batch operation array:
 
 ```json
 {"type":"write","request_id":"w1","operations":[{"op":"publish_state","topic":"/battery/laptop","value":87,"expiry":{"mode":"clear"}}]}
 ```
+
+or `select` messages, which replace the connection's selection:
+
+```json
+{"type":"select","request_id":"s2","selectors":["/battery/*","/lamp/**"]}
+```
+
+A `select` is answered by a correlated `snapshot` of the new selection (with
+no warnings). Updates queued for the old selection are discarded because the
+new snapshot is taken after all of them; later updates follow the new
+selection only. An empty list is valid and stops all updates.
 
 A data message must contain exactly one encoded protocol message. Trailing
 JSON or MessagePack data rejects the whole message before applying a write.
@@ -216,10 +239,12 @@ The shared `decode_messagepack` helper enforces this for the server, direct
 Rust connection, and session driver; a malformed incoming server message ends
 the session without delivering its partial update.
 
-The write reply is sent before that same connection's resulting selected
-update. Updates from unrelated concurrent writers can already be queued, so
-clients distinguish correlated replies by `request_id` rather than assuming
-every adjacent message is a pair. Decode failures whose ID cannot be recovered
+A write's own selected update, and any update queued before it, is sent
+before its reply. When the reply arrives, a client that applies updates in
+order therefore already reflects its own write (read-your-writes), provided
+the write touched its selection. Updates from unrelated concurrent writers can
+also be queued, so clients distinguish correlated replies by `request_id`
+rather than assuming every adjacent message is a pair. Decode failures whose ID cannot be recovered
 use `request_id: null` and the malformed frame's codec.
 
 Opening another managed WebSocket with the same client replaces the old

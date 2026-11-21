@@ -44,6 +44,7 @@ fn hello(name: &str, selectors: &[&str]) -> ClientMessage {
             .iter()
             .map(|s| Selector::parse(s).unwrap())
             .collect(),
+        session: SessionMode::Managed,
     }
 }
 fn publish(value: i64) -> WireOperation {
@@ -82,10 +83,10 @@ async fn direct_connection_receives_hello_reply_update_and_remote_error_in_both_
             .await
             .unwrap();
         assert!(
-            matches!(receive(connection.recv()).await.unwrap(), Some(ServerMessage::Reply { request_id, .. }) if request_id.as_str() == "write")
+            matches!(receive(connection.recv()).await.unwrap(), Some(ServerMessage::Update { changes, .. }) if changes.len() == 1)
         );
         assert!(
-            matches!(receive(connection.recv()).await.unwrap(), Some(ServerMessage::Update { changes, .. }) if changes.len() == 1)
+            matches!(receive(connection.recv()).await.unwrap(), Some(ServerMessage::Reply { request_id, .. }) if request_id.as_str() == "write")
         );
         connection
             .send(&ClientMessage::Write {

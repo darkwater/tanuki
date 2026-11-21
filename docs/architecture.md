@@ -248,9 +248,9 @@ immune to stale work.
 
 The runtime starts one scheduler alongside its shared core. Its clock is the
 same injected wall-clock seam used for writes; Tokio's monotonic timer is only
-used for waiting. Omitted wire expiry provisionally maps to `Preserve`: it
-keeps an existing absolute deadline of the same node kind and yields no
-deadline on a new value or a kind change.
+used for waiting. Omitted wire expiry maps to `Clear` (no deadline); explicit
+`Preserve` keeps an existing absolute deadline of the same node kind and
+yields no deadline on a new value or a kind change.
 
 ## Best-effort persistence implemented in task 08
 

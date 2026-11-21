@@ -169,6 +169,7 @@ impl Session {
                     request_id: id.clone(),
                     client,
                     selectors,
+                    session: SessionMode::Managed,
                 })
                 .await?;
             match connection.recv().await? {

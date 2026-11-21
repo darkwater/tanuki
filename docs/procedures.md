@@ -148,8 +148,11 @@ commits are filtered out.
    deadline; expiry closes with 1011 `peer_timeout`. Every outgoing write is
    bounded by the send timeout, and an encoded message above 1 MiB closes with
    1009 `message_too_big`.
-5. Apply every write through `Core::apply`; send its correlated reply before
-   forwarding its own queued selected update.
+5. Apply every write through `Core::apply`; forward every queued selected
+   update (including the write's own) before its correlated reply. A `select`
+   replaces the core subscription and answers with the new snapshot; a
+   stateless hello subscribes without opening a managed session or socket
+   registry entry (no replacement) and writes through a stateless context.
 6. On close, I/O failure, timeout, or cancellation, the session lease disconnects the
    exact handle. Immediate
    claim release is committed and published; a stale old handle is harmless.
@@ -192,9 +195,9 @@ are cleared without losing definition/claim, and due matching claims are
 cleared without losing definition/value. Subscribers receive the same typed
 upsert/removal batches as for caller writes.
 
-An omitted expiry maps provisionally to `Preserve`. On an existing retained
-value it retains the old absolute deadline rather than renewing it; on a new
-value it creates no deadline. `clear` explicitly removes a deadline and `set`
+An omitted wire expiry maps to `Clear`. Explicit `preserve` retains an existing
+absolute deadline of the same node kind rather than renewing it; on a new value
+or a kind change it creates no deadline. `clear` explicitly removes a deadline and `set`
 computes a new absolute deadline from server wall time.
 
 ## Save, restore, and shutdown

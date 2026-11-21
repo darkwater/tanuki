@@ -94,11 +94,14 @@ impl TryFrom<WireExpiry> for ExpiryUpdate {
     }
 }
 
+/// An omitted expiry means no deadline. A writer that says nothing about
+/// expiry must not vanish at a deadline an earlier writer chose; keeping one is
+/// the explicit `preserve` mode.
 pub fn expiry_update(value: Option<WireExpiry>) -> Result<ExpiryUpdate, RequestConversionError> {
     value
         .map(TryInto::try_into)
         .transpose()
-        .map(|expiry| expiry.unwrap_or(ExpiryUpdate::Preserve))
+        .map(|expiry| expiry.unwrap_or(ExpiryUpdate::Clear))
 }
 
 impl TryFrom<WireRelease> for ClaimRelease {

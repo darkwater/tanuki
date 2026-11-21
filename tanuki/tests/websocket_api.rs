@@ -253,15 +253,15 @@ async fn websocket_alias_write_updates_canonical_and_link_subscribers_atomically
         }),
     )
     .await;
-    assert!(matches!(
-        recv_json(&mut socket).await,
-        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "alias-write"
-    ));
     assert_update_topics(
         &mut socket,
         &["/devices/lamp/power", "/rooms/living-room/power"],
     )
     .await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "alias-write"
+    ));
 
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;
@@ -269,7 +269,7 @@ async fn websocket_alias_write_updates_canonical_and_link_subscribers_atomically
 }
 
 #[tokio::test]
-async fn json_hello_snapshot_then_write_reply_then_atomic_update() {
+async fn json_hello_snapshot_then_own_atomic_update_then_write_reply() {
     let server = TestServer::start().await;
     let mut socket = server.connect().await;
     send_hello(&mut socket, "laptop", &["/battery/*"]).await;
@@ -281,14 +281,17 @@ async fn json_hello_snapshot_then_write_reply_then_atomic_update() {
     ));
 
     send_json(&mut socket, battery_write("write-1", 87)).await;
-    assert!(matches!(
-        recv_json(&mut socket).await,
-        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "write-1"
-    ));
-    let ServerMessage::Update { changes, .. } = recv_json(&mut socket).await else {
-        panic!("the committed update must follow its correlated reply");
+    // The writer's own selected update precedes its reply, so a client's cache
+    // already reflects the write when the reply arrives.
+    let ServerMessage::Update { changes, sequence } = recv_json(&mut socket).await else {
+        panic!("the committed update must precede its correlated reply");
     };
     assert_eq!(changes.len(), 1);
+    let ServerMessage::Reply { request_id, result } = recv_json(&mut socket).await else {
+        panic!("the correlated reply must follow the update");
+    };
+    assert_eq!(request_id.as_str(), "write-1");
+    assert_eq!(result["sequence"], sequence);
 
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;
@@ -316,6 +319,11 @@ async fn same_name_http_is_stateless_but_duplicate_websocket_replaces_session() 
     assert_eq!(server.core.lock().unwrap().managed_session_count(), 1);
 
     send_json(&mut original, battery_write("still-current", 88)).await;
+    // The stateless HTTP write's update, then this write's update, then its reply.
+    assert!(matches!(
+        recv_json(&mut original).await,
+        ServerMessage::Update { .. }
+    ));
     assert!(matches!(
         recv_json(&mut original).await,
         ServerMessage::Update { .. }
@@ -323,10 +331,6 @@ async fn same_name_http_is_stateless_but_duplicate_websocket_replaces_session() 
     assert!(matches!(
         recv_json(&mut original).await,
         ServerMessage::Reply { request_id, .. } if request_id.as_str() == "still-current"
-    ));
-    assert!(matches!(
-        recv_json(&mut original).await,
-        ServerMessage::Update { .. }
     ));
 
     let mut replacement = server.connect().await;
@@ -350,6 +354,10 @@ async fn same_name_http_is_stateless_but_duplicate_websocket_replaces_session() 
     ));
 
     send_json(&mut replacement, battery_write("replacement-write", 89)).await;
+    assert!(matches!(
+        recv_json(&mut replacement).await,
+        ServerMessage::Update { .. }
+    ));
     assert!(matches!(
         recv_json(&mut replacement).await,
         ServerMessage::Reply { request_id, .. } if request_id.as_str() == "replacement-write"
@@ -387,13 +395,13 @@ async fn messagepack_uses_the_same_snapshot_reply_and_update_messages() {
         ))
         .await
         .unwrap();
+    let ServerMessage::Update { changes, .. } = recv_messagepack(&mut socket).await else {
+        panic!("binary subscriber must receive the committed update");
+    };
     assert!(matches!(
         recv_messagepack(&mut socket).await,
         ServerMessage::Reply { request_id, .. } if request_id.as_str() == "binary-write"
     ));
-    let ServerMessage::Update { changes, .. } = recv_messagepack(&mut socket).await else {
-        panic!("binary subscriber must receive the committed update");
-    };
     let NodeView::State { current } = (match changes.as_slice() {
         [tanuki::protocol::ChangeView::Upsert { node, .. }] => node,
         other => panic!("unexpected changes: {other:?}"),
@@ -422,13 +430,14 @@ async fn each_request_frame_selects_its_reply_codec() {
         ))
         .await
         .unwrap();
-    assert!(matches!(
-        recv_messagepack(&mut socket).await,
-        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "binary-request"
-    ));
+    // Unsolicited updates keep the hello codec; the reply uses the request's.
     assert!(matches!(
         recv_json(&mut socket).await,
         ServerMessage::Update { .. }
+    ));
+    assert!(matches!(
+        recv_messagepack(&mut socket).await,
+        ServerMessage::Reply { request_id, .. } if request_id.as_str() == "binary-request"
     ));
 
     socket.close(None).await.unwrap();
@@ -460,11 +469,11 @@ async fn trailing_messagepack_data_rejects_the_entire_write_without_mutation() {
     send_json(&mut socket, battery_write("valid-frame", 55)).await;
     assert!(matches!(
         recv_json(&mut socket).await,
-        ServerMessage::Reply { .. }
+        ServerMessage::Update { .. }
     ));
     assert!(matches!(
         recv_json(&mut socket).await,
-        ServerMessage::Update { .. }
+        ServerMessage::Reply { .. }
     ));
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;
@@ -616,11 +625,11 @@ async fn simulated_room_actors_drive_downstream_outputs_across_transports() {
         }),
     )
     .await;
+    assert_update_topics(&mut controller, &["/lamp/desired"]).await;
     assert!(matches!(
         recv_json(&mut controller).await,
         ServerMessage::Reply { request_id, .. } if request_id.as_str() == "own-lamp"
     ));
-    assert_update_topics(&mut controller, &["/lamp/desired"]).await;
     assert_update_topics(&mut dashboard, &["/lamp/desired"]).await;
 
     let remote = server
@@ -1068,6 +1077,145 @@ async fn a_snapshot_too_big_for_one_message_closes_with_message_too_big() {
     let mut socket = server.connect().await;
     send_hello(&mut socket, "blob reader", &["/blob/*"]).await;
     expect_close(&mut socket, CloseCode::Size).await;
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
+}
+
+async fn send_stateless_hello(socket: &mut TestSocket, client: &str, selectors: &[&str]) {
+    send_json(
+        socket,
+        json!({
+            "type": "hello",
+            "request_id": "hello-1",
+            "client": client,
+            "selectors": selectors,
+            "session": "stateless",
+        }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn stateless_sessions_neither_replace_nor_claim_but_attribute_writes() {
+    let server = TestServer::start().await;
+    let mut managed = server.connect().await;
+    send_hello(&mut managed, "dashboard", &["/lamp/*"]).await;
+    let _ = recv_json(&mut managed).await;
+    let mut tab_one = server.connect().await;
+    send_stateless_hello(&mut tab_one, "dashboard", &["/lamp/*"]).await;
+    assert!(matches!(
+        recv_json(&mut tab_one).await,
+        ServerMessage::Snapshot { ref warnings, .. } if warnings.is_empty()
+    ));
+    let mut tab_two = server.connect().await;
+    send_stateless_hello(&mut tab_two, "dashboard", &["/lamp/*"]).await;
+    let _ = recv_json(&mut tab_two).await;
+    assert_eq!(server.core.lock().unwrap().managed_session_count(), 1);
+
+    send_json(
+        &mut tab_one,
+        json!({"type": "write", "request_id": "level", "operations": [
+            {"op": "publish_state", "topic": "/lamp/level", "value": 5}
+        ]}),
+    )
+    .await;
+    let ServerMessage::Update { changes, .. } = recv_json(&mut tab_one).await else {
+        panic!("the stateless writer still observes its own update first");
+    };
+    let [
+        tanuki::protocol::ChangeView::Upsert {
+            node: NodeView::State { current },
+            ..
+        },
+    ] = changes.as_slice()
+    else {
+        panic!("unexpected changes: {changes:?}");
+    };
+    assert_eq!(current.last_write.client, "dashboard");
+    assert_eq!(current.last_write.session, None);
+    assert!(matches!(
+        recv_json(&mut tab_one).await,
+        ServerMessage::Reply { .. }
+    ));
+    // Neither the managed connection nor the other tab was displaced.
+    assert_update_topics(&mut managed, &["/lamp/level"]).await;
+    assert_update_topics(&mut tab_two, &["/lamp/level"]).await;
+
+    send_json(
+        &mut tab_one,
+        json!({"type": "write", "request_id": "claim", "operations": [
+            {"op": "define_input", "topic": "/lamp/desired", "kind": "desired"},
+            {"op": "claim_input", "topic": "/lamp/desired", "release": {"mode": "immediate"}}
+        ]}),
+    )
+    .await;
+    assert!(matches!(
+        recv_json(&mut tab_one).await,
+        ServerMessage::Error { request_id: Some(id), error }
+            if id.as_str() == "claim" && error.code == "session_required"
+    ));
+    for socket in [&mut managed, &mut tab_one, &mut tab_two] {
+        socket.close(None).await.unwrap();
+    }
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
+}
+
+async fn post_state(server: &TestServer, topic: &str, value: i64) -> RawJson {
+    server
+        .post_json(
+            &format!("/v1/state{topic}"),
+            "phone",
+            json!({"value": value}),
+        )
+        .await
+}
+
+#[tokio::test]
+async fn select_replaces_the_selection_with_a_correlated_snapshot() {
+    let server = TestServer::start().await;
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "viewer", &[]).await;
+    let _ = recv_json(&mut socket).await;
+    assert_eq!(post_state(&server, "/battery/phone", 50).await["ok"], true);
+
+    send_json(
+        &mut socket,
+        json!({"type": "select", "request_id": "sel-1", "selectors": ["/battery/*"]}),
+    )
+    .await;
+    let ServerMessage::Snapshot {
+        request_id, nodes, ..
+    } = recv_json(&mut socket).await
+    else {
+        panic!("select must be answered by a snapshot");
+    };
+    assert_eq!(request_id.as_str(), "sel-1");
+    assert_eq!(
+        nodes.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["/battery/phone"]
+    );
+
+    assert_eq!(post_state(&server, "/battery/laptop", 60).await["ok"], true);
+    assert_update_topics(&mut socket, &["/battery/laptop"]).await;
+
+    send_json(
+        &mut socket,
+        json!({"type": "select", "request_id": "sel-2", "selectors": []}),
+    )
+    .await;
+    assert!(matches!(
+        recv_json(&mut socket).await,
+        ServerMessage::Snapshot { ref nodes, .. } if nodes.is_empty()
+    ));
+    assert_eq!(post_state(&server, "/battery/laptop", 61).await["ok"], true);
+    assert!(
+        timeout(Duration::from_millis(200), next_data(&mut socket))
+            .await
+            .is_err(),
+        "an emptied selection must not receive updates"
+    );
+    socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;
     server.stop().await;
 }

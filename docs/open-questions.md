@@ -31,11 +31,10 @@ No unresolved question currently blocks tasks 10 or 11.
 
 ## Provisional defaults probably worth a quick skim
 
-1. Omitted retained-value expiry preserves the existing absolute deadline; a
-   new value, or one replacing a different node kind, has no deadline. It does
-   not renew the prior relative duration. Explicit `clear` and `set` remain
-   available. Because a later write without expiry can vanish at a deadline it
-   never set, whether omission should instead mean `clear` is worth reviewing.
+1. Omitted retained-value expiry means `clear` (changed 2026-11-21: a write
+   without expiry used to inherit, and later vanish at, a deadline another
+   writer chose). Explicit `preserve` keeps an existing same-kind absolute
+   deadline without renewing the prior relative duration.
 2. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
    `$map`; literal maps containing reserved tag keys must use `$map`.
 3. `Cargo.lock` is committed. Application crates pin exact versions; the

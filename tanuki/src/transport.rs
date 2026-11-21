@@ -23,14 +23,14 @@ use tracing::warn;
 use crate::{
     core::{CoreError, SchemaInstallMode, Subscription, SubscriptionCapacity, SubscriptionEnd},
     domain::{
-        ClientName, FiniteF64, NodeKind, Selection, Selector, SessionHandle, TopicPath, ValueKind,
-        WriteBatch, WriteContext, WriteOperation,
+        ClientName, FiniteF64, NodeKind, Selection, Selector, TopicPath, ValueKind, WriteBatch,
+        WriteContext, WriteOperation,
     },
     link::{LinkDefinition, LinkName},
     protocol::{
         ClientMessage, CommitView, ErrorView, JsonValue, LinkInstallView, LinkRemovalView,
-        RequestConversionError, RequestId, SchemaInstallView, ServerMessage, SnapshotView,
-        UpdateView, WireExpiry, WireOperation, expiry_update, nonnegative_duration,
+        RequestConversionError, RequestId, SchemaInstallView, ServerMessage, SessionMode,
+        SnapshotView, UpdateView, WireExpiry, WireOperation, expiry_update, nonnegative_duration,
     },
     runtime::{OpenedConnection, RuntimeError, RuntimeHandle, StreamLease},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
@@ -454,6 +454,7 @@ async fn run_websocket_session(
         request_id,
         client,
         selectors,
+        session,
     } = first
     else {
         let _ = send_server_message(
@@ -469,13 +470,51 @@ async fn run_websocket_session(
         .await;
         return;
     };
+    let selection = Selection::new(selectors);
+    match session {
+        SessionMode::Stateless => {
+            let mut subscription = match state.subscribe(selection, subscription_capacity()) {
+                Ok(subscription) => subscription,
+                Err(error) => {
+                    let error = api_server_error(Some(request_id), ApiError::from_runtime(error));
+                    let _ = send_server_message(socket, timeouts.send, codec, &error).await;
+                    return;
+                }
+            };
+            let snapshot =
+                crate::protocol::snapshot_message(request_id, subscription.snapshot(), &[]);
+            if send_server_message(socket, timeouts.send, codec, &snapshot)
+                .await
+                .is_ok()
+            {
+                let context = WriteContext::stateless(client);
+                websocket_loop(socket, state, codec, &context, &mut subscription, timeouts).await;
+            }
+        }
+        SessionMode::Managed => {
+            run_managed_session(
+                socket, state, timeouts, codec, request_id, client, selection,
+            )
+            .await;
+        }
+    }
+}
 
-    let opened = match state.open_connection(
-        client,
-        Selection::new(selectors),
-        SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
-            .expect("configured subscription capacity is nonzero"),
-    ) {
+fn subscription_capacity() -> SubscriptionCapacity {
+    SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
+        .expect("configured subscription capacity is nonzero")
+}
+
+async fn run_managed_session(
+    socket: &mut WebSocket,
+    state: &HttpState,
+    timeouts: WebSocketTimeouts,
+    codec: WireCodec,
+    request_id: RequestId,
+    client: ClientName,
+    selection: Selection,
+) {
+    let opened = match state.open_connection(client, selection, subscription_capacity()) {
         Ok(value) => value,
         Err(api) => {
             let _ = send_server_message(
@@ -504,6 +543,7 @@ async fn run_websocket_session(
 
     let snapshot =
         crate::protocol::snapshot_message(request_id, subscription.snapshot(), opened.warnings());
+    let context = WriteContext::managed(handle.clone());
     tokio::select! {
         biased;
         _ = async { let _ = kicked.wait_for(|kicked| *kicked).await; } => {
@@ -511,7 +551,7 @@ async fn run_websocket_session(
         }
         () = async {
             if send_server_message(socket, timeouts.send, codec, &snapshot).await.is_ok() {
-                websocket_loop(socket, state, codec, handle, &mut subscription, timeouts).await;
+                websocket_loop(socket, state, codec, &context, &mut subscription, timeouts).await;
             }
         } => {}
     }
@@ -521,7 +561,7 @@ async fn websocket_loop(
     socket: &mut WebSocket,
     state: &HttpState,
     subscription_codec: WireCodec,
-    handle: &SessionHandle,
+    context: &WriteContext,
     subscription: &mut Subscription,
     timeouts: WebSocketTimeouts,
 ) {
@@ -534,7 +574,7 @@ async fn websocket_loop(
         let silence_deadline = heartbeat.map(|heartbeat| last_heard + heartbeat.silence);
         tokio::select! {
             () = sleep_until_or_never(silence_deadline) => {
-                warn!(client = %handle.client(), ?heartbeat, "WebSocket peer stopped responding; closing session");
+                warn!(client = %context.client(), ?heartbeat, "WebSocket peer stopped responding; closing session");
                 close_socket(socket, timeouts.send, 1011, "peer_timeout").await;
                 return;
             }
@@ -558,31 +598,49 @@ async fn websocket_loop(
             incoming = socket.recv() => {
                 let Some(Ok(incoming)) = incoming else { return };
                 last_heard = tokio::time::Instant::now();
-                match incoming {
-                    Message::Ping(_) | Message::Pong(_) => {}
+                let (incoming_codec, message) = match incoming {
+                    Message::Ping(_) | Message::Pong(_) => continue,
                     Message::Close(_) => return,
-                    Message::Text(_) | Message::Binary(_) => {
-                        let decoded = decode_client_message(incoming);
-                        let (incoming_codec, message) = match decoded {
-                            Ok(decoded) => decoded,
-                            Err((incoming_codec, error)) => {
-                                if send_server_message(socket, timeouts.send, incoming_codec, &error_message(None, "invalid_message", error)).await.is_err() { return; }
-                                continue;
+                    Message::Text(_) | Message::Binary(_) => match decode_client_message(incoming) {
+                        Ok(decoded) => decoded,
+                        Err((incoming_codec, error)) => {
+                            let error = error_message(None, "invalid_message", error);
+                            if send_server_message(socket, timeouts.send, incoming_codec, &error).await.is_err() { return; }
+                            continue;
+                        }
+                    },
+                };
+                let response = match message {
+                    ClientMessage::Hello { request_id, .. } => error_message(
+                        Some(request_id),
+                        "already_initialized",
+                        "hello is only valid as the first message",
+                    ),
+                    ClientMessage::Write { request_id, operations } => {
+                        let response = apply_websocket_write(state, context, request_id, operations);
+                        // The commit's own selected update (and anything queued
+                        // before it) goes out ahead of the reply, so a client's
+                        // cache already reflects its write when the reply lands.
+                        while let Some(update) = subscription.try_update() {
+                            if send_server_message(socket, timeouts.send, subscription_codec, &crate::protocol::update_message(&update)).await.is_err() { return; }
+                        }
+                        response
+                    }
+                    ClientMessage::Select { request_id, selectors } => {
+                        // Queued updates of the old selection are superseded by
+                        // the new snapshot, which is taken after all of them.
+                        match state.subscribe(Selection::new(selectors), subscription_capacity()) {
+                            Ok(next) => {
+                                *subscription = next;
+                                crate::protocol::snapshot_message(request_id, subscription.snapshot(), &[])
                             }
-                        };
-                        match message {
-                            ClientMessage::Hello { request_id, .. } => {
-                                if send_server_message(socket, timeouts.send, incoming_codec, &error_message(Some(request_id), "already_initialized", "hello is only valid as the first message")).await.is_err() { return; }
-                            }
-                            ClientMessage::Write { request_id, operations } => {
-                                let response = apply_websocket_write(state, handle, request_id, operations);
-                                let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == "session_expired");
-                                if send_server_message(socket, timeouts.send, incoming_codec, &response).await.is_err() { return; }
-                                if expired { return; }
-                            }
+                            Err(error) => api_server_error(Some(request_id), ApiError::from_runtime(error)),
                         }
                     }
-                }
+                };
+                let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == "session_expired");
+                if send_server_message(socket, timeouts.send, incoming_codec, &response).await.is_err() { return; }
+                if expired { return; }
             }
         }
     }
@@ -590,7 +648,7 @@ async fn websocket_loop(
 
 fn apply_websocket_write(
     state: &HttpState,
-    handle: &SessionHandle,
+    context: &WriteContext,
     request_id: RequestId,
     operations: Vec<WireOperation>,
 ) -> ServerMessage {
@@ -600,13 +658,10 @@ fn apply_websocket_write(
             return api_server_error(Some(request_id), ApiError::from_request_conversion(error));
         }
     };
-    match state
-        .apply(&WriteContext::managed(handle.clone()), batch)
-        .map_err(ApiError::from_runtime)
-    {
+    match state.apply(context, batch).map_err(ApiError::from_runtime) {
         Ok(outcome) => {
             for diagnostic in outcome.warnings() {
-                warn!(?diagnostic, client = %handle.client(), "WebSocket write accepted with diagnostic");
+                warn!(?diagnostic, client = %context.client(), "WebSocket write accepted with diagnostic");
             }
             ServerMessage::Reply {
                 request_id,

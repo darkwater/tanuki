@@ -27,6 +27,7 @@ struct ClientFields {
     client: Option<ClientName>,
     selectors: Option<Vec<Selector>>,
     operations: Option<Vec<WireOperation>>,
+    session: Option<SessionMode>,
 }
 impl<'de> Deserialize<'de> for ClientMessage {
     fn deserialize<D: Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
@@ -36,12 +37,20 @@ impl<'de> Deserialize<'de> for ClientMessage {
                 request_id: f.request_id,
                 client: required(f.client, "client")?,
                 selectors: required(f.selectors, "selectors")?,
+                session: f.session.unwrap_or_default(),
             }),
             "write" => Ok(Self::Write {
                 request_id: f.request_id,
                 operations: required(f.operations, "operations")?,
             }),
-            other => Err(de::Error::unknown_variant(other, &["hello", "write"])),
+            "select" => Ok(Self::Select {
+                request_id: f.request_id,
+                selectors: required(f.selectors, "selectors")?,
+            }),
+            other => Err(de::Error::unknown_variant(
+                other,
+                &["hello", "write", "select"],
+            )),
         }
     }
 }
