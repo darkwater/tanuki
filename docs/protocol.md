@@ -288,10 +288,11 @@ observers publish complete latest retained snapshots, while raw listeners expose
 every admitted batch and explicit lag. Receipt sequences do not establish that
 an observer caught up. Initial selections are immutable.
 
-The supported native profile is `ws://`, JSON outgoing by default, optional
+The supported native profile is `ws://` plus `wss://` through the default
+`rustls` client feature, JSON outgoing by default, optional
 MessagePack frame encoding, 1 MiB messages, 64 pending requests, 64 raw batches
 per listener and configurable 10-second connect/hello/write deadlines. There is
-no idle timeout. TLS, browser bindings, Iced integration, automatic reconnect
+no idle timeout. Browser bindings, Iced integration, automatic reconnect
 and cross-topic Serde shapes are deferred. Full APIs, lifecycle semantics and
 compiled examples are documented in [the client README](../tanuki-client/README.md).
 

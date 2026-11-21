@@ -17,6 +17,13 @@ impl Connection {
         Self::open_with_codec(url, Codec::Json).await
     }
     pub async fn open_with_codec(url: &str, codec: Codec) -> Result<Self, ConnectionError> {
+        // rustls picks a provider from crate features only when exactly one is
+        // enabled; another crate enabling aws-lc-rs would make wss:// panic.
+        // Install ring unless the application already installed a provider.
+        #[cfg(feature = "rustls")]
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_MESSAGE_BYTES));

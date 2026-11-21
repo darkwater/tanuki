@@ -2,7 +2,9 @@
 
 Async Rust SDK for Tanuki's v1 WebSocket protocol, on native and browser WASM. Use the repository's
 pinned nightly. The client depends on `tanuki-protocol`, never on the server.
-Native uses Tokio/Tungstenite with `ws://`. Browser builds for
+Native uses Tokio/Tungstenite with `ws://`, and `wss://` through the default
+`rustls` feature (webpki roots, ring provider unless your application installs
+its own rustls `CryptoProvider` first; `default-features = false` drops TLS). Browser builds for
 `wasm32-unknown-unknown` use the browser's WebSocket API (`ws://`/`wss://`), local
 tasks and browser timers. The same Rust Session, typed handles and observers
 work on both targets. JavaScript bindings and framework integration remain deferred.

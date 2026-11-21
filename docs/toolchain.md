@@ -70,7 +70,12 @@ Pinned Serde source confirms its buffered ContentDeserializer does not retain
 `is_human_readable`. Behavioral fixtures justify streaming DTO decoding.
 serde-value does not implement 128-bit integer serialization; use explicit i64
 narrowing or Value access for that input, and no semantic time autodetection is
-provided. Native transport currently has no TLS feature enabled.
+provided. Native `wss://` uses the default `rustls` client feature
+(`tokio-tungstenite/rustls-tls-webpki-roots` plus rustls 0.23 with only ring).
+rustls selects a provider from crate features only when exactly one is enabled,
+so `Connection::open_with_codec` installs ring via
+[`CryptoProvider::install_default`](https://docs.rs/rustls/0.23/rustls/crypto/struct.CryptoProvider.html#method.install_default)
+unless the application installed a provider first.
 
 The attempted `cargo check -p tanuki-protocol --target wasm32-unknown-unknown`
 failed with E0463 because that target's standard library is not installed.
