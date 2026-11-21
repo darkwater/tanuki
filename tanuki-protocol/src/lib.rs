@@ -12,3 +12,7 @@ pub use wire::*;
 mod view;
 pub use view::{AppliedUpdate, ClientViewError, SelectedView};
 mod decode;
+mod error;
+mod payload;
+pub use error::ErrorCode;
+pub use payload::{PayloadError, from_value, to_value};

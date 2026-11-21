@@ -165,13 +165,13 @@ async fn uncorrelated_server_error_and_sequence_regression_terminate_all_listene
     peer.send(ServerMessage::Error {
         request_id: None,
         error: ErrorView {
-            code: "invalid_message".into(),
+            code: ErrorCode::InvalidMessage,
             message: "fixture".into(),
         },
     })
     .await;
     assert!(
-        matches!(raw.recv().await, Err(SessionEnd::Remote(error)) if error.code == "invalid_message")
+        matches!(raw.recv().await, Err(SessionEnd::Remote(error)) if error.code == ErrorCode::InvalidMessage)
     );
     assert!(raw.recv().await.unwrap().is_none());
     assert!(session.close().await.is_err());
@@ -300,7 +300,7 @@ async fn shutdown_keeps_transmitted_writes_unknown_and_rejects_new_writes_locall
     peer.send(ServerMessage::Error {
         request_id: None,
         error: ErrorView {
-            code: "fixture".into(),
+            code: ErrorCode::Unknown,
             message: "closing".into(),
         },
     })

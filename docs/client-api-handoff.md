@@ -45,7 +45,7 @@ Existing foundations:
 | `tanuki/src/client.rs` | `SelectedView` applies complete batches, separates occurrences and checks sequence order |
 | `tanuki/src/domain/` | Paths, selection matching, values, identity and operation invariants |
 | `tanuki/tests/protocol_json.rs`, `tanuki/tests/protocol_subscription.rs` | Existing codec and stream-shape contracts |
-| `tanuki/tests/client_view.rs`, `tanuki/tests/websocket_api.rs` | Atomic local views and real-server socket scenarios |
+| `tanuki-protocol/tests/selected_view.rs`, `tanuki/tests/websocket_api.rs` | Atomic local views and real-server socket scenarios |
 | `Cargo.toml`, `tanuki/Cargo.toml`, `rust-toolchain.toml`, `docs/toolchain.md` | Workspace, exact dependencies and `nightly-2026-10-01` pin |
 
 At handoff, the worktree contains design edits to this document,

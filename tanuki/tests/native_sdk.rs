@@ -50,7 +50,7 @@ fn hello(name: &str, selectors: &[&str]) -> ClientMessage {
 fn publish(value: i64) -> WireOperation {
     WireOperation::PublishState {
         topic: TopicPath::parse("/battery/laptop").unwrap(),
-        value: JsonValue::new(Value::Integer(value)),
+        value: WireValue::new(Value::Integer(value)),
         expiry: Some(WireExpiry::Clear),
     }
 }
@@ -96,7 +96,7 @@ async fn direct_connection_receives_hello_reply_update_and_remote_error_in_both_
             .await
             .unwrap();
         assert!(
-            matches!(receive(connection.recv()).await.unwrap(), Some(ServerMessage::Error { request_id: Some(id), error }) if id.as_str() == "invalid" && error.code == "empty_batch")
+            matches!(receive(connection.recv()).await.unwrap(), Some(ServerMessage::Error { request_id: Some(id), error }) if id.as_str() == "invalid" && error.code == tanuki::protocol::ErrorCode::EmptyBatch)
         );
         connection.close().await.unwrap();
         server.stop().await;
@@ -173,8 +173,14 @@ async fn typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic() {
         view.apply(receive(raw.recv()).await.unwrap().unwrap())
             .unwrap();
     }
-    let NodeView::Desired { claim: before, .. } =
-        view.nodes().get("/lamp/desired-brightness").unwrap()
+    let NodeView::Desired { claim: before, .. } = view
+        .nodes()
+        .get(
+            &"/lamp/desired-brightness"
+                .parse::<tanuki::protocol::TopicPath>()
+                .unwrap(),
+        )
+        .unwrap()
     else {
         panic!()
     };
@@ -192,7 +198,14 @@ async fn typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic() {
         claim: after,
         current,
         ..
-    } = view.nodes().get("/lamp/desired-brightness").unwrap()
+    } = view
+        .nodes()
+        .get(
+            &"/lamp/desired-brightness"
+                .parse::<tanuki::protocol::TopicPath>()
+                .unwrap(),
+        )
+        .unwrap()
     else {
         panic!()
     };
@@ -200,7 +213,15 @@ async fn typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic() {
     assert!(current.is_some());
     assert_eq!(
         desired
-            .decode(view.nodes().get("/lamp/desired-brightness").unwrap())
+            .decode(
+                view.nodes()
+                    .get(
+                        &"/lamp/desired-brightness"
+                            .parse::<tanuki::protocol::TopicPath>()
+                            .unwrap()
+                    )
+                    .unwrap()
+            )
             .unwrap()
             .current()
             .unwrap()
@@ -550,19 +571,41 @@ async fn instant_occurrences_remain_ordered_batches_and_are_not_replayed_to_late
     );
     let late = session.listen_updates().await.unwrap();
     assert!(matches!(
-        late.initial_snapshot().nodes.get("/lamp/event"),
+        late.initial_snapshot().nodes.get(
+            &"/lamp/event"
+                .parse::<tanuki::protocol::TopicPath>()
+                .unwrap()
+        ),
         Some(NodeView::Event { .. })
     ));
     assert!(
         event
-            .decode(late.initial_snapshot().nodes.get("/lamp/event").unwrap())
+            .decode(
+                late.initial_snapshot()
+                    .nodes
+                    .get(
+                        &"/lamp/event"
+                            .parse::<tanuki::protocol::TopicPath>()
+                            .unwrap()
+                    )
+                    .unwrap()
+            )
             .unwrap()
             .current()
             .is_none()
     );
     assert!(
         command
-            .decode(late.initial_snapshot().nodes.get("/lamp/command").unwrap())
+            .decode(
+                late.initial_snapshot()
+                    .nodes
+                    .get(
+                        &"/lamp/command"
+                            .parse::<tanuki::protocol::TopicPath>()
+                            .unwrap()
+                    )
+                    .unwrap()
+            )
             .unwrap()
             .current()
             .is_none()
@@ -693,7 +736,7 @@ async fn both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in
             session
                 .write(vec![WireOperation::PublishState {
                     topic: TopicPath::parse("/battery/laptop").unwrap(),
-                    value: JsonValue::new(value.clone()),
+                    value: WireValue::new(value.clone()),
                     expiry: Some(WireExpiry::Clear),
                 }])
                 .await
@@ -708,7 +751,9 @@ async fn both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in
             };
             assert_eq!(current.value.as_inner(), value);
             let late = session.listen_updates().await.unwrap();
-            let NodeView::State { current } = &late.initial_snapshot().nodes["/battery/laptop"]
+            let NodeView::State { current } = &late.initial_snapshot().nodes[&"/battery/laptop"
+                .parse::<tanuki::protocol::TopicPath>()
+                .unwrap()]
             else {
                 panic!()
             };
@@ -724,7 +769,9 @@ async fn both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in
             )
             .await
             .unwrap();
-            let NodeView::State { current } = &viewer.initial_snapshot().nodes["/battery/laptop"]
+            let NodeView::State { current } = &viewer.initial_snapshot().nodes[&"/battery/laptop"
+                .parse::<tanuki::protocol::TopicPath>()
+                .unwrap()]
             else {
                 panic!()
             };
@@ -838,7 +885,11 @@ async fn registration_racing_with_commits_loses_no_retained_update_and_observer_
         let mut view = tanuki_client::SelectedView::from_snapshot(raw.initial_snapshot().clone());
         let current = view
             .nodes()
-            .get("/battery/laptop")
+            .get(
+                &"/battery/laptop"
+                    .parse::<tanuki::protocol::TopicPath>()
+                    .unwrap(),
+            )
             .and_then(|node| reading.decode(node).ok())
             .and_then(|node| node.current().map(|c| c.value));
         if current != Some(value) {
@@ -847,7 +898,11 @@ async fn registration_racing_with_commits_loses_no_retained_update_and_observer_
         }
         assert_eq!(
             reading
-                .decode(&view.nodes()["/battery/laptop"])
+                .decode(
+                    &view.nodes()[&"/battery/laptop"
+                        .parse::<tanuki::protocol::TopicPath>()
+                        .unwrap()]
+                )
                 .unwrap()
                 .current()
                 .unwrap()

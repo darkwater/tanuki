@@ -98,7 +98,7 @@ impl From<&Snapshot> for SnapshotView {
             nodes: snapshot
                 .nodes()
                 .iter()
-                .map(|(topic, node)| (topic.to_string(), NodeView::from(node)))
+                .map(|(topic, node)| (topic.clone(), NodeView::from(node)))
                 .collect(),
         }
     }
@@ -138,11 +138,9 @@ impl From<&Node> for NodeView {
 impl From<&RetainedValue> for CurrentValueView {
     fn from(value: &RetainedValue) -> Self {
         Self {
-            value: JsonValue::new(value.value().clone()),
+            value: WireValue::new(value.value().clone()),
             last_write: ProvenanceView::from(value.last_write()),
-            expires_at: value
-                .expires_at()
-                .map(|deadline| deadline.get().get().to_string()),
+            expires_at: value.expires_at().map(|deadline| deadline.get().get()),
         }
     }
 }
@@ -150,9 +148,9 @@ impl From<&RetainedValue> for CurrentValueView {
 impl From<&WriteProvenance> for ProvenanceView {
     fn from(value: &WriteProvenance) -> Self {
         Self {
-            client: value.client().as_str().to_owned(),
+            client: value.client().clone(),
             session: value.session().map(|session| session.get()),
-            at: value.at().get().to_string(),
+            at: value.at().get(),
         }
     }
 }
@@ -161,7 +159,7 @@ impl From<&InputClaim> for ClaimView {
     fn from(value: &InputClaim) -> Self {
         Self {
             id: value.id().get(),
-            owner: value.owner().as_str().to_owned(),
+            owner: value.owner().clone(),
             session: value.session().get(),
             release: ClaimReleaseView::from(value.release()),
         }
@@ -173,7 +171,7 @@ impl From<ClaimRelease> for ClaimReleaseView {
         match value {
             ClaimRelease::Immediate => Self::Immediate,
             ClaimRelease::After(duration) => Self::After {
-                duration: duration_string(duration),
+                duration: duration.get(),
             },
         }
     }
@@ -183,19 +181,19 @@ impl From<&Change> for ChangeView {
     fn from(change: &Change) -> Self {
         match change {
             Change::Upsert { topic, node } => Self::Upsert {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 node: NodeView::from(node),
             },
             Change::Occurrence { topic, event } => Self::Event {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 event: OccurrenceView::from(event),
             },
             Change::Command { topic, command } => Self::Command {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 command: OccurrenceView::from(command),
             },
             Change::Removed { topic, previous } => Self::Removed {
-                topic: topic.to_string(),
+                topic: topic.clone(),
                 previous: NodeView::from(previous),
             },
         }
@@ -205,7 +203,7 @@ impl From<&Change> for ChangeView {
 impl From<&EventOccurrence> for OccurrenceView {
     fn from(value: &EventOccurrence) -> Self {
         Self {
-            value: JsonValue::new(value.value().clone()),
+            value: WireValue::new(value.value().clone()),
             provenance: ProvenanceView::from(value.publisher()),
         }
     }
@@ -214,7 +212,7 @@ impl From<&EventOccurrence> for OccurrenceView {
 impl From<&CommandOccurrence> for OccurrenceView {
     fn from(value: &CommandOccurrence) -> Self {
         Self {
-            value: JsonValue::new(value.value().clone()),
+            value: WireValue::new(value.value().clone()),
             provenance: ProvenanceView::from(value.submitter()),
         }
     }
@@ -228,28 +226,28 @@ impl From<&Diagnostic> for DiagnosticView {
                 previous,
                 replacement,
             } => Self::OutputOwnerChanged {
-                topic: topic.to_string(),
-                previous: previous.as_str().to_owned(),
-                replacement: replacement.as_str().to_owned(),
+                topic: topic.clone(),
+                previous: previous.clone(),
+                replacement: replacement.clone(),
             },
             Diagnostic::NodeKindChanged {
                 topic,
                 previous,
                 replacement,
             } => Self::NodeKindChanged {
-                topic: topic.to_string(),
-                previous: format!("{previous:?}").to_lowercase(),
-                replacement: format!("{replacement:?}").to_lowercase(),
+                topic: topic.clone(),
+                previous: node_kind(*previous),
+                replacement: node_kind(*replacement),
             },
             Diagnostic::NodeAlreadyAbsent { topic } => Self::NodeAlreadyAbsent {
-                topic: topic.to_string(),
+                topic: topic.clone(),
             },
             Diagnostic::SessionReplaced {
                 client,
                 previous,
                 replacement,
             } => Self::SessionReplaced {
-                client: client.as_str().to_owned(),
+                client: client.clone(),
                 previous: previous.get(),
                 replacement: replacement.get(),
             },
@@ -258,20 +256,20 @@ impl From<&Diagnostic> for DiagnosticView {
                 previous,
                 replacement,
             } => Self::InputClaimReplaced {
-                topic: topic.to_string(),
-                previous: previous.as_str().to_owned(),
-                replacement: replacement.as_str().to_owned(),
+                topic: topic.clone(),
+                previous: previous.clone(),
+                replacement: replacement.clone(),
             },
             Diagnostic::ClaimGraceOutOfRange { topic } => Self::ClaimGraceOutOfRange {
-                topic: topic.to_string(),
+                topic: topic.clone(),
             },
             Diagnostic::SchemaWarning(issue) => Self::SchemaWarning {
-                topic: issue.topic().to_string(),
+                topic: issue.topic().clone(),
                 message: issue.kind().to_string(),
             },
             Diagnostic::LinkDisabled { link, issue } => Self::LinkDisabled {
                 link: link.as_str().to_owned(),
-                topic: issue.topic().to_string(),
+                topic: issue.topic().clone(),
                 message: issue.kind().to_string(),
             },
             Diagnostic::LinkEnabled { link } => Self::LinkEnabled {
@@ -280,8 +278,13 @@ impl From<&Diagnostic> for DiagnosticView {
         }
     }
 }
-fn duration_string(value: NonNegativeDuration) -> String {
-    jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&value.get())
+const fn node_kind(kind: crate::domain::NodeKind) -> NodeKind {
+    match kind {
+        crate::domain::NodeKind::State => NodeKind::State,
+        crate::domain::NodeKind::Event => NodeKind::Event,
+        crate::domain::NodeKind::Desired => NodeKind::Desired,
+        crate::domain::NodeKind::Command => NodeKind::Command,
+    }
 }
 
 #[must_use]

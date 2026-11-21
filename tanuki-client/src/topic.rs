@@ -10,13 +10,6 @@ use std::{
     sync::{Arc, Weak},
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NodeKind {
-    State,
-    Event,
-    Desired,
-    Command,
-}
 mod sealed {
     pub trait Sealed {}
 }
@@ -154,7 +147,7 @@ impl<T, K: TopicKind> Topic<T, K> {
     where
         T: DeserializeOwned,
     {
-        let actual = node_kind(node);
+        let actual = node.kind();
         if actual != K::KIND {
             return Err(ReadError::WrongKind {
                 topic: self.path.clone(),
@@ -188,7 +181,7 @@ impl<T> StateTopic<T> {
             &self.session,
             vec![WireOperation::PublishState {
                 topic: self.path.clone(),
-                value: JsonValue::new(value),
+                value: WireValue::new(value),
                 expiry: Some(expiry.into()),
             }],
         )
@@ -207,7 +200,7 @@ impl<T> EventTopic<T> {
             &self.session,
             vec![WireOperation::PublishEvent {
                 topic: self.path.clone(),
-                value: JsonValue::new(value),
+                value: WireValue::new(value),
             }],
         )
         .await
@@ -251,7 +244,7 @@ impl<T> DesiredTopic<T> {
             &self.session,
             vec![WireOperation::SubmitDesired {
                 topic: self.path.clone(),
-                value: JsonValue::new(value),
+                value: WireValue::new(value),
                 expiry: Some(expiry.into()),
             }],
         )
@@ -279,7 +272,7 @@ impl<T> CommandTopic<T> {
             &self.session,
             vec![WireOperation::SubmitCommand {
                 topic: self.path.clone(),
-                value: JsonValue::new(value),
+                value: WireValue::new(value),
             }],
         )
         .await
@@ -305,7 +298,7 @@ impl Batch {
         expiry: ExpiryUpdate,
     ) -> Result<&mut Self, ClientError> {
         self.check(topic)?;
-        let value = JsonValue::new(to_value(value)?);
+        let value = WireValue::new(to_value(value)?);
         self.operations.push(WireOperation::PublishState {
             topic: topic.path.clone(),
             value,
@@ -321,7 +314,7 @@ impl Batch {
         self.check(topic)?;
         self.operations.push(WireOperation::PublishEvent {
             topic: topic.path.clone(),
-            value: JsonValue::new(to_value(value)?),
+            value: WireValue::new(to_value(value)?),
         });
         Ok(self)
     }
@@ -334,7 +327,7 @@ impl Batch {
         self.check(topic)?;
         self.operations.push(WireOperation::SubmitDesired {
             topic: topic.path.clone(),
-            value: JsonValue::new(to_value(value)?),
+            value: WireValue::new(to_value(value)?),
             expiry: Some(expiry.into()),
         });
         Ok(self)
@@ -347,7 +340,7 @@ impl Batch {
         self.check(topic)?;
         self.operations.push(WireOperation::SubmitCommand {
             topic: topic.path.clone(),
-            value: JsonValue::new(to_value(value)?),
+            value: WireValue::new(to_value(value)?),
         });
         Ok(self)
     }
@@ -409,7 +402,7 @@ pub enum ReadError {
 pub struct Current<T> {
     pub value: T,
     pub last_write: ProvenanceView,
-    pub expires_at: Option<String>,
+    pub expires_at: Option<jiff::Timestamp>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum DecodedNode<T> {
@@ -436,21 +429,13 @@ impl<T> DecodedNode<T> {
         }
     }
 }
-pub(crate) fn node_kind(node: &NodeView) -> NodeKind {
-    match node {
-        NodeView::State { .. } => NodeKind::State,
-        NodeView::Event { .. } => NodeKind::Event,
-        NodeView::Desired { .. } => NodeKind::Desired,
-        NodeView::Command { .. } => NodeKind::Command,
-    }
-}
 fn decode_current<T: DeserializeOwned>(
     current: &CurrentValueView,
 ) -> Result<Current<T>, PayloadError> {
     Ok(Current {
         value: from_value(current.value.as_inner())?,
         last_write: current.last_write.clone(),
-        expires_at: current.expires_at.clone(),
+        expires_at: current.expires_at,
     })
 }
 fn decode_node<T: DeserializeOwned>(node: &NodeView) -> Result<DecodedNode<T>, PayloadError> {

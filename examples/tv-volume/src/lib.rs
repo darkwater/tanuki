@@ -403,7 +403,9 @@ impl InputTracker {
             Some(_) => return Err(Error::Protocol("desired audio input claim was released")),
             None => return Err(Error::Protocol("desired audio input definition removed")),
         };
-        if claim.owner != "tv-volume bridge" || self.claim_id.is_some_and(|id| id != claim.id) {
+        if claim.owner.as_str() != "tv-volume bridge"
+            || self.claim_id.is_some_and(|id| id != claim.id)
+        {
             return Err(Error::Protocol(
                 "desired audio input claim was taken by another controller",
             ));

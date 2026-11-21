@@ -114,8 +114,7 @@ pub fn details(path: &TopicPath, node: Option<&NodeView>) -> Vec<String> {
             "Expires: {}",
             current
                 .expires_at
-                .as_deref()
-                .map(safe_text)
+                .map(|at| safe_text(&at.to_string()))
                 .unwrap_or_else(|| "none".into())
         ));
     } else if matches!(node, NodeView::Desired { .. }) {
@@ -140,7 +139,7 @@ pub fn details(path: &TopicPath, node: Option<&NodeView>) -> Vec<String> {
 fn provenance(lines: &mut Vec<String>, provenance: &ProvenanceView) {
     lines.push(format!(
         "Writer/publisher: {}",
-        safe_text(&provenance.client)
+        safe_text(provenance.client.as_str())
     ));
     lines.push(format!(
         "Session: {}",
@@ -148,7 +147,7 @@ fn provenance(lines: &mut Vec<String>, provenance: &ProvenanceView) {
             .session
             .map_or_else(|| "stateless".into(), |id| id.to_string())
     ));
-    lines.push(format!("Updated: {}", safe_text(&provenance.at)));
+    lines.push(format!("Updated: {}", provenance.at));
 }
 
 fn claim(lines: &mut Vec<String>, claim: Option<&ClaimView>) {
@@ -156,14 +155,14 @@ fn claim(lines: &mut Vec<String>, claim: Option<&ClaimView>) {
         lines.push(format!(
             "Claim: {} by {} (session {})",
             claim.id,
-            safe_text(&claim.owner),
+            safe_text(claim.owner.as_str()),
             claim.session
         ));
         lines.push(format!(
             "Claim release: {}",
             match &claim.release {
                 ClaimReleaseView::Immediate => "immediate".into(),
-                ClaimReleaseView::After { duration } => format!("after {}", safe_text(duration)),
+                ClaimReleaseView::After { duration } => format!("after {duration}"),
             }
         ));
     } else {

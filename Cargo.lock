@@ -1725,6 +1725,7 @@ dependencies = [
  "jiff",
  "rmp-serde",
  "serde",
+ "serde-value",
  "serde_json",
  "thiserror",
 ]

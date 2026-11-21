@@ -1,20 +1,21 @@
 use std::collections::BTreeMap;
 
-use tanuki::{
-    client::{ClientViewError, SelectedView},
-    domain::Value,
-    protocol::{
-        ChangeView, CurrentValueView, JsonValue, NodeView, ProvenanceView, SnapshotView, UpdateView,
-    },
+use tanuki_protocol::{
+    ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, SelectedView,
+    SnapshotView, UpdateView, Value, WireValue,
 };
+
+fn path(input: &str) -> tanuki_protocol::TopicPath {
+    input.parse().unwrap()
+}
 
 fn current(value: i64, at: &str) -> CurrentValueView {
     CurrentValueView {
-        value: JsonValue::new(Value::Integer(value)),
+        value: WireValue::new(Value::Integer(value)),
         last_write: ProvenanceView {
-            client: "lamp".to_owned(),
+            client: "lamp".parse().unwrap(),
             session: None,
-            at: at.to_owned(),
+            at: at.parse().unwrap(),
         },
         expires_at: None,
     }
@@ -26,13 +27,13 @@ fn complete_update_is_applied_before_the_new_shape_is_observed() {
         sequence: 1,
         nodes: BTreeMap::from([
             (
-                "/lamp/hue".to_owned(),
+                "/lamp/hue".parse().unwrap(),
                 NodeView::State {
                     current: current(10, "1970-01-01T00:00:01Z"),
                 },
             ),
             (
-                "/lamp/brightness".to_owned(),
+                "/lamp/brightness".parse().unwrap(),
                 NodeView::State {
                     current: current(20, "1970-01-01T00:00:01Z"),
                 },
@@ -44,13 +45,13 @@ fn complete_update_is_applied_before_the_new_shape_is_observed() {
         sequence: 3,
         changes: vec![
             ChangeView::Upsert {
-                topic: "/lamp/hue".to_owned(),
+                topic: "/lamp/hue".parse().unwrap(),
                 node: NodeView::State {
                     current: current(120, "1970-01-01T00:00:03Z"),
                 },
             },
             ChangeView::Upsert {
-                topic: "/lamp/brightness".to_owned(),
+                topic: "/lamp/brightness".parse().unwrap(),
                 node: NodeView::State {
                     current: current(70, "1970-01-01T00:00:03Z"),
                 },
@@ -60,17 +61,17 @@ fn complete_update_is_applied_before_the_new_shape_is_observed() {
     .unwrap();
 
     assert_eq!(view.sequence(), 3);
-    let NodeView::State { current: hue } = &view.nodes()["/lamp/hue"] else {
+    let NodeView::State { current: hue } = &view.nodes()[&path("/lamp/hue")] else {
         panic!("expected hue state")
     };
     let NodeView::State {
         current: brightness,
-    } = &view.nodes()["/lamp/brightness"]
+    } = &view.nodes()[&path("/lamp/brightness")]
     else {
         panic!("expected brightness state")
     };
-    assert_eq!(hue.value, JsonValue::new(Value::Integer(120)));
-    assert_eq!(brightness.value, JsonValue::new(Value::Integer(70)));
+    assert_eq!(hue.value, WireValue::new(Value::Integer(120)));
+    assert_eq!(brightness.value, WireValue::new(Value::Integer(70)));
 }
 
 #[test]
@@ -78,20 +79,20 @@ fn removals_change_shape_and_occurrences_stay_out_of_retained_nodes() {
     let mut view = SelectedView::from_snapshot(SnapshotView {
         sequence: 1,
         nodes: BTreeMap::from([(
-            "/old".to_owned(),
+            "/old".parse().unwrap(),
             NodeView::State {
                 current: current(1, "1970-01-01T00:00:01Z"),
             },
         )]),
     });
     let occurrence = ChangeView::Event {
-        topic: "/doorbell/rang".to_owned(),
-        event: tanuki::protocol::OccurrenceView {
-            value: JsonValue::new(Value::Bool(true)),
+        topic: "/doorbell/rang".parse().unwrap(),
+        event: tanuki_protocol::OccurrenceView {
+            value: WireValue::new(Value::Bool(true)),
             provenance: ProvenanceView {
-                client: "doorbell".to_owned(),
+                client: "doorbell".parse().unwrap(),
                 session: None,
-                at: "1970-01-01T00:00:02Z".to_owned(),
+                at: "1970-01-01T00:00:02Z".parse().unwrap(),
             },
         },
     };
@@ -100,7 +101,7 @@ fn removals_change_shape_and_occurrences_stay_out_of_retained_nodes() {
             sequence: 2,
             changes: vec![
                 ChangeView::Removed {
-                    topic: "/old".to_owned(),
+                    topic: "/old".parse().unwrap(),
                     previous: NodeView::State {
                         current: current(1, "1970-01-01T00:00:01Z"),
                     },
@@ -124,7 +125,7 @@ fn stale_or_duplicate_update_is_rejected_without_mutation() {
     let result = view.apply(UpdateView {
         sequence: 5,
         changes: vec![ChangeView::Upsert {
-            topic: "/unexpected".to_owned(),
+            topic: "/unexpected".parse().unwrap(),
             node: NodeView::State {
                 current: current(1, "1970-01-01T00:00:05Z"),
             },

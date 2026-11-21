@@ -13,20 +13,23 @@ fn path(p: &str) -> TopicPath {
 fn state(value: Value) -> NodeView {
     NodeView::State {
         current: CurrentValueView {
-            value: JsonValue::new(value),
+            value: WireValue::new(value),
             last_write: ProvenanceView {
-                client: "writer\x1b[2J".into(),
+                client: "writer\u{202e}".parse().unwrap(),
                 session: Some(7),
-                at: "2026-10-31T00:00:00Z".into(),
+                at: "2026-10-31T00:00:00Z".parse().unwrap(),
             },
-            expires_at: Some("2026-11-01T00:00:00Z".into()),
+            expires_at: Some("2026-11-01T00:00:00Z".parse().unwrap()),
         },
     }
 }
 fn model(nodes: Vec<(&str, NodeView)>) -> Model {
     let mut m = Model::from_snapshot(SnapshotView {
         sequence: 4,
-        nodes: nodes.into_iter().map(|(p, n)| (p.into(), n)).collect(),
+        nodes: nodes
+            .into_iter()
+            .map(|(p, n)| (p.parse().unwrap(), n))
+            .collect(),
     })
     .unwrap();
     m.set_status(ConnectionStatus::Live);
@@ -85,7 +88,7 @@ fn selection_tree_metadata_and_sanitization_reach_the_screen() {
         "state",
         "integer",
         "42",
-        "writer\\u{1b}[2J",
+        "writer\\u{202e}",
         "2026-11-01",
         "not available from this server API",
     ] {
@@ -180,9 +183,9 @@ fn instant_and_system_nodes_never_show_occurrences_as_retained_state() {
         "/$diagnostics/example",
         NodeView::Event {
             last_publisher: ProvenanceView {
-                client: "server".into(),
+                client: "server".parse().unwrap(),
                 session: None,
-                at: "now".into(),
+                at: "2026-10-31T00:00:00Z".parse().unwrap(),
             },
         },
     )]);

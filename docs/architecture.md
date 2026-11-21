@@ -10,7 +10,6 @@ does.
 | --- | --- | --- |
 | `server` | tasks 04–08 implemented | Own process lifecycle, listener wiring, periodic/final saves, and shutdown |
 | `runtime` | server review implemented | Coordinate admission, session/socket replacement, stream lifetimes, and scheduler notifications |
-| `client` | SDK-01 compatibility module | Re-export shared complete-batch `SelectedView` for existing consumers |
 | `domain` | task 01 implemented | Paths, selectors, values, identities, nodes, and operations |
 | `core` | tasks 02–11 implemented | Authoritative nodes, sessions, commits, claims, subscriptions, deadlines, schemas, linked views, and active diagnostics |
 | `protocol` | SDK-01 server boundary | Re-export shared DTOs/codecs, validate request conversion, and encode typed outcomes |

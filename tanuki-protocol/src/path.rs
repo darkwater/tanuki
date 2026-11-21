@@ -53,6 +53,14 @@ impl TopicPath {
         self.segments.iter().map(String::as_str)
     }
 
+    /// Every nonempty prefix, shortest first, ending with this path itself:
+    /// `/a/b/c` yields `/a`, `/a/b`, `/a/b/c`.
+    pub fn prefixes(&self) -> impl ExactSizeIterator<Item = Self> + '_ {
+        (1..self.segments.len() + 1).map(|length| Self {
+            segments: self.segments[..length].into(),
+        })
+    }
+
     #[must_use]
     pub fn is_prefix_of(&self, other: &Self) -> bool {
         other.segments.starts_with(&self.segments)
@@ -75,6 +83,21 @@ impl TopicPath {
 impl fmt::Display for TopicPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "/{}", self.segments.join("/"))
+    }
+}
+
+/// Compares with path text such as `"/lamp/hue"`, segment by segment.
+impl PartialEq<str> for TopicPath {
+    fn eq(&self, other: &str) -> bool {
+        other
+            .strip_prefix('/')
+            .is_some_and(|rest| rest.split('/').eq(self.segments()))
+    }
+}
+
+impl PartialEq<&str> for TopicPath {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
     }
 }
 

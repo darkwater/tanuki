@@ -136,7 +136,7 @@ async fn direct_connection_waits_for_open_mixes_codecs_and_reports_remote_errors
             .await
             .unwrap();
         assert!(
-            matches!(connection.recv().await.unwrap(), Some(ServerMessage::Error { error, .. }) if error.code == "empty_batch")
+            matches!(connection.recv().await.unwrap(), Some(ServerMessage::Error { error, .. }) if error.code == tanuki_client::protocol::ErrorCode::EmptyBatch)
         );
     }
     connection.close().await.unwrap();

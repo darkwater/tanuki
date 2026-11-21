@@ -288,22 +288,22 @@ async fn open(
 mod tests {
     use super::*;
     use tanuki_protocol::{
-        ChangeView, ClientViewError, CurrentValueView, JsonValue, NodeView, ProvenanceView,
-        TopicPath, Value,
+        ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, TopicPath, Value,
+        WireValue,
     };
 
     fn baseline(sequence: u64) -> SnapshotView {
         SnapshotView {
             sequence,
             nodes: [(
-                "/cached".into(),
+                "/cached".parse().unwrap(),
                 NodeView::State {
                     current: CurrentValueView {
-                        value: JsonValue::new(Value::Integer(42)),
+                        value: WireValue::new(Value::Integer(42)),
                         last_write: ProvenanceView {
-                            client: "writer".into(),
+                            client: "writer".parse().unwrap(),
                             session: None,
-                            at: "2026-10-31T00:00:00Z".into(),
+                            at: "2026-10-31T00:00:00Z".parse().unwrap(),
                         },
                         expires_at: None,
                     },
@@ -358,7 +358,7 @@ mod tests {
             .accept_received(Ok(Some(UpdateView {
                 sequence: 10,
                 changes: vec![ChangeView::Removed {
-                    topic: "/cached".into(),
+                    topic: "/cached".parse().unwrap(),
                     previous,
                 }],
             })))

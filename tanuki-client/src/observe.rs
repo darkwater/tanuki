@@ -135,18 +135,10 @@ fn project(view: &SelectedView, paths: &BTreeSet<TopicPath>) -> ObservationSnaps
             .iter()
             .filter_map(|path| {
                 view.nodes()
-                    .get(&path.to_string())
+                    .get(path)
                     .map(|node| (path.clone(), node.clone()))
             })
             .collect(),
-    }
-}
-fn change_topic(change: &ChangeView) -> &str {
-    match change {
-        ChangeView::Upsert { topic, .. }
-        | ChangeView::Removed { topic, .. }
-        | ChangeView::Event { topic, .. }
-        | ChangeView::Command { topic, .. } => topic,
     }
 }
 
@@ -161,8 +153,8 @@ fn projection(
         .filter_map(|path| {
             baseline
                 .nodes
-                .get(&path.to_string())
-                .map(|node| (path.to_string(), node.clone()))
+                .get(path)
+                .map(|node| (path.clone(), node.clone()))
         })
         .collect();
     let mut view = SelectedView::from_snapshot(SnapshotView {
@@ -173,7 +165,6 @@ fn projection(
     let (snapshots, rx) = watch::channel(snapshot.clone());
     let (terminal, end) = watch::channel(None);
     let task = runtime::spawn(async move {
-        let names: BTreeSet<_> = paths.iter().map(ToString::to_string).collect();
         let reason = loop {
             let update = match raw.recv().await {
                 Ok(Some(update)) => update,
@@ -183,7 +174,7 @@ fn projection(
             let changes = update
                 .changes
                 .into_iter()
-                .filter(|change| names.contains(change_topic(change)))
+                .filter(|change| paths.contains(change.topic()))
                 .collect::<Vec<_>>();
             let matching = !changes.is_empty();
             if let Err(error) = view.apply(UpdateView {
@@ -218,14 +209,14 @@ mod tests {
     use crate::session::raw_channel;
     fn upsert(topic: &str, value: i64) -> ChangeView {
         ChangeView::Upsert {
-            topic: topic.into(),
+            topic: topic.parse().unwrap(),
             node: NodeView::State {
                 current: CurrentValueView {
-                    value: JsonValue::new(Value::Integer(value)),
+                    value: WireValue::new(Value::Integer(value)),
                     last_write: ProvenanceView {
-                        client: "fixture".into(),
+                        client: "fixture".parse().unwrap(),
                         session: None,
-                        at: "2023-11-14T22:13:20Z".into(),
+                        at: "2023-11-14T22:13:20Z".parse().unwrap(),
                     },
                     expires_at: None,
                 },

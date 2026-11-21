@@ -28,9 +28,10 @@ use crate::{
     },
     link::{LinkDefinition, LinkName},
     protocol::{
-        ClientMessage, CommitView, ErrorView, JsonValue, LinkInstallView, LinkRemovalView,
+        ClientMessage, CommitView, ErrorCode, ErrorView, LinkInstallView, LinkRemovalView,
         RequestConversionError, RequestId, SchemaInstallView, ServerMessage, SessionMode,
-        SnapshotView, UpdateView, WireExpiry, WireOperation, expiry_update, nonnegative_duration,
+        SnapshotView, UpdateView, WireExpiry, WireOperation, WireValue, expiry_update,
+        nonnegative_duration,
     },
     runtime::{OpenedConnection, RuntimeError, RuntimeHandle, StreamLease},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueCast, ValueValidator},
@@ -135,9 +136,9 @@ async fn install_link(
 ) -> Result<Json<ApiResponse<LinkInstallView>>, ApiError> {
     let Json(request) = payload.map_err(ApiError::invalid_json)?;
     let name = LinkName::parse(&name)
-        .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidLink, error.to_string()))?;
     let definition = LinkDefinition::new(name.clone(), request.mount, request.target)
-        .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidLink, error.to_string()))?;
     let outcome = state
         .install_link(definition)
         .map_err(ApiError::from_runtime)?;
@@ -155,7 +156,7 @@ async fn remove_link(
     StatelessActor(actor): StatelessActor,
 ) -> Result<Json<ApiResponse<LinkRemovalView>>, ApiError> {
     let name = LinkName::parse(&name)
-        .map_err(|error| ApiError::bad_request("invalid_link", error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidLink, error.to_string()))?;
     let outcome = state.remove_link(&name).map_err(ApiError::from_runtime)?;
     warn!(link = %name, client = %actor.client(), removed = outcome.removed(), "link removal requested");
     Ok(Json(ApiResponse::success(LinkRemovalView::new(
@@ -259,13 +260,13 @@ async fn install_schema(
 
 fn build_schema(name: &str, rules: Vec<SchemaRuleRequest>) -> Result<Schema, ApiError> {
     let name = SchemaName::parse(name)
-        .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string()))?;
     let rules = rules
         .into_iter()
         .map(build_schema_rule)
         .collect::<Result<Vec<_>, _>>()?;
     Schema::new(name, rules)
-        .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string()))
 }
 
 fn build_schema_rule(request: SchemaRuleRequest) -> Result<SchemaRule, ApiError> {
@@ -281,21 +282,23 @@ fn build_schema_rule(request: SchemaRuleRequest) -> Result<SchemaRule, ApiError>
             ValueValidator::integer_range(minimum, maximum, null_policy)
         }
         ValidatorRequest::FloatRange { minimum, maximum } => {
-            let minimum = FiniteF64::new(minimum)
-                .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
-            let maximum = FiniteF64::new(maximum)
-                .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+            let minimum = FiniteF64::new(minimum).map_err(|error| {
+                ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string())
+            })?;
+            let maximum = FiniteF64::new(maximum).map_err(|error| {
+                ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string())
+            })?;
             ValueValidator::float_range(minimum, maximum, null_policy)
         }
         ValidatorRequest::StringEnum { values } => ValueValidator::string_enum(values, null_policy),
     }
-    .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+    .map_err(|error| ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string()))?;
     let rule = SchemaRule::new(request.selector, request.enforcement.into(), validator)
-        .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string()))?;
     let rule = match request.cast {
         Some(cast) => rule
             .with_cast(cast.into())
-            .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string())),
+            .map_err(|error| ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string())),
         None => Ok(rule),
     }?;
     let rule = match request.node_kind {
@@ -307,7 +310,7 @@ fn build_schema_rule(request: SchemaRuleRequest) -> Result<SchemaRule, ApiError>
             .with_expected_update_interval(
                 nonnegative_duration(&interval).map_err(ApiError::from_request_conversion)?,
             )
-            .map_err(|error| ApiError::bad_request("invalid_schema", error.to_string()))?,
+            .map_err(|error| ApiError::bad_request(ErrorCode::InvalidSchema, error.to_string()))?,
         None => rule,
     })
 }
@@ -361,7 +364,7 @@ impl From<NodeKindRequest> for NodeKind {
 async fn not_found() -> ApiError {
     ApiError {
         status: StatusCode::NOT_FOUND,
-        code: "not_found",
+        code: ErrorCode::NotFound,
         message: "the requested endpoint does not exist".to_owned(),
     }
 }
@@ -369,7 +372,7 @@ async fn not_found() -> ApiError {
 async fn method_not_allowed() -> ApiError {
     ApiError {
         status: StatusCode::METHOD_NOT_ALLOWED,
-        code: "method_not_allowed",
+        code: ErrorCode::MethodNotAllowed,
         message: "the endpoint does not support this HTTP method".to_owned(),
     }
 }
@@ -444,7 +447,7 @@ async fn run_websocket_session(
                 socket,
                 timeouts.send,
                 codec,
-                &error_message(None, "invalid_message", error),
+                &error_message(None, ErrorCode::InvalidMessage, error),
             )
             .await;
             return;
@@ -463,7 +466,7 @@ async fn run_websocket_session(
             codec,
             &error_message(
                 None,
-                "hello_required",
+                ErrorCode::HelloRequired,
                 "the first WebSocket message must be hello",
             ),
         )
@@ -604,7 +607,7 @@ async fn websocket_loop(
                     Message::Text(_) | Message::Binary(_) => match decode_client_message(incoming) {
                         Ok(decoded) => decoded,
                         Err((incoming_codec, error)) => {
-                            let error = error_message(None, "invalid_message", error);
+                            let error = error_message(None, ErrorCode::InvalidMessage, error);
                             if send_server_message(socket, timeouts.send, incoming_codec, &error).await.is_err() { return; }
                             continue;
                         }
@@ -613,7 +616,7 @@ async fn websocket_loop(
                 let response = match message {
                     ClientMessage::Hello { request_id, .. } => error_message(
                         Some(request_id),
-                        "already_initialized",
+                        ErrorCode::AlreadyInitialized,
                         "hello is only valid as the first message",
                     ),
                     ClientMessage::Write { request_id, operations } => {
@@ -638,7 +641,7 @@ async fn websocket_loop(
                         }
                     }
                 };
-                let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == "session_expired");
+                let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == ErrorCode::SessionExpired);
                 if send_server_message(socket, timeouts.send, incoming_codec, &response).await.is_err() { return; }
                 if expired { return; }
             }
@@ -766,13 +769,13 @@ const fn server_message_kind(message: &ServerMessage) -> &'static str {
 
 fn error_message(
     request_id: Option<RequestId>,
-    code: impl Into<String>,
+    code: ErrorCode,
     message: impl Into<String>,
 ) -> ServerMessage {
     ServerMessage::Error {
         request_id,
         error: ErrorView {
-            code: code.into(),
+            code,
             message: message.into(),
         },
     }
@@ -798,26 +801,29 @@ impl<S: Send + Sync> FromRequestParts<S> for StatelessActor {
             .get("tanuki-client")
             .map(|header| {
                 header.to_str().map_err(|_| {
-                    ApiError::bad_request("invalid_client", "tanuki-client must be valid UTF-8")
+                    ApiError::bad_request(
+                        ErrorCode::InvalidClient,
+                        "tanuki-client must be valid UTF-8",
+                    )
                 })
             })
             .transpose()?
             .map(parse_client)
             .transpose()?;
         let Query(query) = Query::<ClientQuery>::try_from_uri(&parts.uri)
-            .map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
+            .map_err(|error| ApiError::bad_request(ErrorCode::InvalidQuery, error.body_text()))?;
         let query = query.client.as_deref().map(parse_client).transpose()?;
         if let (Some(header), Some(query)) = (&header, &query)
             && header != query
         {
             return Err(ApiError::bad_request(
-                "conflicting_client",
+                ErrorCode::ConflictingClient,
                 "tanuki-client and the client query parameter disagree",
             ));
         }
         let client = header.or(query).ok_or_else(|| {
             ApiError::bad_request(
-                "missing_client",
+                ErrorCode::MissingClient,
                 "the tanuki-client header or client query parameter is required",
             )
         })?;
@@ -827,7 +833,7 @@ impl<S: Send + Sync> FromRequestParts<S> for StatelessActor {
 
 fn parse_client(value: &str) -> Result<ClientName, ApiError> {
     ClientName::parse(value)
-        .map_err(|error| ApiError::bad_request("invalid_client", error.to_string()))
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidClient, error.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -837,7 +843,7 @@ struct BatchRequest {
 
 #[derive(Deserialize)]
 struct StateRequest {
-    value: JsonValue,
+    value: WireValue,
     #[serde(default)]
     expiry: Option<WireExpiry>,
 }
@@ -866,7 +872,7 @@ async fn single_state_write(
 ) -> Result<Json<ApiResponse<CommitView>>, ApiError> {
     let Json(payload) = payload.map_err(ApiError::invalid_json)?;
     let topic = TopicPath::parse(&format!("/{topic}"))
-        .map_err(|error| ApiError::bad_request("invalid_topic", error.to_string()))?;
+        .map_err(|error| ApiError::bad_request(ErrorCode::InvalidTopic, error.to_string()))?;
     apply(
         &state,
         actor,
@@ -875,7 +881,7 @@ async fn single_state_write(
             value: payload.value.into_inner(),
             expiry: expiry_update(payload.expiry).map_err(ApiError::from_request_conversion)?,
         }])
-        .map_err(|error| ApiError::bad_request("empty_batch", error.to_string()))?,
+        .map_err(|error| ApiError::bad_request(ErrorCode::EmptyBatch, error.to_string()))?,
     )
 }
 
@@ -896,7 +902,7 @@ async fn snapshot(
     query: Result<Query<ReadQuery>, QueryRejection>,
 ) -> Result<Json<ApiResponse<SnapshotView>>, ApiError> {
     let Query(query) =
-        query.map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
+        query.map_err(|error| ApiError::bad_request(ErrorCode::InvalidQuery, error.body_text()))?;
     let snapshot = state
         .read(&Selection::new(vec![query.select]))
         .map_err(ApiError::from_runtime)?;
@@ -908,7 +914,7 @@ async fn sse(
     query: Result<Query<ReadQuery>, QueryRejection>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let Query(query) =
-        query.map_err(|error| ApiError::bad_request("invalid_query", error.body_text()))?;
+        query.map_err(|error| ApiError::bad_request(ErrorCode::InvalidQuery, error.body_text()))?;
     let lease = state.track_stream().map_err(ApiError::from_runtime)?;
     let stopped = state.shutdown_signal();
     let subscription = state
@@ -986,12 +992,12 @@ struct ApiErrorResponse {
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
-    code: &'static str,
+    code: ErrorCode,
     message: String,
 }
 
 impl ApiError {
-    fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
+    fn bad_request(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             code,
@@ -1001,15 +1007,15 @@ impl ApiError {
 
     fn from_request_conversion(error: RequestConversionError) -> Self {
         let code = match &error {
-            RequestConversionError::InvalidDuration(_) => "invalid_duration",
-            RequestConversionError::NegativeDuration(_) => "negative_duration",
-            RequestConversionError::Batch(_) => "empty_batch",
+            RequestConversionError::InvalidDuration(_) => ErrorCode::InvalidDuration,
+            RequestConversionError::NegativeDuration(_) => ErrorCode::NegativeDuration,
+            RequestConversionError::Batch(_) => ErrorCode::EmptyBatch,
         };
         Self::bad_request(code, error.to_string())
     }
 
     fn invalid_json(error: JsonRejection) -> Self {
-        Self::bad_request("invalid_json", error.body_text())
+        Self::bad_request(ErrorCode::InvalidJson, error.body_text())
     }
 
     fn from_runtime(error: RuntimeError) -> Self {
@@ -1017,12 +1023,12 @@ impl ApiError {
             RuntimeError::Core(error) => Self::from_core(error),
             RuntimeError::Stopping => Self {
                 status: StatusCode::SERVICE_UNAVAILABLE,
-                code: "server_shutdown",
+                code: ErrorCode::ServerShutdown,
                 message: "server is shutting down".to_owned(),
             },
             RuntimeError::Poisoned => Self {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: "internal_error",
+                code: ErrorCode::InternalError,
                 message: "server state lock was poisoned".to_owned(),
             },
         }
@@ -1030,35 +1036,41 @@ impl ApiError {
 
     fn from_core(error: CoreError) -> Self {
         let (status, code) = match &error {
-            CoreError::SystemTopic { .. } => (StatusCode::FORBIDDEN, "system_topic"),
-            CoreError::ValueTooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "value_too_large"),
-            CoreError::SessionExpired { .. } => (StatusCode::CONFLICT, "session_expired"),
+            CoreError::SystemTopic { .. } => (StatusCode::FORBIDDEN, ErrorCode::SystemTopic),
+            CoreError::ValueTooLarge { .. } => {
+                (StatusCode::PAYLOAD_TOO_LARGE, ErrorCode::ValueTooLarge)
+            }
+            CoreError::SessionExpired { .. } => (StatusCode::CONFLICT, ErrorCode::SessionExpired),
             CoreError::ClaimAuthorityRequired { .. } => {
-                (StatusCode::CONFLICT, "claim_authority_required")
+                (StatusCode::CONFLICT, ErrorCode::ClaimAuthorityRequired)
             }
             CoreError::SequenceExhausted
             | CoreError::SessionIdExhausted
             | CoreError::ClaimIdExhausted
-            | CoreError::SubscriptionIdExhausted => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "capacity_exhausted")
-            }
-            CoreError::UnsupportedOperation { .. } => {
-                (StatusCode::NOT_IMPLEMENTED, "unsupported_operation")
-            }
+            | CoreError::SubscriptionIdExhausted => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::CapacityExhausted,
+            ),
             CoreError::DeadlineOutOfRange { .. } => {
-                (StatusCode::BAD_REQUEST, "deadline_out_of_range")
+                (StatusCode::BAD_REQUEST, ErrorCode::DeadlineOutOfRange)
             }
-            CoreError::SessionRequired { .. } => (StatusCode::BAD_REQUEST, "session_required"),
-            CoreError::InputNotDefined { .. } => (StatusCode::NOT_FOUND, "input_not_defined"),
+            CoreError::SessionRequired { .. } => {
+                (StatusCode::BAD_REQUEST, ErrorCode::SessionRequired)
+            }
+            CoreError::InputNotDefined { .. } => {
+                (StatusCode::NOT_FOUND, ErrorCode::InputNotDefined)
+            }
             CoreError::NotAnInput { .. } | CoreError::WrongInputKind { .. } => {
-                (StatusCode::CONFLICT, "wrong_node_kind")
+                (StatusCode::CONFLICT, ErrorCode::WrongNodeKind)
             }
-            CoreError::SchemaViolation(_) => (StatusCode::UNPROCESSABLE_ENTITY, "schema_violation"),
-            CoreError::SchemaRegistry(_) => (StatusCode::CONFLICT, "schema_overlap"),
+            CoreError::SchemaViolation(_) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::SchemaViolation)
+            }
+            CoreError::SchemaRegistry(_) => (StatusCode::CONFLICT, ErrorCode::SchemaOverlap),
             CoreError::ExistingSchemaViolations { .. } => {
-                (StatusCode::CONFLICT, "existing_schema_violations")
+                (StatusCode::CONFLICT, ErrorCode::ExistingSchemaViolations)
             }
-            CoreError::Link(_) => (StatusCode::CONFLICT, "invalid_link"),
+            CoreError::Link(_) => (StatusCode::CONFLICT, ErrorCode::InvalidLink),
         };
         let message = match &error {
             CoreError::ExistingSchemaViolations { violations } => violations
@@ -1079,14 +1091,14 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         if self.status.is_server_error() {
-            warn!(code = self.code, message = %self.message, "HTTP request failed");
+            warn!(code = self.code.as_str(), message = %self.message, "HTTP request failed");
         }
         (
             self.status,
             Json(ApiErrorResponse {
                 ok: false,
                 error: ErrorView {
-                    code: self.code.to_owned(),
+                    code: self.code,
                     message: self.message,
                 },
             }),

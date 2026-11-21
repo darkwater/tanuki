@@ -109,13 +109,14 @@ concurrent registration/write race, filtered atomic batches, overlapping
 selector deduplication, explicit empty snapshots, live-only occurrences,
 metadata-only upserts, desired clearing, removals, and isolated slow-consumer
 closure. `tanuki/tests/protocol_subscription.rs` covers the provisional correlated
-snapshot/update shapes. `tanuki/tests/client_view.rs` verifies whole-batch local shape
+snapshot/update shapes. `tanuki-protocol/tests/selected_view.rs` verifies whole-batch local shape
 application, occurrence separation, removals, and stale-update rollback.
 
 Run the focused suite with:
 
 ```sh
-cargo test --test core_subscriptions --test protocol_subscription --test client_view
+cargo test -p tanuki --test core_subscriptions --test protocol_subscription
+cargo test -p tanuki-protocol --test selected_view
 ```
 
 The core queue is bounded by batch count. Total outgoing-byte accounting remains
@@ -341,7 +342,7 @@ Behavioral regressions reproduced and corrected:
   sends a valid subsequent write to confirm recovery. Shared request fixtures
   cover exact MessagePack message consumption too.
 
-Existing `client_view` and native SDK observation tests cover sequence rejection,
+Existing `selected_view` and native SDK observation tests cover sequence rejection,
 whole-batch atomicity and immutable historical snapshots after removing the
 unnecessary per-delta clone from `SelectedView::apply`.
 

@@ -1,7 +1,6 @@
 //! Tanuki's authoritative domain/core library and server adapters.
 //! Shared wire types and native clients live in separate workspace packages.
 
-pub mod client;
 pub mod core;
 pub mod domain;
 pub mod link;

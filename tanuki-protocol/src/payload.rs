@@ -1,4 +1,4 @@
-use crate::protocol::{InvalidFloat, Value};
+use crate::{FiniteF64, InvalidFloat, Value};
 use serde::{Serialize, de::DeserializeOwned};
 #[derive(Debug, thiserror::Error)]
 pub enum PayloadError {
@@ -35,8 +35,8 @@ fn narrow(value: serde_value::Value) -> Result<Value, PayloadError> {
         S::U16(v) => Value::Integer(v.into()),
         S::U32(v) => Value::Integer(v.into()),
         S::U64(v) => Value::Integer(v.try_into().map_err(|_| PayloadError::IntegerOverflow)?),
-        S::F32(v) => Value::Float(crate::protocol::FiniteF64::new(v.into())?),
-        S::F64(v) => Value::Float(crate::protocol::FiniteF64::new(v)?),
+        S::F32(v) => Value::Float(FiniteF64::new(v.into())?),
+        S::F64(v) => Value::Float(FiniteF64::new(v)?),
         S::String(v) => Value::String(v),
         S::Char(v) => Value::String(v.to_string()),
         S::Bytes(v) => Value::Bytes(v),

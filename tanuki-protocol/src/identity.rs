@@ -36,6 +36,19 @@ impl fmt::Display for ClientName {
     }
 }
 
+/// Compares with plain text, e.g. `claim.owner == "lamp controller"`.
+impl PartialEq<str> for ClientName {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for ClientName {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 impl FromStr for ClientName {
     type Err = ClientNameParseError;
 

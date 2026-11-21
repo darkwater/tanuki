@@ -233,7 +233,11 @@ async fn broad_subscription_includes_exposed_system_diagnostics() {
     })
     .await;
     let batch = receive(explicit.recv()).await.unwrap().unwrap();
-    assert!(batch.changes.iter().any(|change| matches!(change, ChangeView::Upsert { topic, .. } if topic == &diagnostic.to_string())));
+    assert!(
+        batch.changes.iter().any(
+            |change| matches!(change, ChangeView::Upsert { topic, .. } if topic == &diagnostic)
+        )
+    );
     assert!(app.model().node(&diagnostic).is_some());
     // A fresh /** baseline contains the same reserved node too.
     let mut populated = server.app("second inspector");

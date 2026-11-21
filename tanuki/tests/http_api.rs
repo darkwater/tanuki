@@ -6,7 +6,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use jiff::Timestamp as JiffTimestamp;
-use serde_json::{Value as JsonValue, json};
+use serde_json::{Value as WireValue, json};
 use tanuki::{
     core::Core,
     domain::{
@@ -27,7 +27,7 @@ fn test_app() -> (axum::Router, Arc<Mutex<Core>>, Runtime) {
     (router(runtime.handle()), core, runtime)
 }
 
-fn json_request(method: &str, uri: &str, body: JsonValue) -> Request<Body> {
+fn json_request(method: &str, uri: &str, body: WireValue) -> Request<Body> {
     Request::builder()
         .method(method)
         .uri(uri)
@@ -36,12 +36,12 @@ fn json_request(method: &str, uri: &str, body: JsonValue) -> Request<Body> {
         .unwrap()
 }
 
-async fn response_json(response: axum::response::Response) -> JsonValue {
+async fn response_json(response: axum::response::Response) -> WireValue {
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
-async fn next_sse_event(stream: &mut BodyDataStream) -> (String, String, JsonValue) {
+async fn next_sse_event(stream: &mut BodyDataStream) -> (String, String, WireValue) {
     let mut encoded = Vec::new();
     loop {
         let chunk = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
@@ -806,7 +806,7 @@ async fn battery_publish_and_read_work_over_a_real_tcp_listener() {
     .await;
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     let (_, body) = response.split_once("\r\n\r\n").unwrap();
-    let body: JsonValue = serde_json::from_str(body).unwrap();
+    let body: WireValue = serde_json::from_str(body).unwrap();
     assert_eq!(
         body["data"]["nodes"]["/battery/phone"]["current"]["value"],
         64

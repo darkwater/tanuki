@@ -25,12 +25,12 @@ fn requests_round_trip_both_codecs_without_losing_tags_or_limits() {
             operations: vec![
                 WireOperation::PublishState {
                     topic: TopicPath::parse("/lamp/hue").unwrap(),
-                    value: JsonValue::new(Value::Integer(i64::MAX)),
+                    value: WireValue::new(Value::Integer(i64::MAX)),
                     expiry: None,
                 },
                 WireOperation::PublishEvent {
                     topic: TopicPath::parse("/lamp/event").unwrap(),
-                    value: JsonValue::new(Value::Bytes(vec![0, 255])),
+                    value: WireValue::new(Value::Bytes(vec![0, 255])),
                 },
                 WireOperation::DefineInput {
                     topic: TopicPath::parse("/lamp/desired").unwrap(),
@@ -39,7 +39,7 @@ fn requests_round_trip_both_codecs_without_losing_tags_or_limits() {
                 WireOperation::ClaimInput {
                     topic: TopicPath::parse("/lamp/desired").unwrap(),
                     release: WireRelease::After {
-                        duration: "PT5S".into(),
+                        duration: "PT5S".parse().unwrap(),
                     },
                 },
             ],
@@ -106,4 +106,17 @@ fn a_hello_without_session_mode_is_managed() {
             ..
         }
     ));
+}
+
+#[test]
+fn server_messages_with_invalid_topics_fail_to_decode() {
+    for message in [
+        r#"{"type":"snapshot","request_id":"h","sequence":1,"warnings":[],"nodes":{"invalid":{"kind":"event","last_publisher":{"client":"x","session":null,"at":"2026-01-01T00:00:00Z"}}}}"#,
+        r#"{"type":"update","sequence":2,"changes":[{"type":"removed","topic":"/a/*","previous":{"kind":"event","last_publisher":{"client":"x","session":null,"at":"2026-01-01T00:00:00Z"}}}]}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ServerMessage>(message).is_err(),
+            "{message}"
+        );
+    }
 }

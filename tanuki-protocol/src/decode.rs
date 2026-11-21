@@ -59,7 +59,7 @@ struct OperationFields {
     op: String,
     topic: TopicPath,
     #[serde(default, deserialize_with = "present")]
-    value: Option<JsonValue>,
+    value: Option<WireValue>,
     expiry: Option<WireExpiry>,
     kind: Option<WireInputKind>,
     release: Option<WireRelease>,
@@ -150,7 +150,7 @@ impl<'de> Deserialize<'de> for NodeView {
 struct ChangeFields {
     #[serde(rename = "type")]
     kind: String,
-    topic: String,
+    topic: TopicPath,
     node: Option<NodeView>,
     previous: Option<NodeView>,
     event: Option<OccurrenceView>,
@@ -189,7 +189,7 @@ struct ServerFields {
     kind: String,
     request_id: Option<RequestId>,
     sequence: Option<u64>,
-    nodes: Option<BTreeMap<String, NodeView>>,
+    nodes: Option<BTreeMap<TopicPath, NodeView>>,
     warnings: Option<Vec<DiagnosticView>>,
     changes: Option<Vec<ChangeView>>,
     #[serde(default, deserialize_with = "present")]

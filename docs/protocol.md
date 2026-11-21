@@ -70,7 +70,36 @@ codec, so the bound also covers MessagePack, and a single value always fits a
 1 MiB WebSocket message. A larger value rejects the whole batch with
 `value_too_large` (HTTP 413).
 
-Successes are `{"ok":true,"data":...}`. Every adapter, extractor, routing,
+Successes are `{"ok":true,"data":...}`.
+
+### Error codes
+
+HTTP error bodies and WebSocket `error` messages share one set of codes
+(`tanuki_protocol::ErrorCode`). A code unknown to an older client decodes as
+`ErrorCode::Unknown`; the message still explains it.
+
+| Code | HTTP | Meaning |
+| --- | --- | --- |
+| `already_initialized` | — | A second WebSocket `hello` |
+| `hello_required` | — | The first WebSocket message was not `hello` |
+| `invalid_message` | — | A WebSocket message could not be decoded |
+| `invalid_json`, `invalid_query` | 400 | Malformed HTTP body or query |
+| `missing_client`, `invalid_client`, `conflicting_client` | 400 | HTTP write attribution absent, invalid, or contradictory |
+| `invalid_topic`, `invalid_duration`, `negative_duration`, `empty_batch` | 400 | Invalid request fields |
+| `invalid_schema`, `invalid_link` | 400/409 | Invalid schema or link declaration or topology |
+| `deadline_out_of_range` | 400 | Expiry or grace beyond the timestamp range |
+| `session_required` | 400 | Claiming needs a managed session (HTTP and stateless WebSocket cannot claim) |
+| `system_topic` | 403 | Writes to `/$...` are forbidden |
+| `input_not_defined` | 404 | Submission/claim/clear on an undefined input |
+| `not_found`, `method_not_allowed` | 404/405 | Unknown endpoint or method |
+| `session_expired` | 409 | The managed session was replaced or disconnected |
+| `claim_authority_required` | 409 | Another session's claim controls the definition |
+| `wrong_node_kind` | 409 | The operation does not fit the existing node kind |
+| `schema_overlap`, `existing_schema_violations` | 409 | Schema installation conflicts |
+| `value_too_large` | 413 | A value's JSON encoding exceeds 256 KiB |
+| `schema_violation` | 422 | A denying schema rejected the batch |
+| `capacity_exhausted`, `internal_error` | 500 | Server-side failure |
+| `server_shutdown` | 503 | Shutdown has closed admission | Every adapter, extractor, routing,
 and core failure uses `{"ok":false,"error":{"code":"...","message":"..."}}`
 with an appropriate HTTP status. A successful write returns its commit sequence
 and structured warning list; it does not promise command execution or durable
@@ -299,7 +328,14 @@ empty state. Ordinary read or backup I/O failures still fail startup.
 ## Native Rust SDK usage
 
 `tanuki-protocol` supplies bidirectional v1 requests/messages and lossless value
-codecs. The server supplies conversion functions `snapshot_message` and
+codecs. View DTOs carry validated types: topics are `TopicPath`, writers and
+claim owners `ClientName`, times `jiff::Timestamp`, claim grace
+`jiff::SignedDuration`, node kinds `NodeKind`, and error codes `ErrorCode`.
+Their JSON and MessagePack text is unchanged; invalid paths or names are
+rejected while decoding. `WireValue` (formerly `JsonValue`) is the
+codec-aware value wrapper, and `to_value`/`from_value` plus the
+`decode::<T>()` helpers on `WireValue`, `CurrentValueView` and
+`OccurrenceView` convert ordinary Serde types. The server supplies conversion functions `snapshot_message` and
 `update_message` for authoritative core data. Payload-bearing tagged enum
 decoding keeps the original JSON/MessagePack decoder through nested fields;
 bytes, extension values and literal reserved-key maps now round-trip through

@@ -9,7 +9,7 @@ use serde::{
 use serde_json::{Map, Value as RawJson, json};
 use thiserror::Error;
 
-use crate::{FiniteF64, Value};
+use crate::{ClientName, ErrorCode, FiniteF64, PayloadError, TopicPath, Value, from_value};
 
 const TAGS: [&str; 5] = ["$bytes", "$timestamp", "$duration", "$int", "$map"];
 
@@ -28,10 +28,17 @@ pub fn decode_messagepack<T: de::DeserializeOwned>(
     Ok(value)
 }
 
+/// A runtime value with Tanuki's codec-aware encoding: semantic JSON tags
+/// (`$bytes`, `$int`, ...) for JSON and native/extension types for MessagePack.
 #[derive(Clone, Debug, PartialEq)]
-pub struct JsonValue(Value);
+pub struct WireValue(Value);
 
-impl JsonValue {
+impl WireValue {
+    /// Decodes into an ordinary Serde type; see [`from_value`].
+    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
+        from_value(&self.0)
+    }
+
     #[must_use]
     pub fn new(value: Value) -> Self {
         Self(value)
@@ -47,7 +54,7 @@ impl JsonValue {
     }
 }
 
-impl Serialize for JsonValue {
+impl Serialize for WireValue {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
             encode(&self.0).serialize(serializer)
@@ -57,7 +64,7 @@ impl Serialize for JsonValue {
     }
 }
 
-impl<'de> Deserialize<'de> for JsonValue {
+impl<'de> Deserialize<'de> for WireValue {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         if deserializer.is_human_readable() {
             decode(RawJson::deserialize(deserializer)?)
@@ -464,7 +471,7 @@ pub fn encode(value: &Value) -> RawJson {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotView {
     pub sequence: u64,
-    pub nodes: BTreeMap<String, NodeView>,
+    pub nodes: BTreeMap<TopicPath, NodeView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -493,27 +500,77 @@ pub enum NodeView {
     },
 }
 
+/// The four node kinds: retained or instant, output or input.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeKind {
+    State,
+    Event,
+    Desired,
+    Command,
+}
+
+impl NodeView {
+    #[must_use]
+    pub const fn kind(&self) -> NodeKind {
+        match self {
+            Self::State { .. } => NodeKind::State,
+            Self::Event { .. } => NodeKind::Event,
+            Self::Desired { .. } => NodeKind::Desired,
+            Self::Command { .. } => NodeKind::Command,
+        }
+    }
+
+    /// The retained value of a state node, or a desired node's current
+    /// request. `None` for instant nodes and for a desired node without one.
+    #[must_use]
+    pub const fn current(&self) -> Option<&CurrentValueView> {
+        match self {
+            Self::State { current } => Some(current),
+            Self::Desired { current, .. } => current.as_ref(),
+            Self::Event { .. } | Self::Command { .. } => None,
+        }
+    }
+
+    /// The input claim of a desired or command node.
+    #[must_use]
+    pub const fn claim(&self) -> Option<&ClaimView> {
+        match self {
+            Self::Desired { claim, .. } | Self::Command { claim, .. } => claim.as_ref(),
+            Self::State { .. } | Self::Event { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InputDefinitionView {}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CurrentValueView {
-    pub value: JsonValue,
+    pub value: WireValue,
     pub last_write: ProvenanceView,
-    pub expires_at: Option<String>,
+    pub expires_at: Option<jiff::Timestamp>,
+}
+
+impl CurrentValueView {
+    /// Decodes the value into an ordinary Serde type; see [`from_value`].
+    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
+        from_value(self.value.as_inner())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceView {
-    pub client: String,
+    pub client: ClientName,
+    /// The managed session that wrote, absent for stateless writes.
     pub session: Option<u64>,
-    pub at: String,
+    pub at: jiff::Timestamp,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ClaimView {
     pub id: u64,
-    pub owner: String,
+    pub owner: ClientName,
     pub session: u64,
     pub release: ClaimReleaseView,
 }
@@ -522,34 +579,53 @@ pub struct ClaimView {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ClaimReleaseView {
     Immediate,
-    After { duration: String },
+    After { duration: jiff::SignedDuration },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChangeView {
     Upsert {
-        topic: String,
+        topic: TopicPath,
         node: NodeView,
     },
     Event {
-        topic: String,
+        topic: TopicPath,
         event: OccurrenceView,
     },
     Command {
-        topic: String,
+        topic: TopicPath,
         command: OccurrenceView,
     },
     Removed {
-        topic: String,
+        topic: TopicPath,
         previous: NodeView,
     },
 }
 
+impl ChangeView {
+    #[must_use]
+    pub const fn topic(&self) -> &TopicPath {
+        match self {
+            Self::Upsert { topic, .. }
+            | Self::Event { topic, .. }
+            | Self::Command { topic, .. }
+            | Self::Removed { topic, .. } => topic,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OccurrenceView {
-    pub value: JsonValue,
+    pub value: WireValue,
     pub provenance: ProvenanceView,
+}
+
+impl OccurrenceView {
+    /// Decodes the payload into an ordinary Serde type; see [`from_value`].
+    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
+        from_value(self.value.as_inner())
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -574,7 +650,7 @@ pub enum ServerMessage {
     Snapshot {
         request_id: RequestId,
         sequence: u64,
-        nodes: BTreeMap<String, NodeView>,
+        nodes: BTreeMap<TopicPath, NodeView>,
         warnings: Vec<DiagnosticView>,
     },
     Update {
@@ -593,7 +669,7 @@ pub enum ServerMessage {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ErrorView {
-    pub code: String,
+    pub code: ErrorCode,
     pub message: String,
 }
 
@@ -601,38 +677,38 @@ pub struct ErrorView {
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DiagnosticView {
     OutputOwnerChanged {
-        topic: String,
-        previous: String,
-        replacement: String,
+        topic: TopicPath,
+        previous: ClientName,
+        replacement: ClientName,
     },
     NodeKindChanged {
-        topic: String,
-        previous: String,
-        replacement: String,
+        topic: TopicPath,
+        previous: NodeKind,
+        replacement: NodeKind,
     },
     NodeAlreadyAbsent {
-        topic: String,
+        topic: TopicPath,
     },
     SessionReplaced {
-        client: String,
+        client: ClientName,
         previous: u64,
         replacement: u64,
     },
     InputClaimReplaced {
-        topic: String,
-        previous: String,
-        replacement: String,
+        topic: TopicPath,
+        previous: ClientName,
+        replacement: ClientName,
     },
     ClaimGraceOutOfRange {
-        topic: String,
+        topic: TopicPath,
     },
     SchemaWarning {
-        topic: String,
+        topic: TopicPath,
         message: String,
     },
     LinkDisabled {
         link: String,
-        topic: String,
+        topic: TopicPath,
         message: String,
     },
     LinkEnabled {

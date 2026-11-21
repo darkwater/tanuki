@@ -17,7 +17,7 @@ use crate::{
         StateNode, Timestamp, TopicPath, ValueKind, WriteContext, WriteProvenance,
     },
     link::{LinkBuildError, LinkDefinition, LinkInstallError, LinkName, LinkNameParseError},
-    protocol::JsonValue,
+    protocol::WireValue,
     schema::{
         Enforcement, NullPolicy, Schema, SchemaBuildError, SchemaName, SchemaNameParseError,
         SchemaRegistry, SchemaRegistryError, SchemaRule, SchemaRuleBuildError, ValidatorBuildError,
@@ -669,7 +669,7 @@ enum StoredNode {
     Command,
 }
 
-// Stream the fields so nested JsonValue sees the MessagePack decoder rather than
+// Stream the fields so nested WireValue sees the MessagePack decoder rather than
 // Serde's human-readable ContentDeserializer. The stored format is unchanged.
 impl<'de> Deserialize<'de> for StoredNode {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -741,7 +741,7 @@ impl StoredNode {
 
 #[derive(Serialize, Deserialize)]
 struct StoredCurrent {
-    value: JsonValue,
+    value: WireValue,
     provenance: StoredProvenance,
     expires_at: Option<String>,
 }
@@ -749,7 +749,7 @@ struct StoredCurrent {
 impl StoredCurrent {
     fn capture(value: &RetainedValue) -> Self {
         Self {
-            value: JsonValue::new(value.value().clone()),
+            value: WireValue::new(value.value().clone()),
             provenance: StoredProvenance::capture(value.last_write()),
             expires_at: value
                 .expires_at()

@@ -2,12 +2,15 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::wire::{ChangeView, NodeView, SnapshotView, UpdateView};
+use crate::{
+    TopicPath,
+    wire::{ChangeView, NodeView, SnapshotView, UpdateView},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectedView {
     sequence: u64,
-    nodes: BTreeMap<String, NodeView>,
+    nodes: BTreeMap<TopicPath, NodeView>,
 }
 
 impl SelectedView {
@@ -25,7 +28,7 @@ impl SelectedView {
     }
 
     #[must_use]
-    pub fn nodes(&self) -> &BTreeMap<String, NodeView> {
+    pub fn nodes(&self) -> &BTreeMap<TopicPath, NodeView> {
         &self.nodes
     }
 

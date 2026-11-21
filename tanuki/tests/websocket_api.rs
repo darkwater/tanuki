@@ -8,7 +8,7 @@ use tanuki::{
     core::{Core, SchemaInstallMode},
     domain::{Node, Selection, Selector, Timestamp, TopicPath, Value},
     link::{LinkDefinition, LinkName},
-    protocol::{DiagnosticView, JsonValue, NodeView, ServerMessage},
+    protocol::{DiagnosticView, NodeView, ServerMessage, WireValue},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
     server::serve_with_core_and_timeouts,
     transport::{Clock, Heartbeat, SharedCore, WebSocketTimeouts},
@@ -202,7 +202,7 @@ async fn websocket_writes_cannot_bypass_an_installed_schema() {
     assert!(matches!(
         recv_json(&mut socket).await,
         ServerMessage::Error { request_id: Some(request_id), error }
-            if request_id.as_str() == "invalid" && error.code == "schema_violation"
+            if request_id.as_str() == "invalid" && error.code == tanuki::protocol::ErrorCode::SchemaViolation
     ));
 
     socket.close(None).await.unwrap();
@@ -408,7 +408,7 @@ async fn messagepack_uses_the_same_snapshot_reply_and_update_messages() {
     }) else {
         panic!("battery update must be state");
     };
-    assert_eq!(current.value, JsonValue::new(Value::Integer(91)));
+    assert_eq!(current.value, WireValue::new(Value::Integer(91)));
 
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;
@@ -459,7 +459,7 @@ async fn trailing_messagepack_data_rejects_the_entire_write_without_mutation() {
     socket.send(Message::Binary(bytes.into())).await.unwrap();
     assert!(matches!(
         recv_messagepack(&mut socket).await,
-        ServerMessage::Error { request_id: None, error } if error.code == "invalid_message"
+        ServerMessage::Error { request_id: None, error } if error.code == tanuki::protocol::ErrorCode::InvalidMessage
     ));
     let after = server.core.lock().unwrap().read(&selection);
     assert_eq!(after.sequence(), before.sequence());
@@ -504,7 +504,7 @@ async fn websocket_core_errors_use_the_common_code_and_request_id() {
     assert!(matches!(
         recv_json(&mut socket).await,
         ServerMessage::Error { request_id: Some(request_id), error }
-            if request_id.as_str() == "forbidden-write" && error.code == "system_topic"
+            if request_id.as_str() == "forbidden-write" && error.code == tanuki::protocol::ErrorCode::SystemTopic
     ));
 
     socket.close(None).await.unwrap();
@@ -942,7 +942,7 @@ fn assert_topics(changes: &[tanuki::protocol::ChangeView], expected: &[&str]) {
             tanuki::protocol::ChangeView::Upsert { topic, .. }
             | tanuki::protocol::ChangeView::Event { topic, .. }
             | tanuki::protocol::ChangeView::Command { topic, .. }
-            | tanuki::protocol::ChangeView::Removed { topic, .. } => topic.as_str(),
+            | tanuki::protocol::ChangeView::Removed { topic, .. } => topic.to_string(),
         })
         .collect::<Vec<_>>();
     topics.sort_unstable();
@@ -1152,7 +1152,7 @@ async fn stateless_sessions_neither_replace_nor_claim_but_attribute_writes() {
     assert!(matches!(
         recv_json(&mut tab_one).await,
         ServerMessage::Error { request_id: Some(id), error }
-            if id.as_str() == "claim" && error.code == "session_required"
+            if id.as_str() == "claim" && error.code == tanuki::protocol::ErrorCode::SessionRequired
     ));
     for socket in [&mut managed, &mut tab_one, &mut tab_two] {
         socket.close(None).await.unwrap();
@@ -1192,7 +1192,7 @@ async fn select_replaces_the_selection_with_a_correlated_snapshot() {
     };
     assert_eq!(request_id.as_str(), "sel-1");
     assert_eq!(
-        nodes.keys().map(String::as_str).collect::<Vec<_>>(),
+        nodes.keys().map(ToString::to_string).collect::<Vec<_>>(),
         ["/battery/phone"]
     );
 

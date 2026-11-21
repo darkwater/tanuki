@@ -356,7 +356,7 @@ fn values_above_the_encoded_size_limit_reject_the_whole_batch() {
     assert!(matches!(
         result,
         Err(CoreError::ValueTooLarge { ref topic, bytes, limit })
-            if topic.to_string() == "/blob/too-big"
+            if *topic == "/blob/too-big"
                 && bytes == MAX_VALUE_JSON_BYTES + 1
                 && limit == MAX_VALUE_JSON_BYTES
     ));

@@ -307,8 +307,8 @@ async fn scenario(ending: Ending) {
             tv_task.abort();
             return;
         }
-        let expires = snapshot.read(&actual).unwrap().unwrap().current().unwrap().expires_at.clone().unwrap();
-        let remaining = expires.parse::<jiff::Timestamp>().unwrap().since(jiff::Timestamp::now()).unwrap().get_seconds();
+        let expires = snapshot.read(&actual).unwrap().unwrap().current().unwrap().expires_at.unwrap();
+        let remaining = expires.since(jiff::Timestamp::now()).unwrap().get_seconds();
         assert!((88..=90).contains(&remaining), "observed volume must expire after bridge failure");
         // A duplicate must not roll back state; malformed input is not acknowledged.
         assert_eq!(notify(&tv_state, "uuid:test", 0, 80).await, StatusCode::OK);

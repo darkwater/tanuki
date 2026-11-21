@@ -5,14 +5,12 @@ mod runtime;
 pub use connection::{Codec, Connection, ConnectionError};
 mod session;
 pub use session::{ClientError, RawListener, Session, SessionEnd, SessionOptions, WriteReceipt};
-pub use tanuki_protocol::{AppliedUpdate, ClientViewError, SelectedView};
-mod payload;
-pub use payload::{PayloadError, from_value, to_value};
+pub use tanuki_protocol::{AppliedUpdate, ClientViewError, NodeKind, SelectedView};
+pub use tanuki_protocol::{PayloadError, from_value, to_value};
 mod topic;
 pub use topic::{
     Batch, ClaimRelease, Command, CommandTopic, Current, DecodedNode, Desired, DesiredTopic, Event,
-    EventTopic, ExpiryUpdate, InputTopicKind, NodeKind, ReadError, State, StateTopic, Topic,
-    TopicKind,
+    EventTopic, ExpiryUpdate, InputTopicKind, ReadError, State, StateTopic, Topic, TopicKind,
 };
 mod observe;
 pub use observe::{ObservationSnapshot, Observer};

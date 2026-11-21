@@ -407,8 +407,6 @@ pub enum CoreError {
     },
     #[error("writes to reserved system topic `{topic}` are not permitted")]
     SystemTopic { topic: TopicPath },
-    #[error("operation `{operation}` is not implemented in the current core phase")]
-    UnsupportedOperation { operation: &'static str },
     #[error("deadline for `{topic}` is outside the supported timestamp range")]
     DeadlineOutOfRange {
         topic: TopicPath,

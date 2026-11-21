@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use tanuki_protocol::{
-    ChangeView, CurrentValueView, InputDefinitionView, JsonValue, NodeView, OccurrenceView,
-    ProvenanceView, SnapshotView, TopicPath, UpdateView, Value,
+    ChangeView, CurrentValueView, InputDefinitionView, NodeView, OccurrenceView, ProvenanceView,
+    SnapshotView, TopicPath, UpdateView, Value, WireValue,
 };
 use tanuki_ui::{format::*, model::*};
 
@@ -10,15 +10,15 @@ fn path(s: &str) -> TopicPath {
 }
 fn provenance(client: &str) -> ProvenanceView {
     ProvenanceView {
-        client: client.into(),
+        client: client.parse().unwrap(),
         session: Some(1),
-        at: "2026-10-31T12:00:00Z".into(),
+        at: "2026-10-31T12:00:00Z".parse().unwrap(),
     }
 }
 fn state(value: Value) -> NodeView {
     NodeView::State {
         current: CurrentValueView {
-            value: JsonValue::new(value),
+            value: WireValue::new(value),
             last_write: provenance("writer"),
             expires_at: None,
         },
@@ -27,13 +27,16 @@ fn state(value: Value) -> NodeView {
 fn model(nodes: Vec<(&str, NodeView)>) -> Model {
     Model::from_snapshot(SnapshotView {
         sequence: 10,
-        nodes: nodes.into_iter().map(|(p, n)| (p.into(), n)).collect(),
+        nodes: nodes
+            .into_iter()
+            .map(|(p, n)| (p.parse().unwrap(), n))
+            .collect(),
     })
     .unwrap()
 }
 fn upsert(p: &str, node: NodeView) -> ChangeView {
     ChangeView::Upsert {
-        topic: p.into(),
+        topic: p.parse().unwrap(),
         node,
     }
 }
@@ -128,9 +131,9 @@ fn whole_batches_remove_stale_details_and_keep_occurrences_separate() {
             upsert("/a", state(Value::Integer(2))),
             upsert("/b", state(Value::Integer(3))),
             ChangeView::Event {
-                topic: "/pulse".into(),
+                topic: "/pulse".parse().unwrap(),
                 event: OccurrenceView {
-                    value: JsonValue::new(Value::Integer(99)),
+                    value: WireValue::new(Value::Integer(99)),
                     provenance: provenance("sender"),
                 },
             },
@@ -144,7 +147,7 @@ fn whole_batches_remove_stale_details_and_keep_occurrences_separate() {
     m.apply(UpdateView {
         sequence: 13,
         changes: vec![ChangeView::Removed {
-            topic: "/b".into(),
+            topic: "/b".parse().unwrap(),
             previous: a,
         }],
     })
@@ -154,7 +157,7 @@ fn whole_batches_remove_stale_details_and_keep_occurrences_separate() {
     m.apply(UpdateView {
         sequence: 14,
         changes: vec![ChangeView::Removed {
-            topic: "/a".into(),
+            topic: "/a".parse().unwrap(),
             previous: state(Value::Null),
         }],
     })
@@ -190,9 +193,9 @@ fn metadata_updates_gaps_errors_and_staleness_do_not_corrupt_state() {
     let mut m = model(vec![("/a", state(Value::Null))]);
     let changed = NodeView::State {
         current: CurrentValueView {
-            value: JsonValue::new(Value::Null),
-            last_write: provenance("new writer\x1b[2J"),
-            expires_at: Some("2026-11-01T00:00:00Z".into()),
+            value: WireValue::new(Value::Null),
+            last_write: provenance("new writer\u{202e}"),
+            expires_at: Some("2026-11-01T00:00:00Z".parse().unwrap()),
         },
     };
     m.apply(UpdateView {
@@ -200,7 +203,7 @@ fn metadata_updates_gaps_errors_and_staleness_do_not_corrupt_state() {
         changes: vec![upsert("/a", changed)],
     })
     .unwrap();
-    assert!(detail(&m).contains("new writer\\u{1b}[2J"));
+    assert!(detail(&m).contains("new writer\\u{202e}"));
     assert!(detail(&m).contains("2026-11-01"));
     assert_eq!(m.sequence(), 100);
     let before = detail(&m);
@@ -212,16 +215,8 @@ fn metadata_updates_gaps_errors_and_staleness_do_not_corrupt_state() {
         .is_err()
     );
     assert_eq!(detail(&m), before);
-    assert!(
-        m.apply(UpdateView {
-            sequence: 101,
-            changes: vec![
-                upsert("/ok", state(Value::Null)),
-                upsert("bad", state(Value::Null))
-            ]
-        })
-        .is_err()
-    );
+    // An update naming an invalid topic fails while decoding, before it can
+    // reach the model (protocol tests), so only ordering is checked here.
     assert_eq!(paths(&m), ["/a"]);
     assert_eq!(m.sequence(), 100);
     m.set_status(ConnectionStatus::Disconnected);
@@ -235,12 +230,12 @@ fn values_are_readable_safely_shortened_and_fully_available_in_details() {
         value_text(&Value::Bytes(vec![0, 255, 27])),
         "bytes[3]: 00 ff 1b"
     );
-    let timestamp = serde_json::from_value::<JsonValue>(
+    let timestamp = serde_json::from_value::<WireValue>(
         serde_json::json!({"$timestamp":"2026-10-31T12:00:00Z"}),
     )
     .unwrap()
     .into_inner();
-    let duration = serde_json::from_value::<JsonValue>(serde_json::json!({"$duration":"PT1.5S"}))
+    let duration = serde_json::from_value::<WireValue>(serde_json::json!({"$duration":"PT1.5S"}))
         .unwrap()
         .into_inner();
     assert!(value_text(&timestamp).contains("2026-10-31T12:00:00Z"));
@@ -302,7 +297,7 @@ fn selection_and_expansion_survive_insertions_and_real_node_removal() {
     m.apply(UpdateView {
         sequence: 12,
         changes: vec![ChangeView::Removed {
-            topic: "/lamp".into(),
+            topic: "/lamp".parse().unwrap(),
             previous: parent,
         }],
     })
@@ -328,17 +323,17 @@ fn controls_in_paths_and_claims_are_displayed_without_mutating_dtos() {
     let p = path("/$connections/observer\u{202e}");
     let claim = ClaimView {
         id: 5,
-        owner: "owner\x1b[2J".into(),
+        owner: "owner\u{202e}".parse().unwrap(),
         session: 7,
         release: ClaimReleaseView::After {
-            duration: "PT5S".into(),
+            duration: "PT5S".parse().unwrap(),
         },
     };
     let node = NodeView::Desired {
         definition: InputDefinitionView {},
         claim: Some(claim),
         current: Some(CurrentValueView {
-            value: JsonValue::new(Value::Null),
+            value: WireValue::new(Value::Null),
             last_write: provenance("writer"),
             expires_at: None,
         }),
@@ -348,7 +343,7 @@ fn controls_in_paths_and_claims_are_displayed_without_mutating_dtos() {
     assert!(lines.iter().any(|s| s == "System topic"));
     let text = lines.join("\n");
     assert!(text.contains("observer\\u{202e}"));
-    assert!(text.contains("owner\\u{1b}[2J"));
+    assert!(text.contains("owner\\u{202e}"));
     assert!(text.contains("after PT5S"));
     assert_eq!(value_type(&node), "null");
     assert_eq!(node, before);
@@ -367,13 +362,8 @@ fn navigation_clamps_and_invalid_snapshots_fail_at_the_boundary() {
     let mut empty = model(vec![]);
     empty.move_selection(1);
     assert!(empty.selected_path().is_none());
-    assert!(
-        Model::from_snapshot(SnapshotView {
-            sequence: 1,
-            nodes: BTreeMap::from([("/".into(), state(Value::Null))])
-        })
-        .is_err()
-    );
+    // The root "/" is not a valid topic, so such a snapshot cannot be decoded
+    // or constructed; see the protocol decode tests.
 }
 
 #[test]
@@ -388,7 +378,7 @@ fn removal_selects_the_nearest_surviving_old_row() {
         sequence: 11,
         changes: ["/a", "/b", "/d", "/e"]
             .map(|p| ChangeView::Removed {
-                topic: p.into(),
+                topic: p.parse().unwrap(),
                 previous: state(Value::Null),
             })
             .to_vec(),
@@ -408,7 +398,7 @@ fn replacement_baselines_can_restart_sequences_and_preserve_surviving_navigation
     m.set_filter("lamp".into());
     m.replace_snapshot(SnapshotView {
         sequence: 0,
-        nodes: [("/lamp/hue".into(), state(Value::Integer(2)))].into(),
+        nodes: [("/lamp/hue".parse().unwrap(), state(Value::Integer(2)))].into(),
     })
     .unwrap();
     assert_eq!(m.sequence(), 0);
@@ -416,13 +406,8 @@ fn replacement_baselines_can_restart_sequences_and_preserve_surviving_navigation
     assert_eq!(m.filter(), "lamp");
     assert!(m.node(&path("/old")).is_none());
     assert!(detail(&m).contains("Value: 2"));
-    assert!(
-        m.replace_snapshot(SnapshotView {
-            sequence: 9,
-            nodes: [("invalid".into(), state(Value::Null))].into()
-        })
-        .is_err()
-    );
+    // Invalid topic text cannot reach the model: SnapshotView keys are
+    // validated TopicPaths, rejected while decoding (see the protocol tests).
     assert_eq!(m.sequence(), 0);
     m.set_filter(String::new());
     assert!(

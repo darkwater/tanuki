@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tanuki_protocol::{
-    ChangeView, ClientViewError, NodeView, PathParseError, SelectedView, SnapshotView, TopicPath,
-    UpdateView,
+    ClientViewError, NodeView, PathParseError, SelectedView, SnapshotView, TopicPath, UpdateView,
 };
 use thiserror::Error;
 
@@ -60,9 +59,6 @@ pub struct Model {
 
 impl Model {
     pub fn from_snapshot(snapshot: SnapshotView) -> Result<Self, ModelError> {
-        for path in snapshot.nodes.keys() {
-            TopicPath::parse(path)?;
-        }
         let mut model = Self {
             view: SelectedView::from_snapshot(snapshot),
             selected: None,
@@ -94,7 +90,7 @@ impl Model {
     }
 
     pub fn node(&self, path: &TopicPath) -> Option<&NodeView> {
-        self.view.nodes().get(&path.to_string())
+        self.view.nodes().get(path)
     }
 
     pub fn selected_node(&self) -> Option<&NodeView> {
@@ -140,14 +136,7 @@ impl Model {
     }
 
     pub fn apply(&mut self, update: UpdateView) -> Result<(), ModelError> {
-        // Validate external path DTOs before any mutation, including occurrence paths.
-        for change in &update.changes {
-            let (ChangeView::Upsert { topic, .. }
-            | ChangeView::Removed { topic, .. }
-            | ChangeView::Event { topic, .. }
-            | ChangeView::Command { topic, .. }) = change;
-            TopicPath::parse(topic)?;
-        }
+        // Topic paths were validated while decoding the wire DTOs.
         // SelectedView applies the entire batch before rows/details can be read.
         // Occurrences deliberately do not become retained values or history.
         self.view.apply(update)?;
@@ -158,9 +147,6 @@ impl Model {
     /// Replace retained data atomically on reconnect, preserving navigation where
     /// its full paths survive. Invalid snapshots leave the old display intact.
     pub fn replace_snapshot(&mut self, snapshot: SnapshotView) -> Result<(), ModelError> {
-        for path in snapshot.nodes.keys() {
-            TopicPath::parse(path)?;
-        }
         self.view = SelectedView::from_snapshot(snapshot);
         self.rebuild();
         Ok(())
@@ -190,16 +176,11 @@ impl Model {
         let mut tree = BTreeMap::<TopicPath, bool>::new();
         let mut included = BTreeSet::new();
         for name in self.view.nodes().keys() {
-            let matches = name.contains(&self.filter);
-            let mut prefix = String::new();
-            let segments: Vec<_> = name[1..].split('/').collect();
-            for (index, segment) in segments.iter().enumerate() {
-                prefix.push('/');
-                prefix.push_str(segment);
-                // Input paths were validated at the owning boundary. Every nonempty
-                // segment prefix of a valid TopicPath is itself a valid TopicPath.
-                let path = TopicPath::parse(&prefix).expect("validated topic prefix");
-                let children = index + 1 < segments.len();
+            let matches = name.to_string().contains(&self.filter);
+            let prefixes = name.prefixes();
+            let depth = prefixes.len();
+            for (index, path) in prefixes.enumerate() {
+                let children = index + 1 < depth;
                 tree.entry(path.clone())
                     .and_modify(|has_children| *has_children |= children)
                     .or_insert(children);
