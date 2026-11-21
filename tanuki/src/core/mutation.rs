@@ -156,6 +156,47 @@ pub(super) fn operation_value_kind(operation: &WriteOperation) -> Option<crate::
     }
 }
 
+/// Rejects a value whose JSON wire encoding exceeds [`MAX_VALUE_JSON_BYTES`].
+/// Runs on the canonical operation, after any schema or alias cast.
+pub(super) fn validate_value_size(operation: &WriteOperation) -> Result<(), CoreError> {
+    let value = match operation {
+        WriteOperation::PublishState { value, .. }
+        | WriteOperation::PublishEvent { value, .. }
+        | WriteOperation::SubmitDesired { value, .. }
+        | WriteOperation::SubmitCommand { value, .. } => value,
+        WriteOperation::DefineInput { .. }
+        | WriteOperation::ClaimInput { .. }
+        | WriteOperation::ClearDesired { .. }
+        | WriteOperation::RemoveNode { .. } => return Ok(()),
+    };
+    let bytes = encoded_json_bytes(value);
+    if bytes > MAX_VALUE_JSON_BYTES {
+        return Err(CoreError::ValueTooLarge {
+            topic: operation.topic().clone(),
+            bytes,
+            limit: MAX_VALUE_JSON_BYTES,
+        });
+    }
+    Ok(())
+}
+
+fn encoded_json_bytes(value: &crate::domain::Value) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, &tanuki_protocol::encode(value))
+        .expect("encoded runtime values always serialize into a counting writer");
+    counter.0
+}
+
 pub(super) fn validate_topics(batch: &WriteBatch) -> Result<(), CoreError> {
     for operation in batch.operations() {
         let topic = operation.topic();
@@ -251,7 +292,8 @@ pub(super) fn apply_operation(
                 actor.client(),
                 warnings,
             );
-            let expires_at = resolve_expiry(candidate.get(topic), topic, *expiry, now)?;
+            let expires_at =
+                resolve_expiry(candidate.get(topic), NodeKind::State, topic, *expiry, now)?;
             let retained = RetainedValue::new(
                 value.clone(),
                 WriteProvenance::from_context(actor, now),
@@ -405,7 +447,8 @@ pub(super) fn apply_operation(
                     actual: previous.kind(),
                 });
             };
-            let expires_at = resolve_expiry(candidate.get(topic), topic, *expiry, now)?;
+            let expires_at =
+                resolve_expiry(candidate.get(topic), NodeKind::Desired, topic, *expiry, now)?;
             let current = RetainedValue::new(
                 value.clone(),
                 WriteProvenance::from_context(actor, now),
@@ -536,12 +579,16 @@ pub(super) fn input_claim(node: Option<&Node>) -> Option<&InputClaim> {
     }
 }
 
+/// `Preserve` keeps only a deadline of the same node kind: a kind change
+/// discards the previous retained payload, and its deadline belongs to it.
 pub(super) fn resolve_expiry(
     previous: Option<&Node>,
+    replacement: NodeKind,
     topic: &TopicPath,
     update: ExpiryUpdate,
     now: Timestamp,
 ) -> Result<Option<Deadline>, CoreError> {
+    let previous = previous.filter(|previous| previous.kind() == replacement);
     match update {
         ExpiryUpdate::Preserve => Ok(match previous {
             Some(Node::State(state)) => state.current().expires_at(),

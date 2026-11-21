@@ -322,3 +322,45 @@ fn snapshot_selection_filters_topics_and_removal_carries_previous_state() {
     ));
     assert!(core.read(&battery).nodes().is_empty());
 }
+
+#[test]
+fn values_above_the_encoded_size_limit_reject_the_whole_batch() {
+    use tanuki::core::MAX_VALUE_JSON_BYTES;
+    // A JSON string encodes as its characters plus two quotes.
+    let fitting = Value::String("x".repeat(MAX_VALUE_JSON_BYTES - 2));
+    let oversized = Value::String("x".repeat(MAX_VALUE_JSON_BYTES - 1));
+    let mut core = Core::new();
+
+    core.apply(
+        &actor("uploader"),
+        batch(vec![WriteOperation::PublishState {
+            topic: topic("/blob/fits"),
+            value: fitting,
+            expiry: ExpiryUpdate::Preserve,
+        }]),
+        at(10),
+    )
+    .unwrap();
+    let result = core.apply(
+        &actor("uploader"),
+        batch(vec![
+            state("/blob/sibling", 1),
+            WriteOperation::PublishEvent {
+                topic: topic("/blob/too-big"),
+                value: oversized,
+            },
+        ]),
+        at(20),
+    );
+
+    assert!(matches!(
+        result,
+        Err(CoreError::ValueTooLarge { ref topic, bytes, limit })
+            if topic.to_string() == "/blob/too-big"
+                && bytes == MAX_VALUE_JSON_BYTES + 1
+                && limit == MAX_VALUE_JSON_BYTES
+    ));
+    let snapshot = core.read(&all());
+    assert!(snapshot.get(&topic("/blob/sibling")).is_none());
+    assert!(snapshot.get(&topic("/blob/fits")).is_some());
+}

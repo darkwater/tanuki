@@ -207,3 +207,46 @@ fn reclaim_before_old_grace_deadline_preserves_new_submission_and_claim() {
     assert!(desired.claim().is_some());
     assert_eq!(desired.current().unwrap().value(), &Value::Integer(80));
 }
+
+#[test]
+fn preserved_expiry_does_not_carry_a_deadline_across_a_kind_change() {
+    let mut core = Core::new();
+    core.apply(
+        &actor("remote"),
+        batch(vec![
+            WriteOperation::DefineInput {
+                topic: topic("/lamp/level"),
+                kind: InputKind::Desired,
+                definition: InputDefinition::new(),
+            },
+            WriteOperation::SubmitDesired {
+                topic: topic("/lamp/level"),
+                value: Value::Integer(70),
+                expiry: ExpiryUpdate::Set(seconds(10)),
+            },
+        ]),
+        at(0),
+    )
+    .unwrap();
+
+    // Replacing the desired node with state discards the desired payload, its
+    // deadline included; "preserve" has no same-kind deadline to keep.
+    core.apply(
+        &actor("lamp"),
+        batch(vec![WriteOperation::PublishState {
+            topic: topic("/lamp/level"),
+            value: Value::Integer(70),
+            expiry: ExpiryUpdate::Preserve,
+        }]),
+        at(5),
+    )
+    .unwrap();
+
+    let snapshot = core.read(&Selection::new(vec![
+        Selector::parse("/lamp/level").unwrap(),
+    ]));
+    let Some(Node::State(state)) = snapshot.get(&topic("/lamp/level")) else {
+        panic!("publication must replace the desired node with state");
+    };
+    assert_eq!(state.current().expires_at(), None);
+}

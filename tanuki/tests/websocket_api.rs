@@ -10,8 +10,8 @@ use tanuki::{
     link::{LinkDefinition, LinkName},
     protocol::{DiagnosticView, JsonValue, NodeView, ServerMessage},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
-    server::serve_with_core,
-    transport::{Clock, SharedCore},
+    server::serve_with_core_and_timeouts,
+    transport::{Clock, Heartbeat, SharedCore, WebSocketTimeouts},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -41,14 +41,32 @@ impl TestServer {
         Self::start_with_clock(clock).await
     }
 
+    /// No liveness bounds: paused-clock tests auto-advance virtual time to the
+    /// next timer during real socket I/O, which would fire any liveness timer.
     async fn start_with_clock(clock: Clock) -> Self {
+        Self::start_with(clock, WebSocketTimeouts::DISABLED).await
+    }
+
+    async fn start_with_timeouts(timeouts: WebSocketTimeouts) -> Self {
+        let clock: Clock =
+            Arc::new(|| Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()));
+        Self::start_with(clock, timeouts).await
+    }
+
+    async fn start_with(clock: Clock, timeouts: WebSocketTimeouts) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let core = Arc::new(Mutex::new(Core::new()));
         let (shutdown, stopped) = oneshot::channel();
-        let task = tokio::spawn(serve_with_core(listener, core.clone(), clock, async move {
-            let _ = stopped.await;
-        }));
+        let task = tokio::spawn(serve_with_core_and_timeouts(
+            listener,
+            core.clone(),
+            clock,
+            timeouts,
+            async move {
+                let _ = stopped.await;
+            },
+        ));
         Self {
             address,
             core,
@@ -98,12 +116,25 @@ async fn send_json(socket: &mut TestSocket, value: RawJson) {
         .unwrap();
 }
 
+/// Next data message. Server pings are liveness plumbing and are skipped;
+/// reading them lets tungstenite queue the pong reply.
+async fn next_data(socket: &mut TestSocket) -> Message {
+    loop {
+        let message = socket
+            .next()
+            .await
+            .expect("WebSocket closed")
+            .expect("WebSocket read failed");
+        if !matches!(message, Message::Ping(_) | Message::Pong(_)) {
+            return message;
+        }
+    }
+}
+
 async fn recv_json(socket: &mut TestSocket) -> ServerMessage {
-    let message = timeout(Duration::from_secs(2), socket.next())
+    let message = timeout(Duration::from_secs(2), next_data(socket))
         .await
-        .expect("server response timed out")
-        .expect("WebSocket closed")
-        .expect("WebSocket read failed");
+        .expect("server response timed out");
     match message {
         Message::Text(text) => serde_json::from_str(&text).unwrap(),
         other => panic!("expected text message, received {other:?}"),
@@ -885,11 +916,7 @@ async fn assert_update_topics(socket: &mut TestSocket, expected: &[&str]) {
 }
 
 async fn assert_update_topics_without_timeout(socket: &mut TestSocket, expected: &[&str]) {
-    let message = socket
-        .next()
-        .await
-        .expect("WebSocket closed")
-        .expect("WebSocket read failed");
+    let message = next_data(socket).await;
     let Message::Text(text) = message else {
         panic!("expected text update, received {message:?}");
     };
@@ -911,4 +938,136 @@ fn assert_topics(changes: &[tanuki::protocol::ChangeView], expected: &[&str]) {
         .collect::<Vec<_>>();
     topics.sort_unstable();
     assert_eq!(topics, expected);
+}
+
+fn quick_timeouts() -> WebSocketTimeouts {
+    WebSocketTimeouts {
+        hello: Some(Duration::from_millis(200)),
+        heartbeat: Some(Heartbeat {
+            interval: Duration::from_millis(50),
+            silence: Duration::from_millis(300),
+        }),
+        send: Some(Duration::from_secs(1)),
+    }
+}
+
+async fn expect_close(socket: &mut TestSocket, expected: CloseCode) {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Close(Some(frame)))) => {
+                    assert_eq!(frame.code, expected, "close reason: {}", frame.reason);
+                    return;
+                }
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                other => panic!("expected close {expected:?}, received {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("server did not close the WebSocket");
+}
+
+#[tokio::test]
+async fn a_peer_that_never_sends_hello_is_closed() {
+    let server = TestServer::start_with_timeouts(quick_timeouts()).await;
+    let mut socket = server.connect().await;
+    expect_close(&mut socket, CloseCode::Policy).await;
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_silent_peer_loses_its_session_and_input_claim() {
+    let server = TestServer::start_with_timeouts(quick_timeouts()).await;
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "lamp controller", &["/lamp/desired"]).await;
+    let _ = recv_json(&mut socket).await;
+    send_json(
+        &mut socket,
+        json!({
+            "type": "write",
+            "request_id": "claim",
+            "operations": [
+                {"op": "define_input", "topic": "/lamp/desired", "kind": "desired"},
+                {"op": "claim_input", "topic": "/lamp/desired", "release": {"mode": "immediate"}}
+            ]
+        }),
+    )
+    .await;
+    let _ = recv_json(&mut socket).await;
+    let _ = recv_json(&mut socket).await;
+
+    // Stop polling: tungstenite answers pings only while the stream is read,
+    // which models a peer that vanished without closing TCP.
+    wait_for_session_count(&server.core, 0).await;
+    let snapshot = server.core.lock().unwrap().read(&Selection::new(vec![
+        Selector::parse("/lamp/desired").unwrap(),
+    ]));
+    let Some(Node::Desired(node)) = snapshot
+        .nodes()
+        .get(&TopicPath::parse("/lamp/desired").unwrap())
+    else {
+        panic!("lamp input must remain a desired node");
+    };
+    assert!(node.claim().is_none());
+    drop(socket);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_responsive_idle_peer_stays_connected_past_the_silence_window() {
+    let server = TestServer::start_with_timeouts(quick_timeouts()).await;
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "quiet dashboard", &[]).await;
+    let _ = recv_json(&mut socket).await;
+
+    // Reading lets the client library answer each server ping with a pong.
+    let mut pings = 0;
+    let idle = timeout(Duration::from_millis(900), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Ping(_))) => pings += 1,
+                other => panic!("idle session must only see pings, received {other:?}"),
+            }
+        }
+    })
+    .await;
+
+    assert!(idle.is_err(), "the idle session must stay open");
+    assert!(pings >= 3, "expected periodic server pings, saw {pings}");
+    assert_eq!(server.core.lock().unwrap().managed_session_count(), 1);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_snapshot_too_big_for_one_message_closes_with_message_too_big() {
+    use tanuki::{
+        core::MAX_VALUE_JSON_BYTES,
+        domain::{ClientName, ExpiryUpdate, WriteBatch, WriteContext, WriteOperation},
+    };
+    let server = TestServer::start().await;
+    // Each value is individually acceptable; together they exceed 1 MiB.
+    for index in 0..5 {
+        server
+            .core
+            .lock()
+            .unwrap()
+            .apply(
+                &WriteContext::stateless(ClientName::parse("uploader").unwrap()),
+                WriteBatch::new(vec![WriteOperation::PublishState {
+                    topic: TopicPath::parse(&format!("/blob/{index}")).unwrap(),
+                    value: Value::String("x".repeat(MAX_VALUE_JSON_BYTES - 2)),
+                    expiry: ExpiryUpdate::Preserve,
+                }])
+                .unwrap(),
+                Timestamp::new(JiffTimestamp::from_second(1_700_000_000).unwrap()),
+            )
+            .unwrap();
+    }
+
+    let mut socket = server.connect().await;
+    send_hello(&mut socket, "blob reader", &["/blob/*"]).await;
+    expect_close(&mut socket, CloseCode::Size).await;
+    wait_for_session_count(&server.core, 0).await;
+    server.stop().await;
 }

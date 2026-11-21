@@ -16,7 +16,7 @@ use crate::{
     domain::Timestamp,
     persistence::{PersistenceError, SnapshotStore},
     runtime::{Clock, Runtime, RuntimeHandle, SharedCore},
-    transport::router,
+    transport::{WebSocketTimeouts, router_with_timeouts},
 };
 
 /// Serves the production HTTP router on an already-bound listener.
@@ -48,8 +48,29 @@ pub async fn serve_with_core<S>(
 where
     S: Future<Output = ()> + Send + 'static,
 {
+    serve_with_core_and_timeouts(
+        listener,
+        core,
+        clock,
+        WebSocketTimeouts::default(),
+        shutdown,
+    )
+    .await
+}
+
+/// As [`serve_with_core`], with WebSocket liveness bounds short enough for tests.
+pub async fn serve_with_core_and_timeouts<S>(
+    listener: TcpListener,
+    core: SharedCore,
+    clock: Clock,
+    timeouts: WebSocketTimeouts,
+    shutdown: S,
+) -> io::Result<()>
+where
+    S: Future<Output = ()> + Send + 'static,
+{
     let runtime = Runtime::start(core, clock);
-    let serve = serve_runtime(listener, runtime.handle(), shutdown).await;
+    let serve = serve_runtime(listener, runtime.handle(), timeouts, shutdown).await;
     runtime.shutdown().await.map_err(io::Error::other)?;
     serve
 }
@@ -82,10 +103,15 @@ where
         interval,
         stopped,
     ));
-    let serve = serve_runtime(listener, runtime.handle(), async move {
-        shutdown.await;
-        stop.send_replace(true);
-    })
+    let serve = serve_runtime(
+        listener,
+        runtime.handle(),
+        WebSocketTimeouts::default(),
+        async move {
+            shutdown.await;
+            stop.send_replace(true);
+        },
+    )
     .await;
     runtime
         .shutdown()
@@ -100,6 +126,7 @@ where
 async fn serve_runtime<S>(
     listener: TcpListener,
     runtime: RuntimeHandle,
+    timeouts: WebSocketTimeouts,
     shutdown: S,
 ) -> io::Result<()>
 where
@@ -110,7 +137,7 @@ where
     let handle = runtime.clone();
     let serve = axum::serve(
         listener::ShutdownListener::new(listener, forced),
-        router(runtime),
+        router_with_timeouts(runtime, timeouts),
     )
     .with_graceful_shutdown(async move {
         shutdown.await;

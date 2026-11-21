@@ -59,8 +59,15 @@ Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
 `{"mode":"preserve"}`, `{"mode":"clear"}`, or
 `{"mode":"set","duration":"PT1H"}`. Omission provisionally means
 `preserve`: keep the existing absolute deadline, or use no deadline for a new
-value. Claim releases similarly use `immediate` or `after` with a nonnegative
+value. Only a deadline of the same node kind is kept: publishing state over a
+desired node discards the desired payload and its deadline together. Claim releases similarly use `immediate` or `after` with a nonnegative
 fixed ISO-8601 duration.
+
+Each value's JSON encoding, measured after any schema or alias cast, is
+limited to 256 KiB (`tanuki::core::MAX_VALUE_JSON_BYTES`). JSON is the larger
+codec, so the bound also covers MessagePack, and a single value always fits a
+1 MiB WebSocket message. A larger value rejects the whole batch with
+`value_too_large` (HTTP 413).
 
 Successes are `{"ok":true,"data":...}`. Every adapter, extractor, routing,
 and core failure uses `{"ok":false,"error":{"code":"...","message":"..."}}`
@@ -221,9 +228,29 @@ same-name stateless HTTP traffic does not replace it. Normal disconnect runs
 claim cleanup. A slow core subscription closes with code 1013 and reason
 `slow_consumer`; reconnecting starts from a fresh snapshot.
 
+Liveness uses ordinary WebSocket mechanisms (provisional defaults):
+
+| Condition | Default | Close |
+| --- | --- | --- |
+| No hello after the upgrade | 10 s | 1008 `hello_timeout` |
+| Server ping interval once open | 20 s | — |
+| Peer sends nothing at all (data, ping or pong) | 60 s | 1011 `peer_timeout` |
+| One outgoing write does not complete | 10 s | connection dropped |
+| An encoded outgoing message exceeds 1 MiB | — | 1009 `message_too_big` |
+
+Peers answer pings automatically while their WebSocket library reads the
+stream; the SDK session driver always does. A raw `Connection` user that stops
+calling `recv` stops answering and is disconnected after the silence window.
+The server answers peer pings itself and never sends a duplicate pong. A
+silence or write timeout runs ordinary disconnect cleanup, so a controller
+that vanishes without closing TCP releases its claims (or starts their grace).
+
 Inbound frames and individually encoded outbound messages are limited to 1
-MiB. Each subscription currently buffers at most 64 complete commit batches;
-the open byte-budget decision is tracked in `open-questions.md`.
+MiB. The per-value limit keeps a single value deliverable, but a snapshot or
+update combining several large values can still exceed 1 MiB; that connection
+then closes with 1009 instead of vanishing silently (see `open-questions.md`).
+Each subscription currently buffers at most 64 complete commit batches; the
+open byte-budget decision is tracked in `open-questions.md`.
 
 MessagePack uses native primitives and binary values. Timestamps use the
 standard MessagePack timestamp extension type `-1` and its 32-, 64-, or 96-bit

@@ -219,6 +219,13 @@ for unsolicited snapshots and updates. Both codecs deserialize to the same
 transport-independent `Value` enum.
 The connection has a 1 MiB per-message limit and its core subscription has a
 64-batch nonblocking queue. A total queued-byte budget remains open.
+`WebSocketTimeouts` bounds the hello wait, each outgoing write and peer
+silence (with periodic server pings); `router_with_timeouts` and
+`serve_with_core_and_timeouts` inject shorter or disabled bounds for tests.
+Every bound is optional because paused-clock tests auto-advance virtual time
+to the next timer during real socket I/O. The core rejects any single value
+above 256 KiB of JSON (`MAX_VALUE_JSON_BYTES`) on the mutation path, so the
+transport limit only trips on aggregates of several large values.
 
 ## Deadline execution implemented in task 07
 
@@ -231,7 +238,10 @@ one commit and are published through ordinary subscriptions.
 The Tokio deadline scheduler owns no domain state. It scans the core for the
 earliest retained-value deadline and holds explicit pending claim-release work
 returned by session disconnect/replacement. Every accepted retained write
-wakes it, so a moved-earlier deadline replaces the current wait. On wake it
+wakes it, so a moved-earlier deadline replaces the current wait. Queued wake
+requests are drained before each locked scan, so a burst of writes costs one
+scan rather than one per write. A failed deadline pass waits at least one
+second before retrying instead of spinning on the still-due deadline. On wake it
 passes due claim IDs and current wall time into the core. Current deadlines and
 claim IDs are rechecked there, making refreshed values and reclaimed inputs
 immune to stale work.
@@ -239,7 +249,8 @@ immune to stale work.
 The runtime starts one scheduler alongside its shared core. Its clock is the
 same injected wall-clock seam used for writes; Tokio's monotonic timer is only
 used for waiting. Omitted wire expiry provisionally maps to `Preserve`: it
-keeps an existing absolute deadline and yields no deadline on a new value.
+keeps an existing absolute deadline of the same node kind and yields no
+deadline on a new value or a kind change.
 
 ## Best-effort persistence implemented in task 08
 

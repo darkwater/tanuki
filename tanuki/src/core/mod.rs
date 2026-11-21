@@ -180,6 +180,7 @@ impl Core {
                 prepare_alias_operation(&self.links, &self.schemas, operation, &mut warnings)?;
             let alias_kind = operation_value_kind(&operation);
             let operation = validate_operation(&self.schemas, &operation, &mut warnings)?;
+            validate_value_size(&operation)?;
             let canonical_kind = operation_value_kind(&operation);
             if let Some(alias_topic) = alias_topic
                 && original_kind != alias_kind

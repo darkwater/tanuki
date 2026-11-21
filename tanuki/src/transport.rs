@@ -1,7 +1,7 @@
 use std::{convert::Infallible, time::Duration};
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{
         FromRequestParts, Path, Query, State, WebSocketUpgrade,
         rejection::{JsonRejection, QueryRejection},
@@ -17,6 +17,7 @@ use axum::{
 use futures_util::{Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
 
+use thiserror::Error;
 use tracing::warn;
 
 use crate::{
@@ -41,7 +42,71 @@ type HttpState = RuntimeHandle;
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const SUBSCRIPTION_BATCH_CAPACITY: usize = 64;
 
+/// WebSocket liveness bounds. `None` disables a bound. The defaults are
+/// provisional; see `docs/protocol.md`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WebSocketTimeouts {
+    /// Time allowed between the upgrade and the first (hello) message.
+    pub hello: Option<Duration>,
+    /// Server pings and the silence deadline they make meaningful.
+    pub heartbeat: Option<Heartbeat>,
+    /// Bound on each outgoing write, so a stalled peer cannot hold its session.
+    pub send: Option<Duration>,
+}
+
+/// The server pings every `interval`. A peer that sends nothing at all (data,
+/// ping or pong) for `silence` is closed, running ordinary disconnect cleanup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Heartbeat {
+    pub interval: Duration,
+    pub silence: Duration,
+}
+
+impl WebSocketTimeouts {
+    /// No liveness bounds. Paused-clock tests need this: Tokio auto-advances
+    /// virtual time to the next timer during real socket I/O, however distant.
+    pub const DISABLED: Self = Self {
+        hello: None,
+        heartbeat: None,
+        send: None,
+    };
+}
+
+impl Default for WebSocketTimeouts {
+    fn default() -> Self {
+        Self {
+            hello: Some(Duration::from_secs(10)),
+            heartbeat: Some(Heartbeat {
+                interval: Duration::from_secs(20),
+                silence: Duration::from_secs(60),
+            }),
+            send: Some(Duration::from_secs(10)),
+        }
+    }
+}
+
+/// Runs `future` within `limit`, or unbounded when `limit` is `None`.
+/// Returns `None` if the limit elapsed first.
+async fn within<F: Future>(limit: Option<Duration>, future: F) -> Option<F::Output> {
+    match limit {
+        Some(limit) => tokio::time::timeout(limit, future).await.ok(),
+        None => Some(future.await),
+    }
+}
+
+/// Sleeps until `deadline`, or forever when there is none.
+async fn sleep_until_or_never(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
 pub fn router(runtime: RuntimeHandle) -> Router {
+    router_with_timeouts(runtime, WebSocketTimeouts::default())
+}
+
+pub fn router_with_timeouts(runtime: RuntimeHandle, timeouts: WebSocketTimeouts) -> Router {
     Router::new()
         .route("/v1/write", post(batch_write))
         .route("/v1/state/{*topic}", post(single_state_write))
@@ -53,6 +118,7 @@ pub fn router(runtime: RuntimeHandle) -> Router {
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(runtime)
+        .layer(Extension(timeouts))
 }
 
 #[derive(Deserialize)]
@@ -310,13 +376,14 @@ async fn method_not_allowed() -> ApiError {
 
 async fn websocket_upgrade(
     State(state): State<HttpState>,
+    Extension(timeouts): Extension<WebSocketTimeouts>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let lease = state.track_stream().map_err(ApiError::from_runtime)?;
     Ok(upgrade
         .max_message_size(MAX_MESSAGE_BYTES)
         .max_frame_size(MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| websocket_session(socket, state, lease)))
+        .on_upgrade(move |socket| websocket_session(socket, state, lease, timeouts)))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -325,33 +392,57 @@ enum WireCodec {
     MessagePack,
 }
 
-async fn websocket_session(mut socket: WebSocket, state: HttpState, _lease: StreamLease) {
+async fn websocket_session(
+    mut socket: WebSocket,
+    state: HttpState,
+    _lease: StreamLease,
+    timeouts: WebSocketTimeouts,
+) {
     let mut stopped = state.shutdown_signal();
     tokio::select! {
         biased;
         _ = async { let _ = stopped.wait_for(|stopped| *stopped).await; } => {
             // Close delivery is bounded; shutdown never waits for a peer response.
-            let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(Some(CloseFrame {
-                code: 1001,
-                reason: "server_shutdown".into(),
-            })))).await;
+            close_socket(&mut socket, Some(Duration::from_secs(1)), 1001, "server_shutdown").await;
         }
-        () = run_websocket_session(&mut socket, &state) => {}
+        () = run_websocket_session(&mut socket, &state, timeouts) => {}
     }
 }
 
-async fn run_websocket_session(socket: &mut WebSocket, state: &HttpState) {
-    let Some(first) = socket.recv().await else {
-        return;
-    };
-    let Ok(first) = first else {
-        return;
+/// Best-effort close frame, bounded so a stalled peer cannot delay cleanup.
+async fn close_socket(
+    socket: &mut WebSocket,
+    limit: Option<Duration>,
+    code: u16,
+    reason: &'static str,
+) {
+    let close = Message::Close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }));
+    let _ = within(limit, socket.send(close)).await;
+}
+
+async fn run_websocket_session(
+    socket: &mut WebSocket,
+    state: &HttpState,
+    timeouts: WebSocketTimeouts,
+) {
+    let first = match within(timeouts.hello, socket.recv()).await {
+        Some(Some(Ok(first))) => first,
+        Some(None | Some(Err(_))) => return,
+        None => {
+            warn!(limit = ?timeouts.hello, "WebSocket peer sent no hello in time; closing");
+            close_socket(socket, timeouts.send, 1008, "hello_timeout").await;
+            return;
+        }
     };
     let (codec, first) = match decode_client_message(first) {
         Ok(decoded) => decoded,
         Err((codec, error)) => {
             let _ = send_server_message(
                 socket,
+                timeouts.send,
                 codec,
                 &error_message(None, "invalid_message", error),
             )
@@ -367,6 +458,7 @@ async fn run_websocket_session(socket: &mut WebSocket, state: &HttpState) {
     else {
         let _ = send_server_message(
             socket,
+            timeouts.send,
             codec,
             &error_message(
                 None,
@@ -388,6 +480,7 @@ async fn run_websocket_session(socket: &mut WebSocket, state: &HttpState) {
         Err(api) => {
             let _ = send_server_message(
                 socket,
+                timeouts.send,
                 codec,
                 &api_server_error(Some(request_id), ApiError::from_runtime(api)),
             )
@@ -414,14 +507,11 @@ async fn run_websocket_session(socket: &mut WebSocket, state: &HttpState) {
     tokio::select! {
         biased;
         _ = async { let _ = kicked.wait_for(|kicked| *kicked).await; } => {
-            let _ = tokio::time::timeout(Duration::from_secs(1), socket.send(Message::Close(Some(CloseFrame {
-                code: 4001,
-                reason: "session_replaced".into(),
-            })))).await;
+            close_socket(socket, Some(Duration::from_secs(1)), 4001, "session_replaced").await;
         }
         () = async {
-            if send_server_message(socket, codec, &snapshot).await.is_ok() {
-                websocket_loop(socket, state, codec, handle, &mut subscription).await;
+            if send_server_message(socket, timeouts.send, codec, &snapshot).await.is_ok() {
+                websocket_loop(socket, state, codec, handle, &mut subscription, timeouts).await;
             }
         } => {}
     }
@@ -433,48 +523,61 @@ async fn websocket_loop(
     subscription_codec: WireCodec,
     handle: &SessionHandle,
     subscription: &mut Subscription,
+    timeouts: WebSocketTimeouts,
 ) {
+    // Any frame from the peer proves liveness; pings give a quiet but healthy
+    // peer something to answer. Tungstenite answers peer pings by itself.
+    let heartbeat = timeouts.heartbeat;
+    let mut last_heard = tokio::time::Instant::now();
+    let mut next_ping = heartbeat.map(|heartbeat| last_heard + heartbeat.interval);
     loop {
+        let silence_deadline = heartbeat.map(|heartbeat| last_heard + heartbeat.silence);
         tokio::select! {
+            () = sleep_until_or_never(silence_deadline) => {
+                warn!(client = %handle.client(), ?heartbeat, "WebSocket peer stopped responding; closing session");
+                close_socket(socket, timeouts.send, 1011, "peer_timeout").await;
+                return;
+            }
+            () = sleep_until_or_never(next_ping) => {
+                next_ping = heartbeat.map(|heartbeat| tokio::time::Instant::now() + heartbeat.interval);
+                if send_frame(socket, timeouts.send, Message::Ping(Default::default())).await.is_err() {
+                    return;
+                }
+            }
             update = subscription.update() => {
                 let Some(update) = update else {
                     if subscription.end_reason() == Some(SubscriptionEnd::SlowConsumer) {
-                        let _ = socket.send(Message::Close(Some(CloseFrame {
-                            code: 1013,
-                            reason: "slow_consumer".into(),
-                        }))).await;
+                        close_socket(socket, timeouts.send, 1013, "slow_consumer").await;
                     }
                     return;
                 };
-                if send_server_message(socket, subscription_codec, &crate::protocol::update_message(&update)).await.is_err() {
+                if send_server_message(socket, timeouts.send, subscription_codec, &crate::protocol::update_message(&update)).await.is_err() {
                     return;
                 }
             }
             incoming = socket.recv() => {
                 let Some(Ok(incoming)) = incoming else { return };
+                last_heard = tokio::time::Instant::now();
                 match incoming {
-                    Message::Ping(payload) => {
-                        if socket.send(Message::Pong(payload)).await.is_err() { return; }
-                    }
-                    Message::Pong(_) => {}
+                    Message::Ping(_) | Message::Pong(_) => {}
                     Message::Close(_) => return,
                     Message::Text(_) | Message::Binary(_) => {
                         let decoded = decode_client_message(incoming);
                         let (incoming_codec, message) = match decoded {
                             Ok(decoded) => decoded,
                             Err((incoming_codec, error)) => {
-                                if send_server_message(socket, incoming_codec, &error_message(None, "invalid_message", error)).await.is_err() { return; }
+                                if send_server_message(socket, timeouts.send, incoming_codec, &error_message(None, "invalid_message", error)).await.is_err() { return; }
                                 continue;
                             }
                         };
                         match message {
                             ClientMessage::Hello { request_id, .. } => {
-                                if send_server_message(socket, incoming_codec, &error_message(Some(request_id), "already_initialized", "hello is only valid as the first message")).await.is_err() { return; }
+                                if send_server_message(socket, timeouts.send, incoming_codec, &error_message(Some(request_id), "already_initialized", "hello is only valid as the first message")).await.is_err() { return; }
                             }
                             ClientMessage::Write { request_id, operations } => {
                                 let response = apply_websocket_write(state, handle, request_id, operations);
                                 let expired = matches!(&response, ServerMessage::Error { error, .. } if error.code == "session_expired");
-                                if send_server_message(socket, incoming_codec, &response).await.is_err() { return; }
+                                if send_server_message(socket, timeouts.send, incoming_codec, &response).await.is_err() { return; }
                                 if expired { return; }
                             }
                         }
@@ -532,28 +635,78 @@ fn decode_client_message(
     }
 }
 
+/// Why an outgoing message did not reach the socket. Encoding, size and
+/// timeout failures are logged where detected; transport errors are ordinary
+/// disconnects. Callers only need to stop the session.
+#[derive(Debug, Error)]
+enum SendFailure {
+    #[error("JSON server message encoding failed: {0}")]
+    EncodeJson(#[source] serde_json::Error),
+    #[error("MessagePack server message encoding failed: {0}")]
+    EncodeMessagePack(#[source] rmp_serde::encode::Error),
+    #[error("encoded server message is {bytes} bytes, above the {MAX_MESSAGE_BYTES}-byte limit")]
+    TooLarge { bytes: usize },
+    #[error("WebSocket write did not complete within {0:?}")]
+    Timeout(Duration),
+    #[error("WebSocket write failed: {0}")]
+    Transport(#[source] axum::Error),
+}
+
 async fn send_server_message(
     socket: &mut WebSocket,
+    limit: Option<Duration>,
     codec: WireCodec,
     message: &ServerMessage,
-) -> Result<(), ()> {
-    let message = match codec {
-        WireCodec::Json => {
-            let encoded = serde_json::to_string(message).map_err(|_| ())?;
-            if encoded.len() > MAX_MESSAGE_BYTES {
-                return Err(());
-            }
-            Message::Text(encoded.into())
+) -> Result<(), SendFailure> {
+    let encoded = match codec {
+        WireCodec::Json => serde_json::to_string(message)
+            .map(|text| (text.len(), Message::Text(text.into())))
+            .map_err(SendFailure::EncodeJson),
+        WireCodec::MessagePack => rmp_serde::to_vec_named(message)
+            .map(|bytes| (bytes.len(), Message::Binary(bytes.into())))
+            .map_err(SendFailure::EncodeMessagePack),
+    };
+    let frame = match encoded {
+        Ok((bytes, _)) if bytes > MAX_MESSAGE_BYTES => {
+            // Close visibly rather than vanish: the peer sees 1009 and the
+            // operator sees which message kind overflowed.
+            let failure = SendFailure::TooLarge { bytes };
+            warn!(%failure, kind = server_message_kind(message), "closing WebSocket: message too big to deliver");
+            close_socket(socket, limit, 1009, "message_too_big").await;
+            return Err(failure);
         }
-        WireCodec::MessagePack => {
-            let encoded = rmp_serde::to_vec_named(message).map_err(|_| ())?;
-            if encoded.len() > MAX_MESSAGE_BYTES {
-                return Err(());
-            }
-            Message::Binary(encoded.into())
+        Ok((_, frame)) => frame,
+        Err(failure) => {
+            warn!(%failure, "closing WebSocket: server message could not be encoded");
+            return Err(failure);
         }
     };
-    socket.send(message).await.map_err(|_| ())
+    send_frame(socket, limit, frame).await
+}
+
+async fn send_frame(
+    socket: &mut WebSocket,
+    limit: Option<Duration>,
+    frame: Message,
+) -> Result<(), SendFailure> {
+    match within(limit, socket.send(frame)).await {
+        Some(Ok(())) => Ok(()),
+        Some(Err(source)) => Err(SendFailure::Transport(source)),
+        None => {
+            let failure = SendFailure::Timeout(limit.unwrap_or_default());
+            warn!(%failure, "closing WebSocket: peer is not accepting data");
+            Err(failure)
+        }
+    }
+}
+
+const fn server_message_kind(message: &ServerMessage) -> &'static str {
+    match message {
+        ServerMessage::Snapshot { .. } => "snapshot",
+        ServerMessage::Update { .. } => "update",
+        ServerMessage::Reply { .. } => "reply",
+        ServerMessage::Error { .. } => "error",
+    }
 }
 
 fn error_message(
@@ -823,6 +976,7 @@ impl ApiError {
     fn from_core(error: CoreError) -> Self {
         let (status, code) = match &error {
             CoreError::SystemTopic { .. } => (StatusCode::FORBIDDEN, "system_topic"),
+            CoreError::ValueTooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "value_too_large"),
             CoreError::SessionExpired { .. } => (StatusCode::CONFLICT, "session_expired"),
             CoreError::ClaimAuthorityRequired { .. } => {
                 (StatusCode::CONFLICT, "claim_authority_required")

@@ -32,8 +32,10 @@ No unresolved question currently blocks tasks 10 or 11.
 ## Provisional defaults probably worth a quick skim
 
 1. Omitted retained-value expiry preserves the existing absolute deadline; a
-   new value has no deadline. It does not renew the prior relative duration.
-   Explicit `clear` and `set` remain available.
+   new value, or one replacing a different node kind, has no deadline. It does
+   not renew the prior relative duration. Explicit `clear` and `set` remain
+   available. Because a later write without expiry can vanish at a deadline it
+   never set, whether omission should instead mean `clear` is worth reviewing.
 2. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
    `$map`; literal maps containing reserved tag keys must use `$map`.
 3. Exact current dependency versions are pinned and `Cargo.lock` is committed.
@@ -46,6 +48,13 @@ No unresolved question currently blocks tasks 10 or 11.
    `PUT /v1/schemas/{name}`. `force:true` removes a structurally wrong-kind
    node; it preserves desired definition/claim only when the kind is valid and
    the current payload is the violation.
+7. A single runtime value is limited to 256 KiB of JSON encoding. Snapshots
+   and updates combining several large values can still exceed the 1 MiB
+   message limit and close that connection with 1009; chunked snapshots, a
+   larger limit, or an aggregate admission check would need a protocol
+   decision.
+8. WebSocket liveness: 10 s hello timeout, 20 s server ping interval, 60 s peer
+   silence, 10 s per outgoing write.
 
 ## Resolved in the 2026-10-06 review
 

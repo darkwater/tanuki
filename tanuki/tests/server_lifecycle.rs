@@ -156,7 +156,8 @@ async fn shutdown_bounds_sse_drain_when_the_peer_stops_reading() {
                 &actor,
                 WriteBatch::new(vec![WriteOperation::PublishState {
                     topic: TopicPath::parse("/large").unwrap(),
-                    value: Value::String("x".repeat(256 * 1024)),
+                    // The largest accepted value: two quotes plus the characters.
+                    value: Value::String("x".repeat(tanuki::core::MAX_VALUE_JSON_BYTES - 2)),
                     expiry: ExpiryUpdate::Clear,
                 }])
                 .unwrap(),

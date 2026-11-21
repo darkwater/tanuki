@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{
+    sync::mpsc::{self, error::TryRecvError},
+    time::sleep,
+};
 use tracing::warn;
 
 use crate::{
@@ -9,6 +12,10 @@ use crate::{
 };
 
 pub type Clock = Arc<dyn Fn() -> Timestamp + Send + Sync>;
+
+/// Minimum wait after failed deadline processing. A persistent failure leaves
+/// the due deadline in place; without this the loop would retry with zero wait.
+const FAILURE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct DeadlineScheduler {
@@ -99,16 +106,21 @@ async fn run(
             }
         });
 
-        let next_value = match core.lock() {
+        let (next_value, failed) = match core.lock() {
             Ok(mut core) => {
                 let should_process = !due_claims.is_empty()
                     || core
                         .next_value_deadline()
                         .is_some_and(|deadline| deadline.get() <= now);
-                if should_process && let Err(error) = core.process_deadlines(now, &due_claims) {
-                    warn!(%error, "deadline processing failed");
-                }
-                core.next_value_deadline()
+                let failed = should_process
+                    && match core.process_deadlines(now, &due_claims) {
+                        Ok(_) => false,
+                        Err(error) => {
+                            warn!(%error, "deadline processing failed; retrying after backoff");
+                            true
+                        }
+                    };
+                (core.next_value_deadline(), failed)
             }
             Err(_) => {
                 warn!("deadline scheduler stopped because the core lock was poisoned");
@@ -121,17 +133,30 @@ async fn run(
         let command = match next {
             None => commands.recv().await,
             Some(deadline) => {
-                let wait = wait_duration(deadline, (clock)());
+                let mut wait = wait_duration(deadline, (clock)());
+                if failed {
+                    wait = wait.max(FAILURE_BACKOFF);
+                }
                 tokio::select! {
                     command = commands.recv() => command,
                     () = sleep(wait) => Some(SchedulerCommand::Rescan),
                 }
             }
         };
-        match command {
-            Some(SchedulerCommand::Rescan) => {}
-            Some(SchedulerCommand::ScheduleClaims(releases)) => claims.extend(releases),
-            Some(SchedulerCommand::Stop) | None => return,
+        // Every mutation requests a rescan. Drain everything already queued so
+        // a burst of writes costs one locked scan, not one scan per write.
+        let mut command = command;
+        loop {
+            match command {
+                Some(SchedulerCommand::Rescan) => {}
+                Some(SchedulerCommand::ScheduleClaims(releases)) => claims.extend(releases),
+                Some(SchedulerCommand::Stop) | None => return,
+            }
+            command = match commands.try_recv() {
+                Ok(next) => Some(next),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => None,
+            };
         }
     }
 }

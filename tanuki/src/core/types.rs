@@ -389,8 +389,22 @@ impl PendingClaimRelease {
     }
 }
 
+/// Largest accepted runtime value, measured as its JSON wire encoding.
+///
+/// JSON is the larger of the two codecs (base64 bytes, decimal floats), so a
+/// value under this limit also fits MessagePack. It stays well below the 1 MiB
+/// WebSocket message limit so one value can always be delivered in an update
+/// or snapshot. Provisional; see `docs/open-questions.md`.
+pub const MAX_VALUE_JSON_BYTES: usize = 256 * 1024;
+
 #[derive(Debug, Error)]
 pub enum CoreError {
+    #[error("value for `{topic}` encodes to {bytes} bytes, above the {limit}-byte limit")]
+    ValueTooLarge {
+        topic: TopicPath,
+        bytes: usize,
+        limit: usize,
+    },
     #[error("writes to reserved system topic `{topic}` are not permitted")]
     SystemTopic { topic: TopicPath },
     #[error("operation `{operation}` is not implemented in the current core phase")]

@@ -135,17 +135,22 @@ commits are filtered out.
 ## WebSocket connection lifecycle
 
 1. Track the stream before upgrading `/v1/ws`, then require one text-JSON or
-   binary-MessagePack hello. Shutdown also cancels peers waiting for hello.
+   binary-MessagePack hello within the hello timeout (close 1008
+   `hello_timeout`). Shutdown also cancels peers waiting for hello.
 2. Open the named managed session and register its selectors at the core's
    snapshot boundary.
 3. Under the same runtime coordination lock, install the socket registry entry.
    If it replaces an entry, signal the old socket to close with `session_replaced`.
    No thread can register an older session after a newer one.
 4. Send the correlated snapshot as the first response, then select among
-   client messages, subscription batches, and replacement notification.
+   client messages, subscription batches, replacement notification, the ping
+   timer and the peer-silence deadline. Any received frame refreshes the
+   deadline; expiry closes with 1011 `peer_timeout`. Every outgoing write is
+   bounded by the send timeout, and an encoded message above 1 MiB closes with
+   1009 `message_too_big`.
 5. Apply every write through `Core::apply`; send its correlated reply before
    forwarding its own queued selected update.
-6. On close, I/O failure, or cancellation, the session lease disconnects the
+6. On close, I/O failure, timeout, or cancellation, the session lease disconnects the
    exact handle. Immediate
    claim release is committed and published; a stale old handle is harmless.
    Grace-release timer work is handed to the deadline scheduler.
