@@ -35,8 +35,7 @@ No unresolved question currently blocks tasks 10 or 11.
    without expiry used to inherit, and later vanish at, a deadline another
    writer chose). Explicit `preserve` keeps an existing same-kind absolute
    deadline without renewing the prior relative duration.
-2. JSON semantic tags are `$bytes`, `$timestamp`, `$duration`, `$int`, and
-   `$map`; literal maps containing reserved tag keys must use `$map`.
+2. JSON tags are `$bytes`, `$int`, and `$map`; literal maps containing reserved tag keys must use `$map`.
 3. `Cargo.lock` is committed. Application crates pin exact versions; the
    reusable `tanuki-protocol` and `tanuki-client` libraries use ordinary caret
    requirements so downstream applications can resolve shared dependencies.
@@ -68,8 +67,7 @@ No unresolved question currently blocks tasks 10 or 11.
   `Selector::intersects` now provides the pattern-level predicate needed to
   enforce that invariant. Overlap inside one schema is allowed subject to the
   casting restriction below.
-- MessagePack timestamps use the standard extension type `-1`; duration keeps
-  Tanuki application extension type `2`.
+- MessagePack values use no extension types.
 - Every WebSocket text frame is JSON and every binary frame is MessagePack.
   The hello frame's codec is used for unsolicited snapshots/updates, while a
   request's reply uses that request frame's codec.

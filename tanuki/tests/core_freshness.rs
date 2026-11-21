@@ -71,7 +71,25 @@ fn overdue_state_is_retained_and_duplicate_write_clears_the_active_condition() {
     )));
     let all = core.read(&Selection::new(vec![Selector::parse("/**").unwrap()]));
     assert!(all.get(&topic("/tracked/temperature")).is_some());
-    assert!(all.get(&condition).is_some());
+    // Diagnostics carry times as ordinary strings: there are no semantic
+    // timestamp or duration values.
+    assert_eq!(
+        all.get(&condition)
+            .unwrap()
+            .retained_value()
+            .unwrap()
+            .value(),
+        &Value::Map(
+            [
+                ("code", "overdue_update"),
+                ("expected_update_interval", "PT10S"),
+                ("last_updated", "1970-01-01T00:00:00Z"),
+                ("topic", "/tracked/temperature"),
+            ]
+            .map(|(key, value)| (key.to_owned(), Value::String(value.to_owned())))
+            .into()
+        )
+    );
     assert!(core.next_value_deadline().is_none());
 
     let refreshed = core

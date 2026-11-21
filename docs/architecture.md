@@ -210,9 +210,9 @@ drops its receiver. Core queue overflow closes the stream after queued batches
 are drained and logs the slow-consumer reason; reconnect creates a fresh core
 subscription rather than a replay session.
 
-JSON retains the explicit semantic tag mapping. MessagePack carries bytes
-natively, uses its standard extension type `-1` for timestamps, and uses Tanuki
-application extension type `2` for durations. Each incoming frame selects its
+JSON uses the explicit `$bytes`/`$int`/`$map` tag mapping. MessagePack carries
+bytes natively and uses no extension types. `Value` is exactly the Serde data
+model (no timestamps or durations), so Serde payloads convert losslessly. Each incoming frame selects its
 own decoder and its correlated reply codec; the hello codec remains the codec
 for unsolicited snapshots and updates. Both codecs deserialize to the same
 transport-independent `Value` enum.

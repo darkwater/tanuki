@@ -607,12 +607,10 @@ async fn closing_ends_observers_and_rejects_later_calls() {
 }
 
 #[tokio::test]
-async fn both_codecs_preserve_bytes_semantic_time_and_literal_tag_maps() {
+async fn both_codecs_preserve_bytes_and_literal_tag_maps() {
     let values = [
         Value::Float(FiniteF64::new(2.291712365432881e-9).unwrap()),
         Value::Bytes(vec![0, 255]),
-        Value::Timestamp("2023-11-14T22:13:20.123456789Z".parse().unwrap()),
-        Value::Duration("-PT5.125S".parse().unwrap()),
         Value::Map(BTreeMap::from([(
             "$bytes".into(),
             Value::String("literal".into()),

@@ -42,8 +42,6 @@ pub enum Value {
     Bytes(Vec<u8>),
     List(Vec<Self>),
     Map(BTreeMap<String, Self>),
-    Timestamp(jiff::Timestamp),
-    Duration(jiff::SignedDuration),
 }
 
 impl Value {
@@ -58,8 +56,6 @@ impl Value {
             Self::Bytes(_) => ValueKind::Bytes,
             Self::List(_) => ValueKind::List,
             Self::Map(_) => ValueKind::Map,
-            Self::Timestamp(_) => ValueKind::Timestamp,
-            Self::Duration(_) => ValueKind::Duration,
         }
     }
 }
@@ -74,6 +70,4 @@ pub enum ValueKind {
     Bytes,
     List,
     Map,
-    Timestamp,
-    Duration,
 }

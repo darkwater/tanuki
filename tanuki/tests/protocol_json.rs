@@ -31,48 +31,37 @@ fn literal_reserved_keys_are_escaped_without_becoming_semantic_tags() {
 }
 
 #[test]
-fn messagepack_uses_native_binary_and_semantic_extensions() {
+fn messagepack_uses_native_binary_and_rejects_extension_types() {
     let bytes = rmp_serde::to_vec_named(&WireValue::new(Value::Bytes(vec![0, 1, 2, 255]))).unwrap();
     assert_eq!(bytes, vec![0xc4, 4, 0, 1, 2, 255]);
     let decoded: WireValue = rmp_serde::from_slice(&bytes).unwrap();
     assert_eq!(decoded.into_inner(), Value::Bytes(vec![0, 1, 2, 255]));
 
-    let timestamp: jiff::Timestamp = "2023-11-14T22:13:20Z".parse().unwrap();
-    let encoded = rmp_serde::to_vec_named(&WireValue::new(Value::Timestamp(timestamp))).unwrap();
-    assert_eq!(encoded, vec![0xd6, 0xff, 0x65, 0x53, 0xf1, 0x00]);
-    assert!(!encoded.windows(10).any(|window| window == b"$timestamp"));
-    let decoded: WireValue = rmp_serde::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.into_inner(), Value::Timestamp(timestamp));
-
-    let duration: jiff::SignedDuration = "PT1H2M3S".parse().unwrap();
-    let encoded = rmp_serde::to_vec_named(&WireValue::new(Value::Duration(duration))).unwrap();
-    assert_eq!(&encoded[..2], &[0xd7, 2]);
-    let decoded: WireValue = rmp_serde::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.into_inner(), Value::Duration(duration));
+    // A standard MessagePack timestamp (extension -1) is not a runtime value.
+    let timestamp = [0xd6, 0xff, 0x65, 0x53, 0xf1, 0x00];
+    let error = rmp_serde::from_slice::<WireValue>(&timestamp).unwrap_err();
+    assert!(error.to_string().contains("extension types"), "{error}");
 }
 
 #[test]
-fn messagepack_timestamp_uses_all_standard_widths() {
-    let timestamp: jiff::Timestamp = "2023-11-14T22:13:20.123456789Z".parse().unwrap();
-    let encoded = rmp_serde::to_vec_named(&WireValue::new(Value::Timestamp(timestamp))).unwrap();
-    assert_eq!(&encoded[..2], &[0xd7, 0xff]);
-    assert_eq!(encoded.len(), 10);
+fn former_time_tags_are_ordinary_json_maps() {
+    let encoded = json!({"$timestamp": "2023-11-14T22:13:20Z", "$duration": "PT1H"});
+    let value = serde_json::from_value::<WireValue>(encoded.clone())
+        .unwrap()
+        .into_inner();
     assert_eq!(
-        rmp_serde::from_slice::<WireValue>(&encoded)
-            .unwrap()
-            .into_inner(),
-        Value::Timestamp(timestamp)
+        value,
+        Value::Map(BTreeMap::from([
+            ("$duration".into(), Value::String("PT1H".into())),
+            (
+                "$timestamp".into(),
+                Value::String("2023-11-14T22:13:20Z".into())
+            ),
+        ]))
     );
-
-    let timestamp: jiff::Timestamp = "1969-12-31T23:59:59.5Z".parse().unwrap();
-    let encoded = rmp_serde::to_vec_named(&WireValue::new(Value::Timestamp(timestamp))).unwrap();
-    assert_eq!(&encoded[..3], &[0xc7, 12, 0xff]);
-    assert_eq!(encoded.len(), 15);
     assert_eq!(
-        rmp_serde::from_slice::<WireValue>(&encoded)
-            .unwrap()
-            .into_inner(),
-        Value::Timestamp(timestamp)
+        serde_json::to_value(WireValue::new(value)).unwrap(),
+        encoded
     );
 }
 

@@ -4,14 +4,14 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, MapAccess, SeqAccess, Visitor},
-    ser::{SerializeMap, SerializeSeq, SerializeTuple},
+    ser::{SerializeMap, SerializeSeq},
 };
 use serde_json::{Map, Value as RawJson, json};
 use thiserror::Error;
 
 use crate::{ClientName, ErrorCode, FiniteF64, FromValue, PayloadError, TopicPath, Value};
 
-const TAGS: [&str; 5] = ["$bytes", "$timestamp", "$duration", "$int", "$map"];
+const TAGS: [&str; 3] = ["$bytes", "$int", "$map"];
 
 /// Decode exactly one complete MessagePack value from a transport message.
 /// Trailing bytes are an error, just as they are for JSON message decoding.
@@ -28,8 +28,8 @@ pub fn decode_messagepack<T: de::DeserializeOwned>(
     Ok(value)
 }
 
-/// A runtime value with Tanuki's codec-aware encoding: semantic JSON tags
-/// (`$bytes`, `$int`, ...) for JSON and native/extension types for MessagePack.
+/// A runtime value with Tanuki's codec-aware encoding: tags (`$bytes`, `$int`,
+/// `$map`) for JSON and native types for MessagePack.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WireValue(Value);
 
@@ -101,50 +101,7 @@ impl Serialize for BinaryValue<'_> {
                 }
                 map.end()
             }
-            Value::Timestamp(value) => ExtValue {
-                tag: -1,
-                bytes: &encode_timestamp(*value),
-            }
-            .serialize(serializer),
-            Value::Duration(value) => {
-                let text = jiff::fmt::temporal::SpanPrinter::new().duration_to_string(value);
-                ExtValue {
-                    tag: 2,
-                    bytes: text.as_bytes(),
-                }
-                .serialize(serializer)
-            }
         }
-    }
-}
-
-struct ExtValue<'a> {
-    tag: i8,
-    bytes: &'a [u8],
-}
-
-impl Serialize for ExtValue<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_newtype_struct("_ExtStruct", &ExtPayload(self.tag, self.bytes))
-    }
-}
-
-struct ExtPayload<'a>(i8, &'a [u8]);
-
-impl Serialize for ExtPayload<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut tuple = serializer.serialize_tuple(2)?;
-        tuple.serialize_element(&self.0)?;
-        tuple.serialize_element(&BinaryBytes(self.1))?;
-        tuple.end()
-    }
-}
-
-struct BinaryBytes<'a>(&'a [u8]);
-
-impl Serialize for BinaryBytes<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bytes(self.0)
     }
 }
 
@@ -235,103 +192,12 @@ impl<'de> Visitor<'de> for BinaryValueVisitor {
 
     fn visit_newtype_struct<D: Deserializer<'de>>(
         self,
-        deserializer: D,
+        _deserializer: D,
     ) -> Result<Self::Value, D::Error> {
-        let ExtOwnedPayload(tag, bytes) = ExtOwnedPayload::deserialize(deserializer)?;
-        match tag {
-            -1 => decode_timestamp(&bytes.0)
-                .map(Value::Timestamp)
-                .map(BinaryOwnedValue)
-                .map_err(de::Error::custom),
-            2 => String::from_utf8(bytes.0)
-                .map_err(de::Error::custom)?
-                .parse()
-                .map(Value::Duration)
-                .map(BinaryOwnedValue)
-                .map_err(de::Error::custom),
-            _ => Err(de::Error::custom(format!(
-                "unknown Tanuki MessagePack extension tag {tag}"
-            ))),
-        }
-    }
-}
-
-fn encode_timestamp(value: jiff::Timestamp) -> Vec<u8> {
-    let mut seconds = value.as_second();
-    let subsecond = value.subsec_nanosecond();
-    let nanoseconds = if subsecond < 0 {
-        seconds -= 1;
-        (1_000_000_000 + subsecond) as u32
-    } else {
-        subsecond as u32
-    };
-
-    if (0..(1_i64 << 34)).contains(&seconds) {
-        let packed = (u64::from(nanoseconds) << 34) | seconds as u64;
-        if packed <= u64::from(u32::MAX) {
-            return (packed as u32).to_be_bytes().to_vec();
-        }
-        return packed.to_be_bytes().to_vec();
-    }
-
-    let mut bytes = Vec::with_capacity(12);
-    bytes.extend_from_slice(&nanoseconds.to_be_bytes());
-    bytes.extend_from_slice(&seconds.to_be_bytes());
-    bytes
-}
-
-fn decode_timestamp(bytes: &[u8]) -> Result<jiff::Timestamp, CodecError> {
-    let (seconds, nanoseconds) = match bytes {
-        [a, b, c, d] => (i64::from(u32::from_be_bytes([*a, *b, *c, *d])), 0),
-        [a, b, c, d, e, f, g, h] => {
-            let packed = u64::from_be_bytes([*a, *b, *c, *d, *e, *f, *g, *h]);
-            (
-                (packed & 0x0000_0003_ffff_ffff) as i64,
-                (packed >> 34) as i32,
-            )
-        }
-        [a, b, c, d, e, f, g, h, i, j, k, l] => (
-            i64::from_be_bytes([*e, *f, *g, *h, *i, *j, *k, *l]),
-            u32::from_be_bytes([*a, *b, *c, *d]) as i32,
-        ),
-        _ => {
-            return Err(error(
-                "MessagePack timestamp payload must be 4, 8, or 12 bytes",
-            ));
-        }
-    };
-    if !(0..1_000_000_000).contains(&nanoseconds) {
-        return Err(error("MessagePack timestamp nanoseconds are out of range"));
-    }
-    jiff::Timestamp::new(seconds, nanoseconds).map_err(|source| error(source.to_string()))
-}
-
-#[derive(Deserialize)]
-struct ExtOwnedPayload(i8, OwnedBytes);
-
-struct OwnedBytes(Vec<u8>);
-
-impl<'de> Deserialize<'de> for OwnedBytes {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct BytesVisitor;
-
-        impl<'de> Visitor<'de> for BytesVisitor {
-            type Value = OwnedBytes;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("MessagePack binary data")
-            }
-
-            fn visit_bytes<E: de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {
-                Ok(OwnedBytes(value.to_vec()))
-            }
-
-            fn visit_byte_buf<E: de::Error>(self, value: Vec<u8>) -> Result<Self::Value, E> {
-                Ok(OwnedBytes(value))
-            }
-        }
-
-        deserializer.deserialize_byte_buf(BytesVisitor)
+        // rmp-serde presents extension types as a newtype struct.
+        Err(de::Error::custom(
+            "MessagePack extension types are not Tanuki runtime values",
+        ))
     }
 }
 
@@ -377,22 +243,6 @@ fn decode(value: RawJson) -> Result<Value, CodecError> {
                             .decode(value)
                             .map(Value::Bytes)
                             .map_err(|source| error(source.to_string()))
-                    });
-                }
-                if let Some(value) = values.remove("$timestamp") {
-                    return tagged_string(value, "$timestamp").and_then(|value| {
-                        value
-                            .parse()
-                            .map(Value::Timestamp)
-                            .map_err(|source: jiff::Error| error(source.to_string()))
-                    });
-                }
-                if let Some(value) = values.remove("$duration") {
-                    return tagged_string(value, "$duration").and_then(|value| {
-                        value
-                            .parse()
-                            .map(Value::Duration)
-                            .map_err(|source: jiff::Error| error(source.to_string()))
                     });
                 }
                 if let Some(value) = values.remove("$int") {
@@ -461,10 +311,6 @@ pub fn encode(value: &Value) -> RawJson {
                 RawJson::Object(map)
             }
         }
-        Value::Timestamp(value) => json!({"$timestamp": value.to_string()}),
-        Value::Duration(value) => json!({
-            "$duration": jiff::fmt::temporal::SpanPrinter::new().duration_to_string(value)
-        }),
     }
 }
 

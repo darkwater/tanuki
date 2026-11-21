@@ -107,16 +107,14 @@ Subtree links also require clear behaviour when the target disappears and return
 
 The choices are JSON plus MessagePack, inline bytes, semantic timestamps/durations, and ISO 8601 duration text. The full value algebra and tag escapes are not settled.
 
-**Accepted first profile:** null, bool, signed 64-bit integer, finite 64-bit float, string, bytes, list, string-keyed map, timestamp, and signed fixed duration. Unsigned integers and calendar-relative spans are excluded initially; a nonnegative schema range expresses ordinary unsigned constraints without adding a second integer representation. Timer parameters use a distinct nonnegative fixed-duration type.
+**Accepted first profile:** null, bool, signed 64-bit integer, finite 64-bit float, string, bytes, list, string-keyed map. (Timestamp and signed fixed duration were removed on 2026-11-21: payloads follow the Serde data model, dates and intervals in payloads are strings or integers, and meaning beyond shape belongs to schemas. Metadata and timer parameters keep their typed fields.) Unsigned integers and calendar-relative spans are excluded initially; a nonnegative schema range expresses ordinary unsigned constraints without adding a second integer representation. Timer parameters use a distinct nonnegative fixed-duration type.
 
-For JSON, the accepted first mapping is `{"$timestamp":"..."}`,
-`{"$duration":"..."}`, `{"$bytes":"<base64>"}`, and
+For JSON, the accepted first mapping is `{"$bytes":"<base64>"}` and
 `{"$int":"<decimal>"}` for exact large integers. Literal maps containing
 reserved tag keys use `{"$map":{...}}`; ordinary JSON objects remain maps.
 
-MessagePack uses native primitives and binary data, standard timestamp
-extension type `-1`, and Tanuki application extension type `2` containing the
-fixed-duration text. Both decoders produce the same runtime values.
+MessagePack uses native primitives and binary data, and no extension types.
+Both decoders produce the same runtime values.
 
 **Duration ambiguity:** ISO 8601 includes calendar quantities such as months, which do not define a fixed expiry interval without an anchor and calendar policy. Recommended permit calendar spans as values if desired, but restrict expiry/grace/freshness intervals to nonnegative fixed elapsed durations. Decide whether calendar spans belong in the first runtime type at all. These timer policies do not need every capability of a general time library.
 
@@ -154,8 +152,7 @@ Task 06 exposes that shape through JSON-text and MessagePack-binary WebSockets.
 The hello frame selects the codec for unsolicited messages, and its correlated
 snapshot is always the first server message. Each later frame selects JSON by
 text or MessagePack by binary, and its correlated reply uses that same codec.
-MessagePack uses standard timestamp extension type `-1` and application type
-`2` for fixed-duration text. Axum enforces 1 MiB inbound messages, the encoder refuses larger
+MessagePack uses no extension types. Axum enforces 1 MiB inbound messages, the encoder refuses larger
 individual outbound messages, and subscriptions buffer 64 complete batches;
 total queued-byte accounting remains open.
 

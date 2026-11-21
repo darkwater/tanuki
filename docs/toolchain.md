@@ -69,8 +69,7 @@ and [Serde's internally tagged decoder](https://docs.rs/serde_derive/latest/src/
 Pinned Serde source confirms its buffered ContentDeserializer does not retain
 `is_human_readable`. Behavioral fixtures justify streaming DTO decoding.
 serde-value does not implement 128-bit integer serialization; use explicit i64
-narrowing or Value access for that input, and no semantic time autodetection is
-provided. Native `wss://` uses the default `rustls` client feature
+narrowing or Value access for that input. Native `wss://` uses the default `rustls` client feature
 (`tokio-tungstenite/rustls-tls-webpki-roots` plus rustls 0.23 with only ring).
 rustls selects a provider from crate features only when exactly one is enabled,
 so `Connection::open_with_codec` installs ring via

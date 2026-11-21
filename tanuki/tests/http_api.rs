@@ -740,8 +740,6 @@ async fn tagged_values_and_escaped_maps_survive_json_storage() {
     let (app, _, _runtime) = test_app();
     let value = json!({
         "bytes": {"$bytes": "AAEC/w=="},
-        "at": {"$timestamp": "2023-11-14T22:13:20Z"},
-        "elapsed": {"$duration": "PT1H2M3S"},
         "literal": {"$map": {"$bytes": "not a tag"}}
     });
     let mut request = json_request(

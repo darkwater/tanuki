@@ -46,11 +46,13 @@ pub(super) fn active_diagnostics(
             value.insert("topic".to_owned(), Value::String(topic.to_string()));
             value.insert(
                 "expected_update_interval".to_owned(),
-                Value::Duration(interval.get()),
+                Value::String(
+                    jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&interval.get()),
+                ),
             );
             value.insert(
                 "last_updated".to_owned(),
-                Value::Timestamp(current.last_write().at().get()),
+                Value::String(current.last_write().at().get().to_string()),
             );
             let path = freshness_diagnostic_topic(&topic);
             Some((

@@ -89,7 +89,7 @@ scheduler suite.
 `tanuki/tests/protocol_json.rs` verifies exact large signed integers, rejection of
 out-of-range unsigned integers, and escaping literal reserved tag keys.
 `tanuki/tests/http_api.rs` verifies common extractor/domain/routing errors, the single
-state convenience route, stateless atomic input batches, semantic JSON values,
+state convenience route, stateless atomic input batches, tagged JSON values,
 anonymous selected reads, and a battery publish/read through a real ephemeral
 TCP listener.
 
@@ -133,8 +133,8 @@ laptop, phone, dashboard, lamp controller, motion/location script, and
 automation; assertions follow downstream batches rather than stopping at
 producer acknowledgements.
 
-`tanuki/tests/protocol_json.rs` pins native MessagePack bytes, timestamp/duration
-extension vectors, nested codec equivalence, and literal JSON tag-map escaping.
+`tanuki/tests/protocol_json.rs` pins native MessagePack bytes, rejection of
+extension types, former time tags as ordinary maps, nested codec equivalence, and literal JSON tag-map escaping.
 Core slow-consumer isolation remains covered in `tanuki/tests/core_subscriptions.rs`.
 
 Run the focused suite with:
@@ -286,11 +286,11 @@ real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
 | A reconnecting controller does not take back a claimed input | `a_reconnecting_controller_does_not_take_back_an_input_claimed_meanwhile` |
 | `start()` retries until the server appears | `start_keeps_trying_until_the_server_appears` |
 | Replacement ends the old session; close and drop end observers | `a_replaced_managed_session_ends_while_the_new_one_continues`, `closing_ends_observers_and_rejects_later_calls` |
-| Bytes, semantic time and literal tag maps through `Topic<Value>` in both codecs | `both_codecs_preserve_bytes_semantic_time_and_literal_tag_maps` |
+| Bytes and literal tag maps through `Topic<Value>` in both codecs | `both_codecs_preserve_bytes_and_literal_tag_maps` |
 | Reply timeout and late replies, unknown outcome, oversize, sequence regression, trailing bytes, 4001 without reconnect, close during a write, failing first connect | `session_failures.rs` (one test each) |
 | Native `wss://` reaches the TLS handshake | `tanuki-client/tests/tls.rs` |
 | Serde payload conversion | `tanuki-client/tests/payload.rs` |
-| Regression found by SDK | `tanuki/tests/persistence.rs::binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
+| Regression found by SDK | `tanuki/tests/persistence.rs::binary_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
 
 Behavioral red phases caught missing receive behavior, missing projection
 baseline, incorrect payload conversion, buffered MessagePack byte decoding in
@@ -401,7 +401,7 @@ without a terminal or server. These provide partial US-13.A1/A2 evidence:
   and legal sequence gaps; out-of-order/invalid-path rejection without mutation;
 - ancestor-preserving filtering, collapse, expansion/selection preservation,
   clamped navigation and nearest surviving selection after multiple removals;
-- bytes and semantic timestamps/durations, readable claims/expiry/provenance,
+- bytes, readable claims/expiry/provenance,
   terminal-safe controls in paths/values/clients, Unicode preview truncation,
   unchanged DTOs and complete detail text for later scrolling.
 

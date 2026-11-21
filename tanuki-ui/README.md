@@ -71,7 +71,7 @@ ancestor; removal otherwise chooses the nearest surviving old visible row,
 with preceding rows winning ties. `move_selection` clamps at the ends.
 
 `format::details` returns full logical lines, including value type, provenance,
-expiry and claims. `format::value_text` preserves semantic time tags and shows
+expiry and claims. `format::value_text` shows
 inline bytes as hex. `format::preview` escapes controls and shortens text to a
 Unicode-scalar budget, including the ellipsis; it is not a terminal-cell width
 calculation. Details are not truncated. A later renderer must provide scrolling

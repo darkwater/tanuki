@@ -461,14 +461,12 @@ async fn failed_atomic_replacement_is_returned_without_destroying_target() {
 }
 
 #[tokio::test]
-async fn binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip() {
+async fn binary_and_tag_looking_values_survive_a_snapshot_round_trip() {
     use std::collections::BTreeMap;
     let directory = TestDirectory::new();
     let store = SnapshotStore::new(directory.path("values.db"));
     let values = [
         Value::Bytes(vec![0, 255]),
-        Value::Timestamp("2023-11-14T22:13:20.123456789Z".parse().unwrap()),
-        Value::Duration("-PT5.125S".parse().unwrap()),
         Value::Map(BTreeMap::from([(
             "$bytes".into(),
             Value::String("literal".into()),

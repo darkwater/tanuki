@@ -210,8 +210,6 @@ enum ValueKindRequest {
     Bytes,
     List,
     Map,
-    Timestamp,
-    Duration,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -334,8 +332,6 @@ impl From<ValueKindRequest> for ValueKind {
             ValueKindRequest::Bytes => Self::Bytes,
             ValueKindRequest::List => Self::List,
             ValueKindRequest::Map => Self::Map,
-            ValueKindRequest::Timestamp => Self::Timestamp,
-            ValueKindRequest::Duration => Self::Duration,
         }
     }
 }

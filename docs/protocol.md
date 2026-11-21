@@ -144,12 +144,10 @@ select them but cannot write them, schemas do not apply, and snapshots derive
 them instead of persisting them.
 
 Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
-arrays, and objects map directly to runtime values. The semantic forms are:
+arrays, and objects map directly to runtime values. The tagged forms are:
 
 ```json
 {"$bytes":"AAEC/w=="}
-{"$timestamp":"2023-11-14T22:13:20Z"}
-{"$duration":"PT1H2M3S"}
 {"$int":"9223372036854775807"}
 {"$map":{"$bytes":"literal, not a tag"}}
 ```
@@ -157,7 +155,9 @@ arrays, and objects map directly to runtime values. The semantic forms are:
 Integers outside JavaScript's exact range encode with `$int`; unsigned values
 outside signed 64-bit range are rejected. A literal map containing any reserved
 tag key must use `$map`. Encoding is recursive and lossless for the accepted
-initial value profile.
+initial value profile. There are no timestamp or duration values: dates and
+intervals inside payloads are strings or integers. `$timestamp` and `$duration`
+are not reserved and form ordinary maps.
 
 The shared JSON dependency enables exact float round-trip parsing, preserving
 finite f64 bits (including subnormals and signed zero) across the wire.
@@ -306,12 +306,9 @@ then closes with 1009 instead of vanishing silently (see `open-questions.md`).
 Each subscription currently buffers at most 64 complete commit batches; the
 open byte-budget decision is tracked in `open-questions.md`.
 
-MessagePack uses native primitives and binary values. Timestamps use the
-standard MessagePack timestamp extension type `-1` and its 32-, 64-, or 96-bit
-payload as appropriate. Tanuki application extension type `2` contains a UTF-8
-ISO-8601 fixed duration.
-
-Reference: the [MessagePack timestamp specification](https://github.com/msgpack/msgpack/blob/master/spec.md#timestamp-extension-type).
+MessagePack uses native primitives and binary values and no extension types;
+a value containing an extension type (including the standard timestamp type
+`-1`) is rejected.
 
 ## Persistence format 3
 
@@ -320,7 +317,9 @@ The local snapshot is MessagePack with `format: "tanuki-snapshot"` and
 acknowledgement log. It contains one coherent commit sequence and retained
 node/definition metadata, installed schemas and link definitions, but no live sessions, claims,
 event occurrences, or command occurrences. Future incompatible formats must use a new version;
-unknown versions are treated as invalid snapshots. At startup invalid data is
+unknown versions are treated as invalid snapshots. Timestamp and duration
+values were removed from the value model without a version change; a version 3
+snapshot that still contains one, or a schema requiring one, is invalid. At startup invalid data is
 copied beside the configured file with a `.bak` suffix (or `.bak.N` without
 overwriting an earlier backup), a warning is logged, and Tanuki starts with
 empty state. Ordinary read or backup I/O failures still fail startup.

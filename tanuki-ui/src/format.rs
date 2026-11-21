@@ -34,7 +34,7 @@ pub fn value_text(value: &Value) -> String {
         }
         output
     } else {
-        // Reuse the lossless protocol tags for nested bytes and semantic time.
+        // Reuse the lossless protocol tags for nested bytes.
         safe_text(&encode(value).to_string())
     }
 }
@@ -89,8 +89,6 @@ pub fn value_type(node: &NodeView) -> &'static str {
         Value::Bytes(_) => "bytes",
         Value::List(_) => "list",
         Value::Map(_) => "map",
-        Value::Timestamp(_) => "timestamp",
-        Value::Duration(_) => "duration",
     }
 }
 

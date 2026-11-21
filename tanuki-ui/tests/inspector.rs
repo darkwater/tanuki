@@ -230,16 +230,6 @@ fn values_are_readable_safely_shortened_and_fully_available_in_details() {
         value_text(&Value::Bytes(vec![0, 255, 27])),
         "bytes[3]: 00 ff 1b"
     );
-    let timestamp = serde_json::from_value::<WireValue>(
-        serde_json::json!({"$timestamp":"2026-10-31T12:00:00Z"}),
-    )
-    .unwrap()
-    .into_inner();
-    let duration = serde_json::from_value::<WireValue>(serde_json::json!({"$duration":"PT1.5S"}))
-        .unwrap()
-        .into_inner();
-    assert!(value_text(&timestamp).contains("2026-10-31T12:00:00Z"));
-    assert!(value_text(&duration).contains("PT1.5S"));
     assert_eq!(
         safe_text("a\x1b[31m\n\r\t\x07\u{009b}\u{202e}"),
         "a\\u{1b}[31m\\n\\r\\t\\u{7}\\u{9b}\\u{202e}"

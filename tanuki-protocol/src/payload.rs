@@ -12,15 +12,13 @@ pub enum PayloadError {
     Float(#[from] InvalidFloat),
     #[error("map keys must be strings")]
     MapKey,
-    #[error("semantic timestamps/durations require explicit Value access")]
-    SemanticValue,
 }
 /// Convert ordinary Serde data, without interpreting any Tanuki wire tags.
 pub fn to_value<T: Serialize + ?Sized>(value: &T) -> Result<Value, PayloadError> {
     narrow(serde_value::to_value(value)?)
 }
 pub fn from_value<T: DeserializeOwned>(value: &Value) -> Result<T, PayloadError> {
-    widen(value)?.deserialize_into().map_err(Into::into)
+    widen(value).deserialize_into().map_err(Into::into)
 }
 fn narrow(value: serde_value::Value) -> Result<Value, PayloadError> {
     use serde_value::Value as S;
@@ -54,27 +52,26 @@ fn narrow(value: serde_value::Value) -> Result<Value, PayloadError> {
         ),
     })
 }
-fn widen(value: &Value) -> Result<serde_value::Value, PayloadError> {
+fn widen(value: &Value) -> serde_value::Value {
     use serde_value::Value as S;
-    Ok(match value {
+    match value {
         Value::Null => S::Unit,
         Value::Bool(v) => S::Bool(*v),
         Value::Integer(v) => S::I64(*v),
         Value::Float(v) => S::F64(v.get()),
         Value::String(v) => S::String(v.clone()),
         Value::Bytes(v) => S::Bytes(v.clone()),
-        Value::List(v) => S::Seq(v.iter().map(widen).collect::<Result<_, _>>()?),
+        Value::List(v) => S::Seq(v.iter().map(widen).collect()),
         Value::Map(v) => S::Map(
             v.iter()
-                .map(|(key, v)| Ok((S::String(key.clone()), widen(v)?)))
-                .collect::<Result<_, PayloadError>>()?,
+                .map(|(key, v)| (S::String(key.clone()), widen(v)))
+                .collect(),
         ),
-        Value::Timestamp(_) | Value::Duration(_) => return Err(PayloadError::SemanticValue),
-    })
+    }
 }
 
 /// A payload that can be written: every Serde type (through [`to_value`]) and
-/// [`Value`] itself, which keeps semantic timestamps and durations exact.
+/// [`Value`] itself.
 pub trait ToValue {
     fn to_value(&self) -> Result<Value, PayloadError>;
 }

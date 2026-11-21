@@ -589,8 +589,6 @@ enum StoredValueKind {
     Bytes,
     List,
     Map,
-    Timestamp,
-    Duration,
 }
 
 impl From<ValueKind> for StoredValueKind {
@@ -604,8 +602,6 @@ impl From<ValueKind> for StoredValueKind {
             ValueKind::Bytes => Self::Bytes,
             ValueKind::List => Self::List,
             ValueKind::Map => Self::Map,
-            ValueKind::Timestamp => Self::Timestamp,
-            ValueKind::Duration => Self::Duration,
         }
     }
 }
@@ -620,8 +616,6 @@ impl From<StoredValueKind> for ValueKind {
             StoredValueKind::Bytes => Self::Bytes,
             StoredValueKind::List => Self::List,
             StoredValueKind::Map => Self::Map,
-            StoredValueKind::Timestamp => Self::Timestamp,
-            StoredValueKind::Duration => Self::Duration,
         }
     }
 }

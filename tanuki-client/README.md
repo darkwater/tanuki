@@ -31,8 +31,9 @@ while let Some(snapshot) = batteries.recv().await {
 - A **[`Topic`]** handle names one topic and its payload type: `StateTopic<T>`,
   `EventTopic<T>`, `DesiredTopic<T>` and `CommandTopic<T>`. Handles are plain
   values, independent of any session; create them anywhere. Payloads are any
-  Serde type, or [`Value`] for arbitrary data including exact timestamps and
-  durations. Use `serde_bytes` for byte fields; a plain `Vec<u8>` is a list.
+  Serde type, or [`Value`] for arbitrary data. Use `serde_bytes` for byte
+  fields; a plain `Vec<u8>` is a list. Dates and intervals are ordinary strings
+  or integers (for example `jiff::Timestamp`, which serializes as RFC 3339).
 - The client name attributes your writes. A **managed** session (the default)
   can claim inputs, and a newer managed connection with the same name replaces
   it. A **stateless** session ([`SessionBuilder::stateless`]) cannot claim, and

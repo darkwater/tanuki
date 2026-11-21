@@ -34,13 +34,13 @@ A topic holds one complete value and associated metadata. A map value never crea
 
 Freeform topics accept changing runtime value kinds, optionally warning about a change. There are only two enforcement modes: freeform, or governed by a schema. There is no intermediate permanent type lock.
 
-Runtime values include ordinary scalar/collection data, null, inline bytes, and first-class timestamps and durations. `Value::Null` represents explicit null; schemas carry optionality/type constraints. Missing topics and inputs with no submitted value are distinct from a present null.
+Runtime values are ordinary scalar/collection data, null, and inline bytes: the Serde data model. There are no timestamp or duration values; a payload that carries a date or interval uses a string or integer, and schemas can validate or cast it. `Value::Null` represents explicit null; schemas carry optionality/type constraints. Missing topics and inputs with no submitted value are distinct from a present null.
 
 The initial runtime profile uses signed 64-bit integers and finite 64-bit
 floats. Unsigned integers are initially omitted: nonnegative schema ranges cover
 ordinary unsigned constraints, while values above `i64::MAX` have no initial
-representation. Timestamps and signed fixed durations are semantic values;
-timer parameters use a separate nonnegative fixed-duration type. ISO 8601
+representation. Timer parameters (expiry, grace, freshness intervals) and
+node metadata use their own typed timestamp and nonnegative duration fields. ISO 8601
 duration text is the agreed wire direction. Calendar-relative spans are
 deferred. Enums represented by schema-constrained strings or tagged maps are
 recommended, not yet selected as a final contract.
