@@ -78,11 +78,13 @@ calculation. Details are not truncated. A later renderer must provide scrolling
 and cell clipping, use `safe_text` for paths/filter/status text, and never render
 raw DTO strings. Formatting never modifies the underlying data.
 
-`App` owns one SDK `Session` and raw listener, applying every complete batch
-without an additional queue or observation task. Connection state is explicit:
-connecting, live, disconnected, lagged or error. All states except live denote
-non-current cached data. Abnormal receive results remove the listener and retain
-the last complete cache; there are no retries, re-registration or replay.
+`App` owns one stateless SDK `Session` and raw listener, applying every complete
+batch or baseline without an additional queue or observation task. Connection
+state is explicit: connecting, live, disconnected or error. All states except
+live denote non-current cached data. A listener that falls behind is
+resynchronised with a fresh baseline by the SDK and stays live. When the session
+ends, the listener is removed and the last complete cache retained; the session
+does not reconnect on its own (`Reconnect::Never`), so staleness stays visible.
 `next_update()` remains pending when there is no listener, avoiding a busy loop.
 It can be cancelled by a `tokio::select!` input/tick branch without dropping a
 batch. Rendering can skip frames; the network branch must keep applying batches.
@@ -91,8 +93,9 @@ The default URL is `ws://127.0.0.1:5167/v1/ws`. The default client name is
 `tanuki-ui-<pid>-<counter>`, distinct for simultaneous local processes and
 multiple inspectors in one process. These names are not globally unique across
 hosts or authentication identities. `ConnectionConfig::new` overrides URL and
-validated client name. Explicit duplicate names keep the server's replacement
-semantics. TLS is not added; this uses the SDK's native plain-WebSocket profile.
+validated client name. The inspector connects statelessly, so a duplicate name
+never replaces another connection, in particular a controller's managed session
+and its input claims. `wss://` URLs work through the SDK's default TLS feature.
 
 ```rust,no_run
 use tanuki_ui::app::{App, AppError, ConnectionConfig};
@@ -116,11 +119,10 @@ without losing it when a render tick cancels a receive poll. No extra update
 queue is added. Repeated reconnect keys during a pending attempt are ignored.
 Exit cancels and joins a pending job, closing/joining any session it obtained.
 The convenience `reconnect().await` remains available to headless callers.
-The baseline comes from listener registration, not historical hello. Only successful registration replaces the cache. Replacement
+The baseline is the listener's first event, not historical hello. Only a successful connection replaces the cache. Replacement
 accepts a restarted sequence and preserves surviving selection, expansion and
 filter. A failed attempt keeps the previous display and returns a typed error.
-`close().await` joins SDK driver/writer tasks; prior abnormal termination may be
-returned even though the join completed. Joining the client is not an
+`close().await` joins the SDK's background task. Joining the client is not an
 acknowledgement of server-side cleanup. Dropping App only signals SDK shutdown;
 callers must await close on normal/error exit. Failed setup also closes/joins
 any newly created session. After stream termination a session remains owned

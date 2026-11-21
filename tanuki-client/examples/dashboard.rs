@@ -1,42 +1,42 @@
-use tanuki_client::protocol::{ClientName, Selector};
-use tanuki_client::{ClientError, Session};
+//! Shows every battery and the lamp, surviving server restarts.
+use tanuki_client::{ClientError, Session, StateTopic, Status};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), ClientError> {
     let url = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "ws://127.0.0.1:5167/v1/ws".into());
-    let session = Session::connect(
-        &url,
-        ClientName::parse("example dashboard").expect("constant valid name"),
-        vec![
-            Selector::parse("/battery/*").unwrap(),
-            Selector::parse("/lamp/**").unwrap(),
-        ],
-    )
-    .await?;
-    let battery = session.state::<u8>("/battery/laptop")?;
-    let hue = session.state::<u16>("/lamp/hue")?;
-    let brightness = session.state::<u8>("/lamp/brightness")?;
-    let mut observer = session
-        .observe_batch([
-            battery.path().clone(),
-            hue.path().clone(),
-            brightness.path().clone(),
-        ])
-        .await?;
+    // Stateless: any number of dashboards may share a name. `start` connects
+    // in the background and keeps reconnecting.
+    let session = Session::builder(&url, "example dashboard")
+        .stateless()
+        .start()?;
+    let hue = StateTopic::<u16>::new("/lamp/hue")?;
+    let brightness = StateTopic::<u8>::new("/lamp/brightness")?;
+    let mut view = session.observe(("/battery/*", &hue, &brightness))?;
+    let mut status = session.status();
     loop {
         tokio::select! {
-            snapshot = observer.recv() => match snapshot? {
-                Some(snapshot) => {
-                    println!("complete snapshot at {}", snapshot.sequence());
-                    // Decode errors stay local to the value; raw nodes and metadata remain inspectable.
-                    println!("battery: {:?}; hue: {:?}; brightness: {:?}", snapshot.read(&battery), snapshot.read(&hue), snapshot.read(&brightness));
+            snapshot = view.recv() => {
+                let Some(snapshot) = snapshot else { break };
+                for (path, level) in snapshot.values::<u8>() {
+                    if path.segments().next() == Some("battery") {
+                        println!("{path}: {level:?}");
+                    }
                 }
-                None => break,
-            },
-            result = tokio::signal::ctrl_c() => { if let Err(error) = result { eprintln!("signal error: {error}"); } break; }
+                println!("lamp: hue {:?}, brightness {:?}", snapshot.get(&hue), snapshot.get(&brightness));
+            }
+            Some(change) = status.changed() => {
+                if !matches!(change, Status::Connected) {
+                    println!("({change:?}; showing the last known state)");
+                }
+            }
+            result = tokio::signal::ctrl_c() => {
+                if let Err(error) = result { eprintln!("signal error: {error}"); }
+                break;
+            }
         }
     }
-    session.close().await
+    session.close().await;
+    Ok(())
 }

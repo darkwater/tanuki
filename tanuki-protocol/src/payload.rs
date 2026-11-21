@@ -72,3 +72,35 @@ fn widen(value: &Value) -> Result<serde_value::Value, PayloadError> {
         Value::Timestamp(_) | Value::Duration(_) => return Err(PayloadError::SemanticValue),
     })
 }
+
+/// A payload that can be written: every Serde type (through [`to_value`]) and
+/// [`Value`] itself, which keeps semantic timestamps and durations exact.
+pub trait ToValue {
+    fn to_value(&self) -> Result<Value, PayloadError>;
+}
+impl<T: Serialize + ?Sized> ToValue for T {
+    fn to_value(&self) -> Result<Value, PayloadError> {
+        to_value(self)
+    }
+}
+impl ToValue for Value {
+    fn to_value(&self) -> Result<Value, PayloadError> {
+        Ok(self.clone())
+    }
+}
+
+/// A payload that can be read: every Serde type (through [`from_value`]) and
+/// [`Value`] itself.
+pub trait FromValue: Sized {
+    fn from_value(value: &Value) -> Result<Self, PayloadError>;
+}
+impl<T: DeserializeOwned> FromValue for T {
+    fn from_value(value: &Value) -> Result<Self, PayloadError> {
+        from_value(value)
+    }
+}
+impl FromValue for Value {
+    fn from_value(value: &Value) -> Result<Self, PayloadError> {
+        Ok(value.clone())
+    }
+}

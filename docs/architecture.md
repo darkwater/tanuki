@@ -361,33 +361,45 @@ loses `is_human_readable`, breaking MessagePack bytes/extensions and literal tag
 maps. Serialization and the v1 wire shape stay unchanged. Snapshot persistence's
 payload-bearing enum uses the same approach, without changing its file format.
 
-Client modules are concrete boundaries: `connection` owns native wire I/O;
-`session` owns hello, correlation, selected state, registration and queues;
-`payload` bridges ordinary Serde data without interpreting tags; `topic` provides
-weak typed handles and staged writes; `observe` projects raw input into immutable
-complete snapshots. `SelectedView` is shared with the server's original client
-fixtures through re-exports, avoiding a second batch-application implementation.
+### Client SDK structure (rewritten 2026-11-21)
 
-One driver serializes incoming batches, pending replies and local registration.
-Registration captures the cache and installs delivery before another driver step.
-A bounded writer task keeps network backpressure outside the reader. Each raw
-listener has a bounded data queue and independent terminal notification. Slow
-raw input ends only that listener/projection. Replies resolve independently of
-application polling. Cancellation releases pending capacity; late IDs are never
-reused for another request.
+Client modules are concrete boundaries. `connection` owns native/browser wire
+I/O and decodes frames into one `Incoming` enum per target. `driver` is the
+session's single background task. `session` is the cloneable public handle,
+builder, status and write API. `topic` holds session-independent typed handles
+and decoded nodes. `observe`, `listen` and `control` are the three consumer
+shapes.
 
-Observers consume that public raw primitive, maintain task-local selected caches,
-and publish latest complete snapshots. Initial baselines remain separate from
-replaceable output. Some duplicated retained data is the deliberate simplicity
-tradeoff; queue counts do not bound total decoded memory. Explicit exact-path
-coverage lets typed reads distinguish unobserved paths from covered absence.
+The driver owns the connection, a `SelectedView` cache, and every registered
+observer, listener and controller; API calls reach it as commands over an
+unbounded channel (writes are bounded separately by a semaphore). The server
+selection is the union of registered selectors: a registration that is not
+covered sends `select` and becomes ready when the answering snapshot arrives.
+Selections widen eagerly and shrink lazily (at the next widening or hello).
+Observers receive projected `Snapshot`s through watch channels, published only
+when a retained change matches their selectors. Listeners use bounded queues;
+on overflow the driver replaces the backlog with one `Lagged` baseline, so lag
+is never terminal. Because the server sends a write's update before its reply,
+the cache and every observer reflect a write before its receipt resolves.
 
-Session owns driver/writer and projection lifetime. Topic handles are weak;
-observer drop aborts only its projection, session drop signals driver shutdown,
-and explicit close joins tasks. Clean termination drains admitted raw batches and
-exposes final unseen latest output; abnormal termination takes precedence over
-queued data and is reported once. No replay, retry, reconnect, schema validation
-or framework-specific integration lives in the SDK.
+Each connection runs hello (with the selector union), re-claims controlled
+inputs (define + claim; never taking over another session's claim), publishes
+fresh baselines, then serves commands, frames and reply deadlines. On loss it
+fails in-flight writes as `OutcomeUnknown`, marks claims pending and follows
+the `Reconnect` policy, serving commands while waiting (writes fail fast with
+`Disconnected`; registrations queue). Close code 4001 ends the session as
+`Replaced` without reconnecting, which would take the name back. An explicit
+`control()` retries claim-only when defining is refused by another claim,
+because asking to control means taking over.
+
+A controller compares the observed claim id with the one its session holds,
+only on snapshots at least as new as the claiming commit, and reports each
+submission once (identified by its provenance). The driver publishes a
+snapshot before updating claim state, so a new claim never meets a stale
+snapshot. Observers, listeners and controllers hold weak session references
+and unregister on drop; dropping the last `Session` clone ends the driver.
+No write is ever retried; there is no replay, schema validation or framework
+integration in the SDK.
 
 ## Flat package layout — 2026-10-07
 

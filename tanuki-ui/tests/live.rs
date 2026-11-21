@@ -11,7 +11,7 @@ use tanuki::{
     domain::Timestamp,
     server::serve_with_core,
 };
-use tanuki_client::{ExpiryUpdate, Session};
+use tanuki_client::{Event, Expiry, Session, StateTopic};
 use tanuki_protocol::*;
 use tanuki_ui::{
     app::{App, AppError, ConnectionConfig},
@@ -56,10 +56,8 @@ impl Server {
             ClientName::parse(name).unwrap(),
         ))
     }
-    async fn producer(&self, selectors: Vec<Selector>) -> Session {
-        Session::connect(&self.url, ClientName::parse("producer").unwrap(), selectors)
-            .await
-            .unwrap()
+    async fn producer(&self) -> Session {
+        Session::connect(&self.url, "producer").await.unwrap()
     }
     async fn stop(self) {
         let _ = self.shutdown.send(());
@@ -71,6 +69,9 @@ fn at(second: i64) -> Timestamp {
 }
 fn path(p: &str) -> TopicPath {
     TopicPath::parse(p).unwrap()
+}
+fn state(p: &str) -> StateTopic<i64> {
+    StateTopic::new(p).unwrap()
 }
 async fn receive<T>(f: impl Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(5), f)
@@ -102,11 +103,9 @@ async fn empty_populated_and_future_wildcard_topics_follow_the_live_listener() {
     receive(app.reconnect()).await.unwrap();
     assert_eq!(app.model().status(), &ConnectionStatus::Live);
     assert_eq!(app.model().empty_message(), Some("No topics"));
-    let producer = server.producer(vec![]).await;
+    let producer = server.producer().await;
     let receipt = producer
-        .state::<i64>("/later/deep/value")
-        .unwrap()
-        .publish(&42, ExpiryUpdate::Clear)
+        .publish(&state("/later/deep/value"), &42)
         .await
         .unwrap();
     through(&mut app, receipt.sequence).await;
@@ -116,24 +115,25 @@ async fn empty_populated_and_future_wildcard_topics_follow_the_live_listener() {
     assert_eq!(value(&populated, "/later/deep/value"), 42);
     app.close().await.unwrap();
     populated.close().await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     server.stop().await;
 }
 
 #[tokio::test]
 async fn whole_batches_metadata_and_scheduled_expiry_reach_the_model() {
     let server = Server::start().await;
-    let producer = server.producer(vec![]).await;
+    let producer = server.producer().await;
     let mut app = server.app("inspector");
     receive(app.reconnect()).await.unwrap();
-    let hue = producer.state::<i64>("/lamp/hue").unwrap();
-    let brightness = producer.state::<i64>("/lamp/brightness").unwrap();
-    let mut batch = producer.batch();
-    batch.publish(&hue, &120, ExpiryUpdate::Clear).unwrap();
-    batch
-        .publish(&brightness, &70, ExpiryUpdate::Clear)
+    let hue = state("/lamp/hue");
+    let brightness = state("/lamp/brightness");
+    let receipt = producer
+        .batch()
+        .publish(&hue, &120)
+        .publish(&brightness, &70)
+        .commit()
+        .await
         .unwrap();
-    let receipt = batch.commit().await.unwrap();
     receive(app.next_update()).await.unwrap();
     assert_eq!(app.model().sequence(), receipt.sequence);
     assert_eq!(
@@ -142,13 +142,8 @@ async fn whole_batches_metadata_and_scheduled_expiry_reach_the_model() {
     );
     let before = app.model().node(&path("/lamp/hue")).unwrap().clone();
     server.now.fetch_add(1, Ordering::SeqCst);
-    let receipt = hue
-        .publish(
-            &120,
-            ExpiryUpdate::Set(
-                NonNegativeDuration::new(jiff::SignedDuration::from_secs(3600)).unwrap(),
-            ),
-        )
+    let receipt = producer
+        .publish_with(&hue, &120, Expiry::After(Duration::from_secs(3600)))
         .await
         .unwrap();
     through(&mut app, receipt.sequence).await;
@@ -157,12 +152,7 @@ async fn whole_batches_metadata_and_scheduled_expiry_reach_the_model() {
     server.now.fetch_add(3600, Ordering::SeqCst);
     // A real transport mutation wakes the production scheduler after advancing
     // the injected wall clock. No timer sleeps or mock expiry behavior.
-    producer
-        .state::<i64>("/clock-tick")
-        .unwrap()
-        .publish(&1, ExpiryUpdate::Clear)
-        .await
-        .unwrap();
+    producer.publish(&state("/clock-tick"), &1).await.unwrap();
     receive(async {
         while app.model().node(&path("/lamp/hue")).is_some() {
             app.next_update().await.unwrap();
@@ -171,7 +161,7 @@ async fn whole_batches_metadata_and_scheduled_expiry_reach_the_model() {
     .await;
     assert_eq!(value(&app, "/lamp/brightness"), 70);
     app.close().await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     server.stop().await;
 }
 
@@ -205,26 +195,17 @@ async fn broad_subscription_includes_exposed_system_diagnostics() {
             now,
         )
         .unwrap();
-    let producer = server
-        .producer(vec![Selector::parse("/$diagnostics/**").unwrap()])
-        .await;
-    let mut explicit = producer.listen_updates().await.unwrap();
+    let producer = server.producer().await;
+    let mut explicit = producer.listen("/$diagnostics/**").unwrap();
     let mut app = server.app("inspector");
     receive(app.reconnect()).await.unwrap();
     let receipt = producer
-        .state::<i64>("/tracked/temperature")
-        .unwrap()
-        .publish(&21, ExpiryUpdate::Clear)
+        .publish(&state("/tracked/temperature"), &21)
         .await
         .unwrap();
     through(&mut app, receipt.sequence).await;
     server.now.fetch_add(3600, Ordering::SeqCst);
-    producer
-        .state::<i64>("/clock-tick")
-        .unwrap()
-        .publish(&1, ExpiryUpdate::Clear)
-        .await
-        .unwrap();
+    producer.publish(&state("/clock-tick"), &1).await.unwrap();
     let diagnostic = path("/$diagnostics/freshness/tracked/temperature");
     receive(async {
         while app.model().node(&diagnostic).is_none() {
@@ -232,12 +213,19 @@ async fn broad_subscription_includes_exposed_system_diagnostics() {
         }
     })
     .await;
-    let batch = receive(explicit.recv()).await.unwrap().unwrap();
-    assert!(
-        batch.changes.iter().any(
-            |change| matches!(change, ChangeView::Upsert { topic, .. } if topic == &diagnostic)
-        )
-    );
+    // The explicit listener sees the same reserved node in an ordinary update.
+    receive(async {
+        loop {
+            if let Some(Event::Update(batch)) = explicit.recv().await
+                && batch.changes.iter().any(
+                    |change| matches!(change, ChangeView::Upsert { topic, .. } if topic == &diagnostic),
+                )
+            {
+                return;
+            }
+        }
+    })
+    .await;
     assert!(app.model().node(&diagnostic).is_some());
     // A fresh /** baseline contains the same reserved node too.
     let mut populated = server.app("second inspector");
@@ -245,53 +233,40 @@ async fn broad_subscription_includes_exposed_system_diagnostics() {
     assert!(populated.model().node(&diagnostic).is_some());
     app.close().await.unwrap();
     populated.close().await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     server.stop().await;
 }
 
 #[tokio::test]
-async fn duplicate_replacement_marks_cache_stale_and_reconnect_replaces_baseline() {
+async fn a_same_named_managed_session_does_not_replace_the_stateless_inspector() {
     let server = Server::start().await;
-    let producer = server.producer(vec![]).await;
-    let receipt = producer
-        .state::<i64>("/old")
-        .unwrap()
-        .publish(&7, ExpiryUpdate::Clear)
-        .await
-        .unwrap();
+    let producer = server.producer().await;
+    producer.publish(&state("/old"), &7).await.unwrap();
     let mut app = server.app("duplicate inspector");
     receive(app.reconnect()).await.unwrap();
     assert_eq!(value(&app, "/old"), 7);
-    assert!(app.model().sequence() >= receipt.sequence);
-    let replacement = Session::connect(
-        &server.url,
-        ClientName::parse("duplicate inspector").unwrap(),
-        vec![],
-    )
-    .await
-    .unwrap();
-    assert!(receive(app.next_update()).await.is_err());
-    assert!(matches!(app.model().status(), ConnectionStatus::Error(_)));
-    assert_eq!(value(&app, "/old"), 7);
-    producer
-        .write(vec![WireOperation::RemoveNode {
-            topic: path("/old"),
-        }])
+    // A controller sharing the inspector's name keeps its managed session, and
+    // the inspector keeps receiving updates.
+    let namesake = Session::connect(&server.url, "duplicate inspector")
         .await
         .unwrap();
-    producer
-        .state::<i64>("/new")
-        .unwrap()
-        .publish(&8, ExpiryUpdate::Clear)
-        .await
-        .unwrap();
-    receive(app.reconnect()).await.unwrap();
+    producer.remove(&state("/old")).await.unwrap();
+    let receipt = producer.publish(&state("/new"), &8).await.unwrap();
+    through(&mut app, receipt.sequence).await;
     assert_eq!(app.model().status(), &ConnectionStatus::Live);
     assert!(app.model().node(&path("/old")).is_none());
     assert_eq!(value(&app, "/new"), 8);
-    let _ = replacement.close().await;
+    // An explicit reconnect installs an equivalent fresh baseline.
+    receive(app.reconnect()).await.unwrap();
+    assert_eq!(app.model().status(), &ConnectionStatus::Live);
+    assert_eq!(value(&app, "/new"), 8);
+    assert!(matches!(
+        namesake.status().current(),
+        tanuki_client::Status::Connected
+    ));
+    namesake.close().await;
     app.close().await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     let core = server.core.clone();
     server.stop().await;
     assert_eq!(core.lock().unwrap().managed_session_count(), 0);
@@ -300,16 +275,11 @@ async fn duplicate_replacement_marks_cache_stale_and_reconnect_replaces_baseline
 #[tokio::test]
 async fn shutdown_and_failed_reconnect_preserve_stale_display_and_join_session() {
     let server = Server::start().await;
-    let producer = server.producer(vec![]).await;
-    producer
-        .state::<i64>("/old")
-        .unwrap()
-        .publish(&7, ExpiryUpdate::Clear)
-        .await
-        .unwrap();
+    let producer = server.producer().await;
+    producer.publish(&state("/old"), &7).await.unwrap();
     let mut app = server.app("inspector");
     receive(app.reconnect()).await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     server.stop().await;
     // Shutdown may deliver a close frame or a transport reset. Both must
     // invalidate currentness; the inspector must preserve the actual SDK reason.
@@ -343,36 +313,31 @@ async fn generated_names_allow_multiple_inspectors_without_replacement() {
     ));
     receive(a.reconnect()).await.unwrap();
     receive(b.reconnect()).await.unwrap();
-    let producer = server.producer(vec![]).await;
-    let receipt = producer
-        .state::<i64>("/both")
-        .unwrap()
-        .publish(&1, ExpiryUpdate::Clear)
-        .await
-        .unwrap();
+    let producer = server.producer().await;
+    let receipt = producer.publish(&state("/both"), &1).await.unwrap();
     through(&mut a, receipt.sequence).await;
     through(&mut b, receipt.sequence).await;
     assert_eq!(value(&a, "/both"), 1);
     assert_eq!(value(&b, "/both"), 1);
     a.close().await.unwrap();
     b.close().await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     server.stop().await;
 }
 
 #[tokio::test]
 async fn cancelled_idle_receive_and_delayed_rendering_do_not_skip_batches() {
     let server = Server::start().await;
-    let producer = server.producer(vec![]).await;
+    let producer = server.producer().await;
     let mut app = server.app("inspector");
     receive(app.reconnect()).await.unwrap();
     tokio::select! { biased;
         _ = app.next_update() => panic!("no update yet"),
         () = std::future::ready(()) => {}
     }
-    let topic = producer.state::<i64>("/counter").unwrap();
-    let first = topic.publish(&1, ExpiryUpdate::Clear).await.unwrap();
-    let second = topic.publish(&2, ExpiryUpdate::Clear).await.unwrap();
+    let topic = state("/counter");
+    let first = producer.publish(&topic, &1).await.unwrap();
+    let second = producer.publish(&topic, &2).await.unwrap();
     receive(app.next_update()).await.unwrap();
     assert_eq!(app.model().sequence(), first.sequence);
     assert_eq!(value(&app, "/counter"), 1);
@@ -380,6 +345,6 @@ async fn cancelled_idle_receive_and_delayed_rendering_do_not_skip_batches() {
     assert_eq!(app.model().sequence(), second.sequence);
     assert_eq!(value(&app, "/counter"), 2);
     app.close().await.unwrap();
-    producer.close().await.unwrap();
+    producer.close().await;
     server.stop().await;
 }

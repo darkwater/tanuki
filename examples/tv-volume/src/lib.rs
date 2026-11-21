@@ -10,8 +10,8 @@ use axum::{
 use reqwest::{Client, Url};
 use std::{future::Future, time::Duration};
 use tanuki_client::{
-    ClaimRelease, ExpiryUpdate, Session, StateTopic,
-    protocol::{ClientName, NonNegativeDuration, Selector},
+    ClaimRelease, ControlError, DesiredTopic, Expiry, Reconnect, Request, Session, StateTopic,
+    protocol::PathParseError,
 };
 use tokio::{
     net::TcpListener,
@@ -27,8 +27,10 @@ pub enum Error {
     DiscoveryTask(#[source] tokio::task::JoinError),
     #[error(transparent)]
     Selection(#[from] discovery::SelectionError),
-    #[error("Tanuki session ended: {0}")]
-    Session(#[from] tanuki_client::SessionEnd),
+    #[error("Tanuki input control: {0}")]
+    Control(#[from] ControlError),
+    #[error("Tanuki topic: {0}")]
+    Path(#[from] PathParseError),
     #[error("HTTP: {0}")]
     Http(#[from] reqwest::Error),
     #[error("URL: {0}")]
@@ -331,18 +333,14 @@ async fn publish(
     if change == RenderingChange::default() {
         return Ok(());
     }
-    let lease = NonNegativeDuration::new(
-        std::time::Duration::from_secs(90)
-            .try_into()
-            .expect("90 seconds fit"),
-    )
-    .expect("positive lease");
+    // A lease: a crashed bridge's observations disappear instead of going stale.
+    let lease = Expiry::After(Duration::from_secs(90));
     let mut batch = session.batch();
     if let Some(value) = change.volume {
-        batch.publish(actual, &value, ExpiryUpdate::Set(lease))?;
+        batch = batch.publish_with(actual, &value, lease);
     }
     if let Some(value) = change.mute {
-        batch.publish(mute, &value, ExpiryUpdate::Set(lease))?;
+        batch = batch.publish_with(mute, &value, lease);
     }
     for warning in batch.commit().await?.warnings {
         tracing::warn!(?warning, "Tanuki publication warning");
@@ -383,50 +381,21 @@ async fn set_audio(client: &Client, service: &Service, control: Control) -> Resu
     Ok(())
 }
 
-/// The two typed inputs share claim checks and per-write deduplication.
-#[derive(Default)]
-struct InputTracker {
-    claim_id: Option<u64>,
-    last_write: Option<tanuki_client::protocol::ProvenanceView>,
-}
-impl InputTracker {
-    fn accept<T>(
-        &mut self,
-        raw: Option<&tanuki_client::protocol::NodeView>,
-        decoded: Result<Option<tanuki_client::DecodedNode<T>>, tanuki_client::ReadError>,
-    ) -> Result<Option<T>, Error> {
-        // Claim authority is independent of whether the pending payload decodes.
-        let claim = match raw {
-            Some(tanuki_client::protocol::NodeView::Desired {
-                claim: Some(claim), ..
-            }) => claim,
-            Some(_) => return Err(Error::Protocol("desired audio input claim was released")),
-            None => return Err(Error::Protocol("desired audio input definition removed")),
-        };
-        if claim.owner.as_str() != "tv-volume bridge"
-            || self.claim_id.is_some_and(|id| id != claim.id)
-        {
-            return Err(Error::Protocol(
-                "desired audio input claim was taken by another controller",
-            ));
+/// Handles one controller event; `None` means the session ended.
+fn request<T: std::fmt::Debug>(
+    event: Option<Result<Request<T>, ControlError>>,
+) -> Result<Option<T>, Error> {
+    match event {
+        None => Err(Error::Protocol("Tanuki session ended")),
+        Some(Ok(Request::Submitted(request))) => Ok(Some(request.value)),
+        Some(Ok(Request::Cleared)) => Ok(None),
+        // A value of the wrong type is logged and not sent to the TV.
+        Some(Err(error @ ControlError::Payload { .. })) => {
+            tracing::warn!(%error, "invalid desired audio value");
+            Ok(None)
         }
-        self.claim_id = Some(claim.id);
-        let current = match decoded {
-            Ok(Some(tanuki_client::DecodedNode::Desired { current, .. })) => current,
-            Ok(_) => return Err(Error::Protocol("desired audio input changed kind")),
-            Err(error) => {
-                tracing::warn!(%error, "invalid desired audio value");
-                return Ok(None);
-            }
-        };
-        let Some(current) = current else {
-            return Ok(None);
-        };
-        if self.last_write.as_ref() == Some(&current.last_write) {
-            return Ok(None);
-        }
-        self.last_write = Some(current.last_write);
-        Ok(Some(current.value))
+        // The claim was lost or rejected: another controller owns the TV now.
+        Some(Err(error)) => Err(error.into()),
     }
 }
 
@@ -453,14 +422,14 @@ pub async fn run(
         &xml_body(client.get(location.clone()).send().await?).await?,
         &location,
     )?;
-    let session = Session::connect(
-        &config.tanuki_url,
-        ClientName::parse("tv-volume bridge").expect("constant name"),
-        vec![Selector::parse("/tv/{desired-volume,desired-mute}").expect("constant selector")],
-    )
-    .await?;
-    let actual = session.state::<u8>("/tv/volume")?;
-    let mute = session.state::<bool>("/tv/mute")?;
+    // One connection lifetime: a supervisor restarts the whole bridge, so the
+    // session does not reconnect on its own.
+    let session = Session::builder(&config.tanuki_url, "tv-volume bridge")
+        .reconnect(Reconnect::Never)
+        .connect()
+        .await?;
+    let actual = StateTopic::<u8>::new("/tv/volume")?;
+    let mute = StateTopic::<bool>::new("/tv/mute")?;
     let (tx, mut rx) = mpsc::channel(64);
     let app = Router::new()
         .route(callback.path(), any(notify))
@@ -470,23 +439,17 @@ pub async fn run(
     let mut active: Option<Subscription> = None;
     let work = async {
         // Remove a previous process's cached state before subscribing.
-        let mut clear = session.batch();
-        clear.remove(&actual)?.remove(&mute)?;
-        clear.commit().await?;
-        let desired = session.desired::<u8>("/tv/desired-volume")?;
-        let desired_mute = session.desired::<bool>("/tv/desired-mute")?;
-        let mut setup = session.batch();
-        setup
-            .define(&desired)?
-            .claim(&desired, ClaimRelease::Immediate)?
-            .define(&desired_mute)?
-            .claim(&desired_mute, ClaimRelease::Immediate)?;
-        let setup_receipt = setup.commit().await?;
-        for warning in setup_receipt.warnings {
-            tracing::warn!(?warning, "Tanuki setup warning");
-        }
-        let mut intent = session
-            .observe_batch([desired.path().clone(), desired_mute.path().clone()])
+        session
+            .batch()
+            .remove(&actual)
+            .remove(&mute)
+            .commit()
+            .await?;
+        let desired = DesiredTopic::<u8>::new("/tv/desired-volume")?;
+        let desired_mute = DesiredTopic::<bool>::new("/tv/desired-mute")?;
+        let mut volume_requests = session.control(&desired, ClaimRelease::Immediate).await?;
+        let mut mute_requests = session
+            .control(&desired_mute, ClaimRelease::Immediate)
             .await?;
         let response = client
             .request(
@@ -503,8 +466,6 @@ pub async fn run(
         tracing::info!(events = %service.events, "TV event subscription active");
         let mut observed = RenderingChange::default();
         let mut sequence = NotificationSequence::new();
-        let mut volume_input = InputTracker::default();
-        let mut mute_input = InputTracker::default();
         let initial_deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let sub = active.as_ref().expect("subscribed");
@@ -516,19 +477,15 @@ pub async fn run(
                     publish(&session, &actual, &mute, change).await?;
                     observed.merge(change);
                 }
-                snapshot = intent.recv() => {
-                    let snapshot = snapshot?.ok_or(Error::Protocol("Tanuki observer closed"))?;
-                    // A write receipt can arrive before the SDK processes its update.
-                    // Wait for an observed snapshot that includes our definition/claim.
-                    if snapshot.sequence() < setup_receipt.sequence { continue; }
-                    let volume_request = volume_input.accept(snapshot.node(desired.path()), snapshot.read(&desired))?;
-                    let mute_request = mute_input.accept(snapshot.node(desired_mute.path()), snapshot.read(&desired_mute))?;
-                    if let Some(value) = volume_request {
+                event = volume_requests.recv() => {
+                    if let Some(value) = request(event)? {
                         if value <= 100 {
                             if let Err(error) = set_audio(&client, &service, Control::Volume(value)).await { tracing::warn!(%error, "SetVolume failed; not retrying this request"); }
                         } else { tracing::warn!(value, "desired volume outside 0..100"); }
                     }
-                    if let Some(value) = mute_request
+                }
+                event = mute_requests.recv() => {
+                    if let Some(value) = request(event)?
                         && let Err(error) = set_audio(&client, &service, Control::Mute(value)).await
                     { tracing::warn!(%error, "SetMute failed; not retrying this request"); }
                 }
@@ -567,14 +524,10 @@ pub async fn run(
     }
     server.abort();
     let _ = server.await;
-    let mut clear = session.batch();
-    clear.remove(&actual)?.remove(&mute)?;
-    if let Err(error) = clear.commit().await {
+    if let Err(error) = session.batch().remove(&actual).remove(&mute).commit().await {
         tracing::warn!(%error, "could not remove observed audio; expiry will clear it");
     }
-    if let Err(error) = session.close().await {
-        tracing::warn!(%error, "Tanuki session close failed");
-    }
+    session.close().await;
     result
 }
 

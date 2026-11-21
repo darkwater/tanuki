@@ -15,4 +15,4 @@ mod decode;
 mod error;
 mod payload;
 pub use error::ErrorCode;
-pub use payload::{PayloadError, from_value, to_value};
+pub use payload::{FromValue, PayloadError, ToValue, from_value, to_value};

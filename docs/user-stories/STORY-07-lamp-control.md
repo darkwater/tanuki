@@ -37,7 +37,7 @@ state; clients needing every command or transition use raw update listeners.
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tanuki/tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` verifies explicit ownership, remote desired submission, paired output and rejected mixed-batch rollback; `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` covers desired expiry with the claim intact. The compiled controller accepts `/lamp/desired-brightness` and simulates an atomic `/lamp/hue` + `/lamp/brightness` report; a dashboard observed that report on loopback. No physical lamp action is verified.
+- Native SDK evidence: `tanuki/tests/native_sdk.rs::a_controller_receives_each_request_until_its_claim_is_taken` verifies a `Controller` reporting pending intent first, each submission once (repeated values too), clearing, and claim loss; `sessions_reconnect_resume_observers_and_reclaim_inputs` and `a_reconnecting_controller_does_not_take_back_an_input_claimed_meanwhile` cover re-claiming after a server restart. `batches_commit_atomically_and_report_encoding_and_rejection_errors` covers the paired hue/brightness batch and rollback. The compiled `controller` example uses `session.control`. No physical lamp action is verified.
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
 - `tanuki/tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. `tanuki-protocol/tests/selected_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies transport-neutral whole-batch consumption.
@@ -59,3 +59,4 @@ state; clients needing every command or transition use raw update listeners.
 
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
 - 2026-11-21: Server WebSocket liveness (ping and peer-silence deadline) now releases claims of a controller that vanishes without closing its connection. Simulated with a non-reading test peer; no real network failure verified.
+- 2026-11-21: SDK rewrite: `session.control(&desired, release)` defines, claims and re-claims the input across reconnects and yields `Request::Submitted`/`Cleared`, replacing hand-written claim tracking. Simulated only.

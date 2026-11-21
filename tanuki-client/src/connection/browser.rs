@@ -1,4 +1,4 @@
-use super::{Codec, ConnectionError, MAX_MESSAGE_BYTES};
+use super::{Codec, ConnectionError, Incoming, MAX_MESSAGE_BYTES};
 use crate::protocol::{ClientMessage, ServerMessage};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 pub(crate) use gloo_net::websocket::Message;
@@ -44,11 +44,13 @@ impl Connection {
         if self.ended {
             return Ok(None);
         }
-        let result = decode_frame(self.socket.next().await);
-        if !matches!(result, Ok(Some(_))) {
-            self.ended = true;
+        match decode_frame(self.socket.next().await) {
+            Ok(Incoming::Message(message)) => Ok(Some(message)),
+            result => {
+                self.ended = true;
+                result.map(|_| None)
+            }
         }
-        result
     }
     pub async fn close(&mut self) -> Result<(), ConnectionError> {
         self.socket.close().await?;
@@ -122,23 +124,25 @@ pub(crate) fn encode_message(
 
 pub(crate) fn decode_frame(
     frame: Option<Result<Message, WebSocketError>>,
-) -> Result<Option<ServerMessage>, ConnectionError> {
+) -> Result<Incoming, ConnectionError> {
     match frame {
         Some(Ok(Message::Text(text))) => {
             if text.len() > MAX_MESSAGE_BYTES {
                 return Err(ConnectionError::MessageTooLarge);
             }
-            Ok(Some(serde_json::from_str(&text)?))
+            Ok(Incoming::Message(serde_json::from_str(&text)?))
         }
         Some(Ok(Message::Bytes(bytes))) => {
             if bytes.len() > MAX_MESSAGE_BYTES {
                 return Err(ConnectionError::MessageTooLarge);
             }
-            Ok(Some(crate::protocol::decode_messagepack(&bytes)?))
+            Ok(Incoming::Message(crate::protocol::decode_messagepack(
+                &bytes,
+            )?))
         }
         Some(Err(WebSocketError::ConnectionClose(close))) => {
             if close.code == 1000 || close.code == 1001 {
-                Ok(None)
+                Ok(Incoming::Closed)
             } else {
                 Err(ConnectionError::Closed {
                     code: close.code,
@@ -147,7 +151,7 @@ pub(crate) fn decode_frame(
             }
         }
         Some(Err(error)) => Err(error.into()),
-        None => Ok(None),
+        None => Ok(Incoming::Closed),
     }
 }
 
@@ -195,7 +199,7 @@ mod tests {
                 was_clean: code != 1006,
             })));
             if code == 1000 || code == 1001 {
-                assert!(decode_frame(frame).unwrap().is_none());
+                assert!(matches!(decode_frame(frame), Ok(Incoming::Closed)));
             } else {
                 assert!(
                     matches!(decode_frame(frame), Err(ConnectionError::Closed { code: actual, reason }) if actual == code && reason == "fixture")

@@ -9,7 +9,7 @@ use serde::{
 use serde_json::{Map, Value as RawJson, json};
 use thiserror::Error;
 
-use crate::{ClientName, ErrorCode, FiniteF64, PayloadError, TopicPath, Value, from_value};
+use crate::{ClientName, ErrorCode, FiniteF64, FromValue, PayloadError, TopicPath, Value};
 
 const TAGS: [&str; 5] = ["$bytes", "$timestamp", "$duration", "$int", "$map"];
 
@@ -34,9 +34,9 @@ pub fn decode_messagepack<T: de::DeserializeOwned>(
 pub struct WireValue(Value);
 
 impl WireValue {
-    /// Decodes into an ordinary Serde type; see [`from_value`].
-    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
-        from_value(&self.0)
+    /// Decodes into a Serde type or [`Value`]; see [`FromValue`].
+    pub fn decode<T: FromValue>(&self) -> Result<T, PayloadError> {
+        T::from_value(&self.0)
     }
 
     #[must_use]
@@ -553,9 +553,9 @@ pub struct CurrentValueView {
 }
 
 impl CurrentValueView {
-    /// Decodes the value into an ordinary Serde type; see [`from_value`].
-    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
-        from_value(self.value.as_inner())
+    /// Decodes the value into a Serde type or [`Value`]; see [`FromValue`].
+    pub fn decode<T: FromValue>(&self) -> Result<T, PayloadError> {
+        self.value.decode()
     }
 }
 
@@ -622,9 +622,9 @@ pub struct OccurrenceView {
 }
 
 impl OccurrenceView {
-    /// Decodes the payload into an ordinary Serde type; see [`from_value`].
-    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
-        from_value(self.value.as_inner())
+    /// Decodes the payload into a Serde type or [`Value`]; see [`FromValue`].
+    pub fn decode<T: FromValue>(&self) -> Result<T, PayloadError> {
+        self.value.decode()
     }
 }
 

@@ -243,6 +243,19 @@ impl Selector {
     }
 }
 
+/// The selector matching exactly this topic and nothing else.
+impl From<&TopicPath> for Selector {
+    fn from(topic: &TopicPath) -> Self {
+        Self {
+            segments: topic
+                .segments
+                .iter()
+                .map(|segment| SelectorSegment::Literal(segment.clone()))
+                .collect(),
+        }
+    }
+}
+
 impl FromStr for Selector {
     type Err = SelectorParseError;
 

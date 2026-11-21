@@ -11,7 +11,6 @@ pub enum ConnectionStatus {
     Connecting,
     Live,
     Disconnected,
-    Lagged,
     Error(String),
 }
 

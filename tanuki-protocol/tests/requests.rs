@@ -120,3 +120,13 @@ fn server_messages_with_invalid_topics_fail_to_decode() {
         );
     }
 }
+
+#[test]
+fn an_exact_selector_matches_only_its_topic() {
+    let topic = TopicPath::parse("/lamp/hue").unwrap();
+    let selector = Selector::from(&topic);
+    assert_eq!(selector, Selector::parse("/lamp/hue").unwrap());
+    assert!(selector.matches(&topic));
+    assert!(!selector.matches(&TopicPath::parse("/lamp/hue/extra").unwrap()));
+    assert!(!selector.matches(&TopicPath::parse("/lamp").unwrap()));
+}

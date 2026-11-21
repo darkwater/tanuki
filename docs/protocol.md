@@ -341,22 +341,16 @@ decoding keeps the original JSON/MessagePack decoder through nested fields;
 bytes, extension values and literal reserved-key maps now round-trip through
 whole requests, snapshots and updates, not just standalone value fixtures.
 
-`tanuki-client::Connection` exposes explicit hello/send/receive. `Session` adds
-background reading, request correlation and atomic current-baseline listener
-registration. Typed state/event/desired/command handles and atomic builders all
-use that same write protocol; server validation remains unchanged. Exact-path
-observers publish complete latest retained snapshots, while raw listeners expose
-every admitted batch and explicit lag. Receipt sequences do not establish that
-an observer caught up. Initial selections are immutable.
-
-The supported native profile is `ws://` plus `wss://` through the default
-`rustls` client feature, JSON outgoing by default, optional
-MessagePack frame encoding, 1 MiB messages, 64 pending requests, 64 raw batches
-per listener and configurable 10-second connect/hello/write deadlines. There is
-no idle timeout. Browser bindings, Iced integration, automatic reconnect
-and cross-topic Serde shapes are deferred. Full APIs, lifecycle semantics and
-compiled examples are documented in [the client README](../tanuki-client/README.md).
-
+`tanuki-client::Connection` exposes explicit hello/send/receive. `Session`
+(cloneable, reconnecting with backoff) manages selection with `select` as
+observers, listeners and controllers register, re-claims controlled inputs
+after reconnecting, and relies on update-before-reply ordering so observers
+reflect a write before its receipt resolves. A managed session closed with
+4001 ends instead of reconnecting. Stateless sessions use hello's `session:
+"stateless"`. Native clients support `ws://` and, through the default `rustls`
+feature, `wss://`; 1 MiB messages, JSON outgoing by default, optional
+MessagePack. Full APIs and semantics are in
+[the client README](../tanuki-client/README.md).
 
 ## Server boundary and shutdown — 2026-10-07
 

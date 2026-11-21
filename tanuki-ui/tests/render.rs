@@ -148,7 +148,6 @@ fn tiny_layouts_and_all_stale_states_are_safe() {
     for status in [
         ConnectionStatus::Disconnected,
         ConnectionStatus::Connecting,
-        ConnectionStatus::Lagged,
         ConnectionStatus::Error("bad\x1b[2J".into()),
     ] {
         m.set_status(status);

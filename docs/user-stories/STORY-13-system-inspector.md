@@ -96,8 +96,8 @@ and PTY use are simulated local verification, not deployed-device evidence.
 
 Verified public-surface limitation: the current server exposes active
 `/$diagnostics/**`, but has no `/$connections/**` node projection. Thus the
-observer participates in managed sessions and duplicate-name replacement, but
-cannot yet display itself as a system node. This preserves the eventual public
+inspector cannot yet display itself as a system node. Since 2026-11-21 it
+connects statelessly, so it never replaces a same-named managed session. This preserves the eventual public
 state goal and records the gap without expanding Task 02 into server work.
 
 Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
@@ -118,3 +118,4 @@ Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
   verified real terminal restoration; A3/A4 and deployed use remain outstanding.
 
 Implementation planning: [bounded inspector handoff](../inspector-implementation-plan.md).
+- 2026-11-21: The inspector connects as a stateless session (hello `session: "stateless"`): a duplicate name no longer replaces a controller's managed session or releases its claims. Lag now resynchronises from a fresh baseline instead of ending the stream; the LAGGED status is gone. Recovery remains an explicit reconnect, by design.

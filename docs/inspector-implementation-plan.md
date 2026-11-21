@@ -90,7 +90,9 @@ of mqttui and the public surface before building the UI.
 
 - Root `Cargo.toml`: virtual workspace; add the UI as another root-level member.
 - `tanuki-client/src/session.rs`: `Session::connect`, `listen_updates`,
-  `RawListener::initial_snapshot`, `recv`, and joined `Session::close`.
+  `RawListener::initial_snapshot`, `recv`, and joined `Session::close`
+  (historical; the inspector now uses `Session::builder(..).stateless()` and
+  `Session::listen`, see the client README).
 - `tanuki-protocol/src/view.rs`: `SelectedView::from_snapshot`, `apply`, `nodes`,
   `sequence`. Reuse whole-batch application and its occurrence separation.
 - `tanuki-protocol/src/wire.rs`: four `NodeView` variants, current value,

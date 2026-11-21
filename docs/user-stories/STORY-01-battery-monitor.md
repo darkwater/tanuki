@@ -38,7 +38,7 @@ browser bindings and real-device use remain unverified.
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tanuki/tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` verifies typed `/battery/laptop` publication, complete laptop/phone observations and same-name stateless HTTP coexistence. SDK timer observation covers removal. The compiled `publisher` and `dashboard` examples were exercised against the production binary on loopback. No battery widget/device deployment is claimed.
+- Native SDK evidence: `tanuki/tests/native_sdk.rs::observers_see_wildcards_typed_values_and_their_own_writes` verifies typed `/battery/laptop` publication, a `/battery/*` observation decoded with `Snapshot::values` (a widget no longer needs to know device names in advance), stateless phone attribution and read-your-writes. Leases use `Expiry::After`. The compiled `publisher` and `dashboard` examples were exercised against the production binary on loopback. No battery widget/device deployment is claimed.
 
 - Core test links: [test plan](../test-plan.md) — C1, C3, L2, S1, T1; E1 steps 1 and 4.
 - `tanuki/tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry`
@@ -77,3 +77,4 @@ browser bindings and real-device use remain unverified.
   retained freshness diagnostics; thresholds for actual devices remain unset.
 
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
+- 2026-11-21: SDK rewrite: wildcard observation (`session.observe("/battery/*")`) with typed `values::<T>()`, automatic reconnect, and stateless sessions for widgets that run several times under one name. Simulated over loopback; no widget deployment verified.

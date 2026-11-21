@@ -53,7 +53,7 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
   copying preserves the existing whole-batch and immutable-snapshot criteria;
   this adds no GUI or deployment claim.
 
-- Native SDK evidence: `tanuki/tests/native_sdk.rs` covers initial empty/current snapshots, overlapping selections, newly present phone state, atomic paired output, immutable history, metadata/removal, null versus absent desired payload and local decode recovery. Deterministic SDK unit tests distinguish latest-output replacement from terminal input lag. The ordinary compiled dashboard example was exercised against the production binary; no GUI, browser or Iced application is claimed.
+- Native SDK evidence: `tanuki/tests/native_sdk.rs` covers wildcard and multi-topic observation (`observe((&hue, &brightness, "/battery/*"))`), atomic paired output, immutable snapshots, removal, typed reads with NotObserved/WrongKind errors, stateless dashboards sharing a name, reconnect with resumed observers, and `start()` connecting once the server appears. Listener lag resynchronises with a `Lagged` baseline instead of ending. The compiled `dashboard` example shows status while disconnected. Browser tests run the same API in headless Chromium.
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, T1; E1 dashboard; add wildcard membership fixture.
 - `tanuki/tests/core_subscriptions.rs` verifies US-09.A1, A3, and A5 at the core boundary, including explicit empty snapshots and newly matching wildcard topics.
@@ -86,3 +86,4 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
   increment does not claim every criterion was exercised in every browser.
   Rust web application integration is documented; no rendered dashboard,
   JavaScript SDK, TLS deployment or actual user deployment has been verified.
+- 2026-11-21: SDK rewrite driven by a human-written egui dashboard (fbk-red) that had bypassed the SDK for the raw connection: it needed `/battery/*` wildcards, a shareable session usable from UI code, automatic reconnection and native `wss://`. All four are now in the SDK (`observe` with selectors, cloneable `Session`, `Reconnect`, default `rustls` feature) and covered by tests. fbk-red itself has not been ported yet.

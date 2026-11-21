@@ -1,14 +1,24 @@
 #![cfg(not(target_arch = "wasm32"))]
-//! Narrow scripted peers inject missing/late replies. Production server behavior is tested by tanuki's integration suite.
+//! Scripted peers inject missing, late and malformed server behaviour. The
+//! real server's behaviour is covered by tanuki's integration suite.
 use futures_util::{SinkExt, StreamExt};
+use std::time::Duration;
 use tanuki_client::protocol::*;
-use tanuki_client::{ClientError, ConnectionError, ExpiryUpdate, Session, SessionOptions};
-use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
-use tokio_tungstenite::tungstenite::Message;
+use tanuki_client::{
+    ClientError, Closed, ConnectionError, Disconnect, Reconnect, Session, StateTopic, Status,
+};
+use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::timeout};
+use tokio_tungstenite::tungstenite::{
+    Message,
+    protocol::{CloseFrame, frame::coding::CloseCode},
+};
+
+/// Accepts one connection, answers hello with an empty snapshot, reports each
+/// write's request id, and sends whatever the test scripts.
 struct Peer {
     url: String,
     writes: mpsc::Receiver<RequestId>,
-    replies: mpsc::Sender<Message>,
+    script: mpsc::Sender<Message>,
     task: JoinHandle<()>,
 }
 impl Drop for Peer {
@@ -20,323 +30,237 @@ impl Peer {
     async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let (writes, rx) = mpsc::channel(8);
-        let (replies, mut messages) = mpsc::channel::<Message>(8);
+        let (writes, received) = mpsc::channel(8);
+        let (script, mut scripted) = mpsc::channel::<Message>(8);
         let task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let Message::Text(hello) = socket.next().await.unwrap().unwrap() else {
-                panic!()
+            let Some(Ok(Message::Text(hello))) = socket.next().await else {
+                return;
             };
             let ClientMessage::Hello { request_id, .. } = serde_json::from_str(&hello).unwrap()
             else {
-                panic!()
+                panic!("expected hello");
+            };
+            let snapshot = ServerMessage::Snapshot {
+                request_id,
+                sequence: 1,
+                nodes: Default::default(),
+                warnings: vec![],
             };
             socket
                 .send(Message::Text(
-                    serde_json::to_string(&ServerMessage::Snapshot {
-                        request_id,
-                        sequence: 0,
-                        nodes: Default::default(),
-                        warnings: vec![],
-                    })
-                    .unwrap()
-                    .into(),
+                    serde_json::to_string(&snapshot).unwrap().into(),
                 ))
                 .await
                 .unwrap();
             loop {
                 tokio::select! {
                     message = socket.next() => match message {
-                        Some(Ok(Message::Text(text))) => { let ClientMessage::Write { request_id, .. } = serde_json::from_str(&text).unwrap() else { panic!() }; if writes.send(request_id).await.is_err() { break; } }
-                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        Some(Ok(Message::Text(text))) => {
+                            if let Ok(ClientMessage::Write { request_id, .. }) = serde_json::from_str(&text)
+                                && writes.send(request_id).await.is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Some(Ok(Message::Close(_)) | Err(_)) | None => break,
                         _ => {}
                     },
-                    message = messages.recv() => match message { Some(message) => { if socket.send(message).await.is_err() { break; } }, None => break }
+                    message = scripted.recv() => match message {
+                        Some(message) => if socket.send(message).await.is_err() { break; },
+                        None => break,
+                    },
                 }
             }
         });
         Self {
             url,
-            writes: rx,
-            replies,
+            writes: received,
+            script,
             task,
         }
     }
-    async fn send(&self, message: ServerMessage) {
-        self.replies
-            .send(Message::Text(
-                serde_json::to_string(&message).unwrap().into(),
-            ))
-            .await
-            .unwrap();
-    }
-    async fn received(&mut self) -> RequestId {
-        tokio::time::timeout(std::time::Duration::from_secs(3), self.writes.recv())
-            .await
-            .expect("write did not reach scripted peer")
-            .unwrap()
-    }
-    async fn session(&self) -> Session {
-        Session::connect_with_options(
-            &self.url,
-            ClientName::parse("failure probe").unwrap(),
-            vec![],
-            SessionOptions {
-                pending_requests: std::num::NonZeroUsize::new(1).unwrap(),
-                write_timeout: std::time::Duration::from_millis(200),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-    }
-    async fn reply(&self, id: RequestId, sequence: u64) {
-        self.send(ServerMessage::Reply {
-            request_id: id,
-            result: serde_json::json!({"sequence": sequence, "warnings": []}),
-        })
+
+    async fn send(&self, message: &ServerMessage) {
+        self.send_frame(Message::Text(
+            serde_json::to_string(message).unwrap().into(),
+        ))
         .await;
     }
-}
-#[tokio::test]
-async fn canceled_waiter_releases_capacity_and_late_reply_cannot_resolve_next_request() {
-    let mut peer = Peer::start().await;
-    let session = peer.session().await;
-    let topic = session.state::<u8>("/value").unwrap();
-    let first = topic.clone();
-    let abandoned = tokio::spawn(async move { first.publish(&1, ExpiryUpdate::Clear).await });
-    let old = peer.received().await;
-    assert!(matches!(
-        topic.publish(&2, ExpiryUpdate::Clear).await,
-        Err(ClientError::QueueFull)
-    ));
-    abandoned.abort();
-    let _ = abandoned.await;
-    let next = topic.clone();
-    let write = tokio::spawn(async move { next.publish(&3, ExpiryUpdate::Clear).await });
-    let current = peer.received().await;
-    assert_ne!(old, current);
-    peer.reply(old, 10).await;
-    peer.reply(current, 11).await;
-    assert_eq!(write.await.unwrap().unwrap().sequence, 11);
-    session.close().await.unwrap();
-}
-#[tokio::test]
-async fn lost_reply_has_unknown_outcome_and_frees_the_pending_slot() {
-    let mut peer = Peer::start().await;
-    let session = peer.session().await;
-    let topic = session.state::<u8>("/value").unwrap();
-    let sent = topic.clone();
-    let write = tokio::spawn(async move { sent.publish(&1, ExpiryUpdate::Clear).await });
-    let old = peer.received().await;
-    assert!(matches!(
-        write.await.unwrap(),
-        Err(ClientError::ReplyTimeout)
-    ));
-    let next = topic.clone();
-    let write = tokio::spawn(async move { next.publish(&2, ExpiryUpdate::Clear).await });
-    let current = peer.received().await;
-    peer.reply(old, 10).await;
-    peer.reply(current, 11).await;
-    assert_eq!(write.await.unwrap().unwrap().sequence, 11);
-    session.close().await.unwrap();
-}
-#[tokio::test]
-async fn oversized_message_fails_locally_before_transmission() {
-    let peer = Peer::start().await;
-    let session = peer.session().await;
-    let topic = session.state::<u8>("/value").unwrap();
-    assert!(matches!(
-        topic
-            .publish_value(Value::Bytes(vec![0; 1024 * 1024]), ExpiryUpdate::Clear)
-            .await,
-        Err(ClientError::Connection(ConnectionError::MessageTooLarge))
-    ));
-    session.close().await.unwrap();
-}
 
-#[tokio::test]
-async fn uncorrelated_server_error_and_sequence_regression_terminate_all_listeners() {
-    use tanuki_client::SessionEnd;
-    let peer = Peer::start().await;
-    let session = peer.session().await;
-    let mut raw = session.listen_updates().await.unwrap();
-    peer.send(ServerMessage::Error {
-        request_id: None,
-        error: ErrorView {
-            code: ErrorCode::InvalidMessage,
-            message: "fixture".into(),
-        },
-    })
-    .await;
-    assert!(
-        matches!(raw.recv().await, Err(SessionEnd::Remote(error)) if error.code == ErrorCode::InvalidMessage)
-    );
-    assert!(raw.recv().await.unwrap().is_none());
-    assert!(session.close().await.is_err());
-    let peer = Peer::start().await;
-    let session = peer.session().await;
-    let mut raw = session.listen_updates().await.unwrap();
-    peer.send(ServerMessage::Update {
-        sequence: 5,
-        changes: vec![],
-    })
-    .await;
-    raw.recv().await.unwrap().unwrap();
-    peer.send(ServerMessage::Update {
-        sequence: 5,
-        changes: vec![],
-    })
-    .await;
-    assert!(matches!(raw.recv().await, Err(SessionEnd::Sequence(_))));
-    assert!(session.close().await.is_err());
-}
-#[tokio::test]
-async fn options_reject_runtime_limits_before_opening_socket() {
-    let options = SessionOptions {
-        raw_capacity: std::num::NonZeroUsize::new(usize::MAX).unwrap(),
-        ..Default::default()
-    };
-    assert!(matches!(
-        Session::connect_with_options(
-            "bad url",
-            ClientName::parse("options").unwrap(),
-            vec![],
-            options
-        )
-        .await,
-        Err(ClientError::QueueLimit { .. })
-    ));
-    let options = SessionOptions {
-        write_timeout: std::time::Duration::MAX,
-        ..Default::default()
-    };
-    assert!(matches!(
-        Session::connect_with_options(
-            "bad url",
-            ClientName::parse("options").unwrap(),
-            vec![],
-            options
-        )
-        .await,
-        Err(ClientError::DeadlineRange { .. })
-    ));
-}
+    async fn send_frame(&self, frame: Message) {
+        self.script.send(frame).await.unwrap();
+    }
 
-#[tokio::test]
-async fn remote_slow_consumer_reason_preempts_a_full_data_queue() {
-    use tanuki_client::SessionEnd;
-    let peer = Peer::start().await;
-    let session = Session::connect_with_options(
-        &peer.url,
-        ClientName::parse("slow remote probe").unwrap(),
-        vec![],
-        SessionOptions {
-            raw_capacity: std::num::NonZeroUsize::new(1).unwrap(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let mut full = session.listen_updates().await.unwrap();
-    let mut ready = session.listen_updates().await.unwrap();
-    peer.send(ServerMessage::Update {
-        sequence: 1,
-        changes: vec![],
-    })
-    .await;
-    ready.recv().await.unwrap().unwrap();
-    peer.replies
-        .send(Message::Close(Some(
-            tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                code: 1013.into(),
-                reason: "slow_consumer".into(),
-            },
-        )))
-        .await
-        .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(3), session.closed())
-        .await
-        .unwrap();
-    assert!(
-        matches!(full.recv().await,Err(SessionEnd::Connection(source)) if matches!(&*source,ConnectionError::Closed { code:1013,reason } if reason == "slow_consumer"))
-    );
-    assert!(full.recv().await.unwrap().is_none());
-    assert!(session.close().await.is_err());
-}
-
-#[tokio::test]
-async fn dropping_session_rejects_queued_writes_as_definitely_unsent() {
-    let mut peer = Peer::start().await;
-    let session = peer.session().await;
-    let topic = session.state::<u8>("/value").unwrap();
-    let mut write = std::pin::pin!(topic.publish(&1, ExpiryUpdate::Clear));
-    // On this current-thread runtime no driver can run between admission and
-    // dropping the session. The operation is still in the command queue.
-    let admitted = std::future::poll_fn(|cx| std::task::Poll::Ready(write.as_mut().poll(cx))).await;
-    assert!(admitted.is_pending());
-    drop(session);
-    assert!(matches!(write.await, Err(ClientError::SessionGone)));
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(3), peer.writes.recv())
+    async fn received(&mut self) -> RequestId {
+        timeout(Duration::from_secs(3), self.writes.recv())
             .await
-            .expect("peer did not close")
-            .is_none(),
-        "queued write was sent after shutdown"
-    );
+            .expect("the write did not reach the peer")
+            .expect("the peer stopped")
+    }
+
+    async fn session(&self) -> Session {
+        Session::builder(&self.url, "scripted client")
+            .reconnect(Reconnect::Never)
+            .write_timeout(Duration::from_millis(300))
+            .connect()
+            .await
+            .unwrap()
+    }
+}
+
+fn reply(request_id: RequestId, sequence: u64) -> ServerMessage {
+    ServerMessage::Reply {
+        request_id,
+        result: serde_json::json!({"sequence": sequence, "warnings": []}),
+    }
+}
+
+fn level() -> StateTopic<i64> {
+    StateTopic::new("/fixture/level").unwrap()
+}
+
+async fn closed_reason(session: &Session) -> Closed {
+    timeout(Duration::from_secs(3), session.closed())
+        .await
+        .expect("the session did not end")
 }
 
 #[tokio::test]
-async fn shutdown_keeps_transmitted_writes_unknown_and_rejects_new_writes_locally() {
+async fn a_missing_reply_times_out_and_a_late_one_cannot_resolve_the_next_write() {
     let mut peer = Peer::start().await;
     let session = peer.session().await;
-    let topic = session.state::<u8>("/value").unwrap();
-    let sent = topic.clone();
-    let write = tokio::spawn(async move { sent.publish(&1, ExpiryUpdate::Clear).await });
-    peer.received().await;
-    // The peer has the request but never acknowledges it. Closure cannot prove
-    // whether the mutation was accepted.
-    peer.send(ServerMessage::Error {
-        request_id: None,
-        error: ErrorView {
-            code: ErrorCode::Unknown,
-            message: "closing".into(),
-        },
-    })
-    .await;
-    assert!(matches!(
-        write.await.unwrap(),
-        Err(ClientError::OutcomeUnknown(_))
-    ));
-    session.closed().await;
-    assert!(matches!(
-        topic.publish(&2, ExpiryUpdate::Clear).await,
-        Err(ClientError::SessionGone)
-    ));
-    assert!(session.close().await.is_err());
+    let topic = level();
+    let (result, late) = tokio::join!(session.publish(&topic, &1), peer.received());
+    assert!(matches!(result, Err(ClientError::ReplyTimeout)));
+
+    let second = tokio::spawn({
+        let session = session.clone();
+        async move { session.publish(&level(), &2).await }
+    });
+    let current = peer.received().await;
+    peer.send(&reply(late, 10)).await;
+    peer.send(&reply(current, 11)).await;
+    assert_eq!(second.await.unwrap().unwrap().sequence, 11);
+    session.close().await;
 }
 
 #[tokio::test]
-async fn binary_frame_with_trailing_data_terminates_without_delivering_a_partial_message() {
+async fn a_connection_lost_after_sending_leaves_the_outcome_unknown() {
+    let mut peer = Peer::start().await;
+    let session = peer.session().await;
+    let write = tokio::spawn({
+        let session = session.clone();
+        async move { session.publish(&level(), &1).await }
+    });
+    peer.received().await;
+    peer.task.abort();
+    assert!(matches!(
+        write.await.unwrap(),
+        Err(ClientError::OutcomeUnknown)
+    ));
+    assert!(matches!(closed_reason(&session).await, Closed::Failed(_)));
+    assert!(matches!(
+        session.publish(&level(), &2).await,
+        Err(ClientError::Closed(Closed::Failed(_)))
+    ));
+}
+
+#[tokio::test]
+async fn an_oversized_write_fails_locally_without_ending_the_session() {
     let peer = Peer::start().await;
     let session = peer.session().await;
-    let mut raw = session.listen_updates().await.unwrap();
-    let mut bytes = rmp_serde::to_vec_named(&ServerMessage::Update {
+    let blob = StateTopic::<String>::new("/fixture/blob").unwrap();
+    assert!(matches!(
+        session.publish(&blob, &"x".repeat(1024 * 1024)).await,
+        Err(ClientError::Encode(ConnectionError::MessageTooLarge))
+    ));
+    assert!(matches!(session.status().current(), Status::Connected));
+    session.close().await;
+}
+
+#[tokio::test]
+async fn a_sequence_regression_is_a_protocol_failure() {
+    let peer = Peer::start().await;
+    let session = peer.session().await;
+    peer.send(&ServerMessage::Update {
         sequence: 1,
         changes: vec![],
     })
+    .await;
+    assert!(matches!(
+        closed_reason(&session).await,
+        Closed::Failed(Disconnect::Protocol(_))
+    ));
+}
+
+#[tokio::test]
+async fn trailing_messagepack_bytes_fail_without_applying_a_partial_message() {
+    let peer = Peer::start().await;
+    let session = peer.session().await;
+    let mut bytes = rmp_serde::to_vec_named(&ServerMessage::Update {
+        sequence: 2,
+        changes: vec![],
+    })
     .unwrap();
-    bytes.push(0xc0); // A second MessagePack value is not part of this update.
-    peer.replies
-        .send(Message::Binary(bytes.into()))
+    bytes.push(0xc0);
+    peer.send_frame(Message::Binary(bytes.into())).await;
+    assert!(matches!(
+        closed_reason(&session).await,
+        Closed::Failed(Disconnect::Connection(error))
+            if matches!(*error, ConnectionError::Decode(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_replaced_session_ends_instead_of_reconnecting() {
+    let peer = Peer::start().await;
+    // Even with reconnects enabled: taking the name back would replace the
+    // newer connection in turn.
+    let session = Session::builder(&peer.url, "scripted client")
+        .reconnect(Reconnect::Backoff {
+            initial: Duration::from_millis(10),
+            max: Duration::from_millis(10),
+        })
+        .connect()
         .await
         .unwrap();
+    peer.send_frame(Message::Close(Some(CloseFrame {
+        code: CloseCode::Library(4001),
+        reason: "session_replaced".into(),
+    })))
+    .await;
+    assert!(matches!(closed_reason(&session).await, Closed::Replaced));
+}
+
+#[tokio::test]
+async fn closing_answers_a_write_in_flight_as_closed() {
+    let mut peer = Peer::start().await;
+    let session = peer.session().await;
+    let write = tokio::spawn({
+        let session = session.clone();
+        async move { session.publish(&level(), &1).await }
+    });
+    peer.received().await;
+    session.close().await;
     assert!(matches!(
-        raw.recv().await,
-        Err(tanuki_client::SessionEnd::Connection(error))
-            if matches!(&*error, ConnectionError::Decode(_))
+        write.await.unwrap(),
+        Err(ClientError::Closed(Closed::ByClient))
     ));
-    assert!(raw.recv().await.unwrap().is_none());
-    assert!(session.close().await.is_err());
+    assert!(matches!(
+        session.status().current(),
+        Status::Closed(Closed::ByClient)
+    ));
+}
+
+#[tokio::test]
+async fn connect_fails_fast_when_nothing_listens() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    drop(listener);
+    assert!(matches!(
+        Session::connect(&url, "early client").await,
+        Err(ClientError::Connect(Disconnect::Connection(_)))
+    ));
 }

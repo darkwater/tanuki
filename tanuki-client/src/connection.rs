@@ -27,12 +27,25 @@ pub enum ConnectionError {
     Closed { code: u16, reason: String },
 }
 
+/// One decoded incoming WebSocket event, the same on every target.
+pub(crate) enum Incoming {
+    Message(crate::protocol::ServerMessage),
+    /// Ping/pong and raw frames: transport plumbing, answered by the library.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "browsers answer control frames themselves")
+    )]
+    Control,
+    /// A normal close (1000/1001) or end of stream.
+    Closed,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::Connection;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::{Message, encode_message};
+pub(crate) use native::{Message, decode_frame, encode_message};
 
 #[cfg(target_arch = "wasm32")]
 mod browser;

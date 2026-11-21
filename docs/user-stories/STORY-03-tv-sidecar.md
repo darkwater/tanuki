@@ -138,3 +138,12 @@ pending payload, renewal and atomic cleanup. A9 is implemented/tested with fake
 TVs. Physical mute notifications/controls remain unverified: no live mute or
 volume commands were sent while media was playing. Existing paths and the
 single-TV discovery/selection conventions remain unchanged.
+## SDK controllers — 2026-11-21
+
+The bridge uses two SDK controllers (`session.control`) for `/tv/desired-volume`
+and `/tv/desired-mute`, replacing its hand-written claim and deduplication
+tracker. Each submission is reported once; a value that does not decode is
+logged and not sent to the TV; claim takeover ends the bridge with a typed
+`ControlError::ClaimLost`. The bridge keeps one connection lifetime
+(`Reconnect::Never`) for its supervisor. Same simulated-TV coverage
+(`examples/tv-volume/tests/bridge.rs`); no hardware run.

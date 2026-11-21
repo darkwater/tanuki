@@ -13,10 +13,7 @@ use std::{
     },
     time::Duration,
 };
-use tanuki_client::{
-    ExpiryUpdate, Session,
-    protocol::{ClientName, Selector},
-};
+use tanuki_client::{ClaimRelease, ControlError, DesiredTopic, Session, StateTopic};
 use tanuki_tv_volume::{Config, run};
 use tokio::{
     net::TcpListener,
@@ -171,20 +168,13 @@ async fn scenario(ending: Ending) {
                 let _ = rx.await;
             },
         ));
-        let client = Session::connect(
-            &tanuki_url,
-            ClientName::parse("test dashboard").unwrap(),
-            vec![Selector::parse("/tv/**").unwrap()],
-        )
-        .await
-        .unwrap();
-        let actual = client.state::<u8>("/tv/volume").unwrap();
-        let desired = client.desired::<u8>("/tv/desired-volume").unwrap();
-        let mut view = client.observe(&actual).await.unwrap();
+        let client = Session::connect(&tanuki_url, "test dashboard").await.unwrap();
+        let actual = StateTopic::<u8>::new("/tv/volume").unwrap();
+        let desired = DesiredTopic::<u8>::new("/tv/desired-volume").unwrap();
+        let mut view = client.observe(&actual).unwrap();
         assert!(
             view.recv()
                 .await
-                .unwrap()
                 .unwrap()
                 .read(&actual)
                 .unwrap()
@@ -201,14 +191,14 @@ async fn scenario(ending: Ending) {
             assert!(matches!(bridge.await.unwrap(), Err(tanuki_tv_volume::Error::Protocol(message)) if message.contains("no initial Master volume")));
             while sub_rx.recv().await.unwrap() != "unsubscribe" {}
             assert!(command_rx.try_recv().is_err());
-            client.close().await.unwrap();
+            client.close().await;
             server_stop.send(()).unwrap();
             server.await.unwrap().unwrap();
             tv_task.abort();
             return;
         }
         assert_eq!(notify(&tv_state, "uuid:test", 0, 25).await, StatusCode::OK);
-        let snapshot = view.recv().await.unwrap().unwrap();
+        let snapshot = view.recv().await.unwrap();
         assert_eq!(
             snapshot
                 .read(&actual)
@@ -220,58 +210,58 @@ async fn scenario(ending: Ending) {
             25
         );
         if matches!(ending, Ending::Mute | Ending::MuteClaimTaken) {
-            let mute = client.state::<bool>("/tv/mute").unwrap();
-            let desired_mute = client.desired::<bool>("/tv/desired-mute").unwrap();
-            let mut audio = client.observe_batch([actual.path().clone(), mute.path().clone()]).await.unwrap();
-            assert!(audio.recv().await.unwrap().unwrap().read(&mute).unwrap().is_none(), "mute must be absent until observed");
+            let mute = StateTopic::<bool>::new("/tv/mute").unwrap();
+            let desired_mute = DesiredTopic::<bool>::new("/tv/desired-mute").unwrap();
+            let mut audio = client.observe((&actual, &mute)).unwrap();
+            assert!(audio.recv().await.unwrap().read(&mute).unwrap().is_none(), "mute must be absent until observed");
             let event = |fields: &str| format!("<e:propertyset xmlns:e='urn:schemas-upnp-org:event-1-0'><e:property><LastChange><![CDATA[<Event xmlns='urn:schemas-upnp-org:metadata-1-0/RCS/'><InstanceID val='0'>{fields}</InstanceID></Event>]]></LastChange></e:property></e:propertyset>");
             assert_eq!(notify_body(&tv_state, "uuid:test", 1, event("<Volume channel='Master' val='26'/><Mute channel='Master' val='0'/>" )).await, StatusCode::OK);
-            let snapshot = audio.recv().await.unwrap().unwrap();
+            let snapshot = audio.recv().await.unwrap();
             assert_eq!(snapshot.read(&actual).unwrap().unwrap().current().unwrap().value, 26);
             assert!(!snapshot.read(&mute).unwrap().unwrap().current().unwrap().value, "combined event must expose mute in the same batch");
             for (value, text) in [(true, "1"), (false, "0")] {
-                desired_mute.submit(&value, ExpiryUpdate::Clear).await.unwrap();
+                client.submit(&desired_mute, &value).await.unwrap();
                 let command = command_rx.recv().await.unwrap();
                 assert!(command.contains("<u:SetMute "));
                 assert!(command.contains(&format!("<DesiredMute>{text}</DesiredMute>")));
                 assert!(timeout(Duration::from_millis(75), audio.recv()).await.is_err(), "SOAP acceptance must not change observed audio");
             }
-            let invalid = client.desired::<String>("/tv/desired-mute").unwrap();
-            invalid.submit(&"true".into(), ExpiryUpdate::Clear).await.unwrap();
+            let invalid = DesiredTopic::<String>::new("/tv/desired-mute").unwrap();
+            client.submit(&invalid, &"true".to_owned()).await.unwrap();
             assert!(timeout(Duration::from_millis(75), command_rx.recv()).await.is_err(), "desired mute must be a boolean");
             assert_eq!(notify_body(&tv_state, "uuid:test", 2, event("<Mute channel='Master' val='1'/>" )).await, StatusCode::OK);
-            let snapshot = audio.recv().await.unwrap().unwrap();
+            let snapshot = audio.recv().await.unwrap();
             assert_eq!(snapshot.read(&actual).unwrap().unwrap().current().unwrap().value, 26);
             assert!(snapshot.read(&mute).unwrap().unwrap().current().unwrap().value);
             // Buffer a later volume change, then release it with an earlier
             // mute-only event. Coalescing must preserve both changed fields.
             assert_eq!(notify(&tv_state, "uuid:test", 4, 30).await, StatusCode::OK);
             assert_eq!(notify_body(&tv_state, "uuid:test", 3, event("<Mute channel='Master' val='0'/>" )).await, StatusCode::OK);
-            let snapshot = audio.recv().await.unwrap().unwrap();
+            let snapshot = audio.recv().await.unwrap();
             assert_eq!(snapshot.read(&actual).unwrap().unwrap().current().unwrap().value, 30);
             assert!(!snapshot.read(&mute).unwrap().unwrap().current().unwrap().value);
             assert!(snapshot.read(&mute).unwrap().unwrap().current().unwrap().expires_at.is_some());
             assert!(command_rx.try_recv().is_err(), "observed mute must not repeat prior control requests");
             if matches!(ending, Ending::MuteClaimTaken) {
-                desired_mute.claim(tanuki_client::ClaimRelease::Immediate).await.unwrap();
-                assert!(matches!(bridge.await.unwrap(), Err(tanuki_tv_volume::Error::Protocol(message)) if message.contains("another controller")));
+                client.batch().claim(&desired_mute, ClaimRelease::Immediate).commit().await.unwrap();
+                assert!(matches!(bridge.await.unwrap(), Err(tanuki_tv_volume::Error::Control(ControlError::ClaimLost { .. }))));
             } else {
                 assert_eq!(sub_rx.recv().await.unwrap(), "renew");
-                let refreshed = audio.recv().await.unwrap().unwrap();
+                let refreshed = audio.recv().await.unwrap();
                 assert!(!refreshed.read(&mute).unwrap().unwrap().current().unwrap().value);
                 assert!(refreshed.read(&mute).unwrap().unwrap().current().unwrap().last_write.at >= snapshot.read(&mute).unwrap().unwrap().current().unwrap().last_write.at);
                 stop.send(()).unwrap();
                 bridge.await.unwrap().unwrap();
             }
             loop {
-                let snapshot = audio.recv().await.unwrap().unwrap();
+                let snapshot = audio.recv().await.unwrap();
                 if snapshot.read(&actual).unwrap().is_none() {
                     assert!(snapshot.read(&mute).unwrap().is_none(), "cleanup must remove observed audio together");
                     break;
                 }
             }
             while sub_rx.recv().await.unwrap() != "unsubscribe" {}
-            client.close().await.unwrap();
+            client.close().await;
             server_stop.send(()).unwrap();
             server.await.unwrap().unwrap();
             tv_task.abort();
@@ -295,13 +285,13 @@ async fn scenario(ending: Ending) {
             }
             let expected = if matches!(ending, Ending::ReorderedNotifications) { 40 } else { 30 };
             loop {
-                if view.recv().await.unwrap().unwrap().read(&actual).unwrap().unwrap().current().unwrap().value == expected { break; }
+                if view.recv().await.unwrap().read(&actual).unwrap().unwrap().current().unwrap().value == expected { break; }
             }
             assert!(command_rx.try_recv().is_err(), "notification handling must not issue SOAP control requests");
             stop.send(()).unwrap();
             bridge.await.unwrap().unwrap();
             while sub_rx.recv().await.unwrap() != "unsubscribe" {}
-            client.close().await.unwrap();
+            client.close().await;
             server_stop.send(()).unwrap();
             server.await.unwrap().unwrap();
             tv_task.abort();
@@ -313,7 +303,7 @@ async fn scenario(ending: Ending) {
         // A duplicate must not roll back state; malformed input is not acknowledged.
         assert_eq!(notify(&tv_state, "uuid:test", 0, 80).await, StatusCode::OK);
         assert_eq!(notify(&tv_state, "uuid:test", 1, 101).await, StatusCode::BAD_REQUEST);
-        desired.submit(&40, ExpiryUpdate::Clear).await.unwrap();
+        client.submit(&desired, &40).await.unwrap();
         let command = command_rx.recv().await.unwrap();
         assert!(command.contains("<DesiredVolume>40</DesiredVolume>"));
         assert!(
@@ -322,7 +312,7 @@ async fn scenario(ending: Ending) {
                 .is_err(),
             "SOAP acceptance must not publish observed state"
         );
-        desired.submit(&101, ExpiryUpdate::Clear).await.unwrap();
+        client.submit(&desired, &101).await.unwrap();
         assert!(
             timeout(Duration::from_millis(100), command_rx.recv())
                 .await
@@ -338,7 +328,6 @@ async fn scenario(ending: Ending) {
         assert_eq!(
             view.recv()
                 .await
-                .unwrap()
                 .unwrap()
                 .read(&actual)
                 .unwrap()
@@ -365,16 +354,16 @@ async fn scenario(ending: Ending) {
                 assert!(matches!(bridge.await.unwrap(), Err(tanuki_tv_volume::Error::Http(_))));
             }
             Ending::ClaimTaken => {
-                desired.claim(tanuki_client::ClaimRelease::Immediate).await.unwrap();
-                assert!(matches!(bridge.await.unwrap(), Err(tanuki_tv_volume::Error::Protocol(message)) if message.contains("another controller")));
+                client.batch().claim(&desired, ClaimRelease::Immediate).commit().await.unwrap();
+                assert!(matches!(bridge.await.unwrap(), Err(tanuki_tv_volume::Error::Control(ControlError::ClaimLost { .. }))));
             }
         }
         // Observer may first drain the renewal refresh, then must see removal.
         loop {
-            if view.recv().await.unwrap().unwrap().read(&actual).unwrap().is_none() { break; }
+            if view.recv().await.unwrap().read(&actual).unwrap().is_none() { break; }
         }
         assert_eq!(sub_rx.recv().await.unwrap(), "unsubscribe");
-        client.close().await.unwrap();
+        client.close().await;
         server_stop.send(()).unwrap();
         server.await.unwrap().unwrap();
         tv_task.abort();

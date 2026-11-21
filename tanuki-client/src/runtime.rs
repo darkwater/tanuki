@@ -2,7 +2,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use tokio::{
     spawn,
-    task::{AbortHandle, JoinError, JoinHandle},
+    task::JoinHandle,
     time::{Instant, sleep_until, timeout},
 };
 
@@ -23,11 +23,6 @@ mod browser {
     #[derive(Debug, thiserror::Error)]
     #[error("browser task cancelled")]
     pub struct JoinError;
-    impl JoinError {
-        pub fn is_cancelled(&self) -> bool {
-            true
-        }
-    }
     pub(crate) struct JoinHandle<T> {
         result: oneshot::Receiver<Result<T, Aborted>>,
         abort: AbortHandle,
@@ -35,12 +30,6 @@ mod browser {
     impl<T> JoinHandle<T> {
         pub fn abort(&self) {
             self.abort.abort();
-        }
-        pub fn abort_handle(&self) -> AbortHandle {
-            self.abort.clone()
-        }
-        pub fn is_finished(&self) -> bool {
-            !self.result.is_empty() || self.result.is_terminated()
         }
     }
     impl<T> Future for JoinHandle<T> {
@@ -117,9 +106,8 @@ mod tests {
             pending::<()>().await;
         });
         ready.await.unwrap();
-        assert!(!task.is_finished());
-        task.abort_handle().abort();
-        assert!(task.await.unwrap_err().is_cancelled());
+        task.abort();
+        assert!(task.await.is_err());
         stopped.await.unwrap();
     }
 

@@ -28,8 +28,9 @@ at the root; standalone device examples live under `examples/`:
 - [`examples/tv-volume/`](examples/tv-volume/README.md) — UPnP volume publication and control service
 
 Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the
-workspace root. See [the SDK guide](tanuki-client/README.md) for typed publication,
-atomic writes and raw/latest-state observations.
+workspace root. See [the SDK guide](tanuki-client/README.md) for the Rust
+client: a cloneable, reconnecting session; typed topic handles; atomic writes;
+wildcard observation; and controllers for claimed inputs.
 
 ## Run it
 

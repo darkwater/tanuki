@@ -1,3 +1,9 @@
+> **Superseded (2026-11-21).** This is the original design record. The SDK was
+> rewritten around a cloneable, reconnecting session, session-independent topic
+> handles, automatic selection and controllers; see
+> [the client README](../tanuki-client/README.md) and the client section of
+> [architecture.md](architecture.md).
+
 # Client SDK implementation handoff
 
 Prepared 2026-10-06 for a subsequent implementation session. Read this first,

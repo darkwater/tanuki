@@ -1,461 +1,379 @@
-use crate::{
-    ClientError, PayloadError, Session, WriteReceipt, from_value,
-    protocol::*,
-    session::{Inner, write},
-    to_value,
-};
-use serde::{Serialize, de::DeserializeOwned};
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Weak},
-};
+//! Typed, session-independent topic handles and what reading one yields.
+use crate::protocol::*;
+use std::{fmt, hash::Hash, marker::PhantomData, time::Duration};
 
 mod sealed {
-    pub trait Sealed {}
-}
-pub trait TopicKind: sealed::Sealed {
-    const KIND: NodeKind;
-}
-pub trait InputTopicKind: TopicKind {
-    const INPUT: WireInputKind;
-}
-pub enum State {}
-pub enum Event {}
-pub enum Desired {}
-pub enum Command {}
-impl sealed::Sealed for State {}
-impl sealed::Sealed for Event {}
-impl sealed::Sealed for Desired {}
-impl sealed::Sealed for Command {}
-impl TopicKind for State {
-    const KIND: NodeKind = NodeKind::State;
-}
-impl TopicKind for Event {
-    const KIND: NodeKind = NodeKind::Event;
-}
-impl TopicKind for Desired {
-    const KIND: NodeKind = NodeKind::Desired;
-}
-impl TopicKind for Command {
-    const KIND: NodeKind = NodeKind::Command;
-}
-impl InputTopicKind for Desired {
-    const INPUT: WireInputKind = WireInputKind::Desired;
-}
-impl InputTopicKind for Command {
-    const INPUT: WireInputKind = WireInputKind::Command;
+    pub trait Kind {}
+    pub trait Source {}
 }
 
+/// One of the four node kinds, as a type parameter of [`Topic`].
+pub trait TopicKind: sealed::Kind + Send + Sync + 'static {
+    const KIND: NodeKind;
+}
+/// Desired and command topics: inputs that are defined, claimed and submitted to.
+pub trait InputKind: TopicKind {
+    const INPUT: WireInputKind;
+}
+/// Event and command topics: occurrences delivered once, never retained.
+pub trait InstantKind: TopicKind {}
+
+/// Retained output: the latest value, owned by its last writer.
+pub enum State {}
+/// Instant output: each occurrence is delivered once.
+pub enum Event {}
+/// Retained input: the latest request for a controller to act on.
+pub enum Desired {}
+/// Instant input: each submission is delivered once to listeners.
+pub enum Command {}
+
+macro_rules! kinds {
+    ($($kind:ident),*) => {$(
+        impl sealed::Kind for $kind {}
+        impl TopicKind for $kind {
+            const KIND: NodeKind = NodeKind::$kind;
+        }
+    )*};
+}
+kinds!(State, Event, Desired, Command);
+impl InputKind for Desired {
+    const INPUT: WireInputKind = WireInputKind::Desired;
+}
+impl InputKind for Command {
+    const INPUT: WireInputKind = WireInputKind::Command;
+}
+impl InstantKind for Event {}
+impl InstantKind for Command {}
+
+/// A typed name for one topic. Handles are plain values: create them anywhere
+/// (before connecting, in statics via `LazyLock`, in configuration) and use
+/// them with any [`Session`](crate::Session). Creating one sends nothing.
+///
+/// `T` is the payload type, converted with Serde through [`to_value`] and
+/// [`from_value`]; use [`Value`] to handle arbitrary payloads.
 pub struct Topic<T, K: TopicKind> {
     path: TopicPath,
-    session: Weak<Inner>,
     marker: PhantomData<fn() -> (T, K)>,
-}
-impl<T, K: TopicKind> Clone for Topic<T, K> {
-    fn clone(&self) -> Self {
-        Self {
-            path: self.path.clone(),
-            session: self.session.clone(),
-            marker: PhantomData,
-        }
-    }
 }
 pub type StateTopic<T> = Topic<T, State>;
 pub type EventTopic<T> = Topic<T, Event>;
 pub type DesiredTopic<T> = Topic<T, Desired>;
 pub type CommandTopic<T> = Topic<T, Command>;
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ExpiryUpdate {
-    Preserve,
-    Clear,
-    Set(NonNegativeDuration),
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ClaimRelease {
-    Immediate,
-    After(NonNegativeDuration),
-}
-impl From<ExpiryUpdate> for WireExpiry {
-    fn from(value: ExpiryUpdate) -> Self {
-        match value {
-            ExpiryUpdate::Preserve => Self::Preserve,
-            ExpiryUpdate::Clear => Self::Clear,
-            ExpiryUpdate::Set(d) => Self::Set {
-                duration: jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&d.get()),
-            },
-        }
-    }
-}
-impl From<ClaimRelease> for WireRelease {
-    fn from(value: ClaimRelease) -> Self {
-        match value {
-            ClaimRelease::Immediate => Self::Immediate,
-            ClaimRelease::After(d) => Self::After {
-                duration: jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&d.get()),
-            },
-        }
-    }
-}
-impl Session {
-    fn topic<T, K: TopicKind>(&self, path: &str) -> Result<Topic<T, K>, ClientError> {
-        Ok(Topic {
-            path: TopicPath::parse(path)?,
-            session: Arc::downgrade(&self.inner),
-            marker: PhantomData,
-        })
-    }
-    pub fn state<T>(&self, path: &str) -> Result<StateTopic<T>, ClientError> {
-        self.topic(path)
-    }
-    pub fn event<T>(&self, path: &str) -> Result<EventTopic<T>, ClientError> {
-        self.topic(path)
-    }
-    pub fn desired<T>(&self, path: &str) -> Result<DesiredTopic<T>, ClientError> {
-        self.topic(path)
-    }
-    pub fn command<T>(&self, path: &str) -> Result<CommandTopic<T>, ClientError> {
-        self.topic(path)
-    }
-    pub fn batch(&self) -> Batch {
-        Batch {
-            session: Arc::downgrade(&self.inner),
-            operations: vec![],
-        }
-    }
-}
+
 impl<T, K: TopicKind> Topic<T, K> {
-    pub(crate) fn check_session(&self, session: &Session) -> Result<(), ClientError> {
-        if self.session.ptr_eq(&Arc::downgrade(&session.inner)) {
-            Ok(())
-        } else {
-            Err(ClientError::WrongSession)
+    /// Parses `path`, such as `"/lamp/brightness"`.
+    pub fn new(path: &str) -> Result<Self, PathParseError> {
+        TopicPath::parse(path).map(Self::from_path)
+    }
+
+    #[must_use]
+    pub fn from_path(path: TopicPath) -> Self {
+        Self {
+            path,
+            marker: PhantomData,
         }
     }
+
+    #[must_use]
     pub fn path(&self) -> &TopicPath {
         &self.path
     }
-    pub async fn remove(&self) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::RemoveNode {
-                topic: self.path.clone(),
-            }],
-        )
-        .await
+
+    /// The selector matching exactly this topic.
+    #[must_use]
+    pub fn selector(&self) -> Selector {
+        Selector::from(&self.path)
     }
-    pub fn decode(&self, node: &NodeView) -> Result<DecodedNode<T>, ReadError>
+
+    /// Decodes a node of this topic, checking its kind.
+    pub fn decode(&self, node: &NodeView) -> Result<Node<T>, ReadError>
     where
-        T: DeserializeOwned,
+        T: FromValue,
     {
-        let actual = node.kind();
-        if actual != K::KIND {
+        if node.kind() != K::KIND {
             return Err(ReadError::WrongKind {
                 topic: self.path.clone(),
                 expected: K::KIND,
-                actual,
+                actual: node.kind(),
             });
         }
-        decode_node(node).map_err(|source| ReadError::Payload {
+        Node::decode(node).map_err(|source| ReadError::Payload {
             topic: self.path.clone(),
             source,
         })
     }
 }
-impl<T> StateTopic<T> {
-    pub async fn publish(
-        &self,
-        value: &T,
-        expiry: ExpiryUpdate,
-    ) -> Result<WriteReceipt, ClientError>
-    where
-        T: Serialize,
-    {
-        self.publish_value(to_value(value)?, expiry).await
-    }
-    pub async fn publish_value(
-        &self,
-        value: Value,
-        expiry: ExpiryUpdate,
-    ) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::PublishState {
-                topic: self.path.clone(),
-                value: WireValue::new(value),
-                expiry: Some(expiry.into()),
-            }],
-        )
-        .await
+
+impl<T, K: TopicKind> Clone for Topic<T, K> {
+    fn clone(&self) -> Self {
+        Self::from_path(self.path.clone())
     }
 }
-impl<T> EventTopic<T> {
-    pub async fn emit(&self, value: &T) -> Result<WriteReceipt, ClientError>
-    where
-        T: Serialize,
-    {
-        self.emit_value(to_value(value)?).await
-    }
-    pub async fn emit_value(&self, value: Value) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::PublishEvent {
-                topic: self.path.clone(),
-                value: WireValue::new(value),
-            }],
-        )
-        .await
+impl<T, K: TopicKind> fmt::Debug for Topic<T, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:?}Topic({})", K::KIND, self.path)
     }
 }
-impl<T, K: InputTopicKind> Topic<T, K> {
-    pub async fn define(&self) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::DefineInput {
-                topic: self.path.clone(),
-                kind: K::INPUT,
-            }],
-        )
-        .await
-    }
-    pub async fn claim(&self, release: ClaimRelease) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::ClaimInput {
-                topic: self.path.clone(),
-                release: release.into(),
-            }],
-        )
-        .await
+impl<T, K: TopicKind> fmt::Display for Topic<T, K> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.path.fmt(formatter)
     }
 }
-impl<T> DesiredTopic<T> {
-    pub async fn submit(&self, value: &T, expiry: ExpiryUpdate) -> Result<WriteReceipt, ClientError>
-    where
-        T: Serialize,
-    {
-        self.submit_value(to_value(value)?, expiry).await
-    }
-    pub async fn submit_value(
-        &self,
-        value: Value,
-        expiry: ExpiryUpdate,
-    ) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::SubmitDesired {
-                topic: self.path.clone(),
-                value: WireValue::new(value),
-                expiry: Some(expiry.into()),
-            }],
-        )
-        .await
-    }
-    pub async fn clear(&self) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::ClearDesired {
-                topic: self.path.clone(),
-            }],
-        )
-        .await
+impl<T, K: TopicKind> PartialEq for Topic<T, K> {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
     }
 }
-impl<T> CommandTopic<T> {
-    pub async fn submit(&self, value: &T) -> Result<WriteReceipt, ClientError>
-    where
-        T: Serialize,
-    {
-        self.submit_value(to_value(value)?).await
-    }
-    pub async fn submit_value(&self, value: Value) -> Result<WriteReceipt, ClientError> {
-        write(
-            &self.session,
-            vec![WireOperation::SubmitCommand {
-                topic: self.path.clone(),
-                value: WireValue::new(value),
-            }],
-        )
-        .await
+impl<T, K: TopicKind> Eq for Topic<T, K> {}
+impl<T, K: TopicKind> Hash for Topic<T, K> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
     }
 }
-/// Stages local operations. Dropping a builder sends nothing.
-pub struct Batch {
-    session: Weak<Inner>,
-    operations: Vec<WireOperation>,
-}
-impl Batch {
-    fn check<T, K: TopicKind>(&self, topic: &Topic<T, K>) -> Result<(), ClientError> {
-        if self.session.ptr_eq(&topic.session) {
-            Ok(())
-        } else {
-            Err(ClientError::WrongSession)
-        }
-    }
-    pub fn publish<T: Serialize>(
-        &mut self,
-        topic: &StateTopic<T>,
-        value: &T,
-        expiry: ExpiryUpdate,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        let value = WireValue::new(to_value(value)?);
-        self.operations.push(WireOperation::PublishState {
-            topic: topic.path.clone(),
-            value,
-            expiry: Some(expiry.into()),
-        });
-        Ok(self)
-    }
-    pub fn emit<T: Serialize>(
-        &mut self,
-        topic: &EventTopic<T>,
-        value: &T,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        self.operations.push(WireOperation::PublishEvent {
-            topic: topic.path.clone(),
-            value: WireValue::new(to_value(value)?),
-        });
-        Ok(self)
-    }
-    pub fn submit<T: Serialize>(
-        &mut self,
-        topic: &DesiredTopic<T>,
-        value: &T,
-        expiry: ExpiryUpdate,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        self.operations.push(WireOperation::SubmitDesired {
-            topic: topic.path.clone(),
-            value: WireValue::new(to_value(value)?),
-            expiry: Some(expiry.into()),
-        });
-        Ok(self)
-    }
-    pub fn command<T: Serialize>(
-        &mut self,
-        topic: &CommandTopic<T>,
-        value: &T,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        self.operations.push(WireOperation::SubmitCommand {
-            topic: topic.path.clone(),
-            value: WireValue::new(to_value(value)?),
-        });
-        Ok(self)
-    }
-    pub fn define<T, K: InputTopicKind>(
-        &mut self,
-        topic: &Topic<T, K>,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        self.operations.push(WireOperation::DefineInput {
-            topic: topic.path.clone(),
-            kind: K::INPUT,
-        });
-        Ok(self)
-    }
-    pub fn claim<T, K: InputTopicKind>(
-        &mut self,
-        topic: &Topic<T, K>,
-        release: ClaimRelease,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        self.operations.push(WireOperation::ClaimInput {
-            topic: topic.path.clone(),
-            release: release.into(),
-        });
-        Ok(self)
-    }
-    pub fn remove<T, K: TopicKind>(
-        &mut self,
-        topic: &Topic<T, K>,
-    ) -> Result<&mut Self, ClientError> {
-        self.check(topic)?;
-        self.operations.push(WireOperation::RemoveNode {
-            topic: topic.path.clone(),
-        });
-        Ok(self)
-    }
-    pub async fn commit(self) -> Result<WriteReceipt, ClientError> {
-        write(&self.session, self.operations).await
+impl<T, K: TopicKind> TryFrom<&str> for Topic<T, K> {
+    type Error = PathParseError;
+    fn try_from(path: &str) -> Result<Self, Self::Error> {
+        Self::new(path)
     }
 }
-#[derive(Debug, thiserror::Error)]
-pub enum ReadError {
-    #[error("topic was not selected for this observation: {topic}")]
-    NotObserved { topic: TopicPath },
-    #[error("wrong kind at {topic}: expected {expected:?}, got {actual:?}")]
-    WrongKind {
-        topic: TopicPath,
-        expected: NodeKind,
-        actual: NodeKind,
-    },
-    #[error("payload decoding failed at {topic}: {source}")]
-    Payload {
-        topic: TopicPath,
-        #[source]
-        source: PayloadError,
-    },
+impl<T, K: TopicKind> From<TopicPath> for Topic<T, K> {
+    fn from(path: TopicPath) -> Self {
+        Self::from_path(path)
+    }
 }
+
+/// When a retained value (state or desired) stops being current.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Expiry {
+    /// The value stays until replaced or removed.
+    #[default]
+    Never,
+    /// The server removes the value this long after the write (a lease).
+    /// Publishing again before then renews it.
+    After(Duration),
+    /// Keep the deadline of the value being replaced, if any.
+    Keep,
+}
+
+/// What happens to an input claim when the claiming session disconnects.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ClaimRelease {
+    #[default]
+    Immediate,
+    /// Keep the claim this long, so a quick reconnect keeps control.
+    After(Duration),
+}
+
+/// A `std` duration beyond the server's signed 64-bit-second range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("duration {0:?} is too long")]
+pub struct DurationOutOfRange(pub Duration);
+
+pub(crate) fn iso_duration(duration: Duration) -> Result<String, DurationOutOfRange> {
+    jiff::SignedDuration::try_from(duration)
+        .map(|duration| duration.to_string())
+        .map_err(|_| DurationOutOfRange(duration))
+}
+
+impl TryFrom<Expiry> for WireExpiry {
+    type Error = DurationOutOfRange;
+    fn try_from(value: Expiry) -> Result<Self, Self::Error> {
+        Ok(match value {
+            Expiry::Never => Self::Clear,
+            Expiry::Keep => Self::Preserve,
+            Expiry::After(duration) => Self::Set {
+                duration: iso_duration(duration)?,
+            },
+        })
+    }
+}
+impl TryFrom<ClaimRelease> for WireRelease {
+    type Error = DurationOutOfRange;
+    fn try_from(value: ClaimRelease) -> Result<Self, Self::Error> {
+        Ok(match value {
+            ClaimRelease::Immediate => Self::Immediate,
+            ClaimRelease::After(duration) => Self::After {
+                duration: iso_duration(duration)?,
+            },
+        })
+    }
+}
+
+/// A retained value with its metadata.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Current<T> {
     pub value: T,
     pub last_write: ProvenanceView,
     pub expires_at: Option<jiff::Timestamp>,
 }
+
+/// A node with its payload decoded into `T`.
 #[derive(Clone, Debug, PartialEq)]
-pub enum DecodedNode<T> {
+pub enum Node<T> {
     State(Current<T>),
     Event {
         last_publisher: ProvenanceView,
     },
     Desired {
-        definition: InputDefinitionView,
         claim: Option<ClaimView>,
         current: Option<Current<T>>,
     },
     Command {
-        definition: InputDefinitionView,
         claim: Option<ClaimView>,
     },
 }
-impl<T> DecodedNode<T> {
+
+impl<T> Node<T> {
+    /// The state value or desired request, if there is one.
     pub fn current(&self) -> Option<&Current<T>> {
         match self {
-            Self::State(c) => Some(c),
+            Self::State(current) => Some(current),
             Self::Desired { current, .. } => current.as_ref(),
-            _ => None,
+            Self::Event { .. } | Self::Command { .. } => None,
+        }
+    }
+
+    pub fn into_value(self) -> Option<T> {
+        match self {
+            Self::State(current) => Some(current.value),
+            Self::Desired { current, .. } => current.map(|current| current.value),
+            Self::Event { .. } | Self::Command { .. } => None,
         }
     }
 }
-fn decode_current<T: DeserializeOwned>(
-    current: &CurrentValueView,
-) -> Result<Current<T>, PayloadError> {
-    Ok(Current {
-        value: from_value(current.value.as_inner())?,
-        last_write: current.last_write.clone(),
-        expires_at: current.expires_at,
-    })
+
+impl<T: FromValue> Node<T> {
+    fn decode(node: &NodeView) -> Result<Self, PayloadError> {
+        let current = |current: &CurrentValueView| -> Result<Current<T>, PayloadError> {
+            Ok(Current {
+                value: current.decode()?,
+                last_write: current.last_write.clone(),
+                expires_at: current.expires_at,
+            })
+        };
+        Ok(match node {
+            NodeView::State { current: value } => Self::State(current(value)?),
+            NodeView::Event { last_publisher } => Self::Event {
+                last_publisher: last_publisher.clone(),
+            },
+            NodeView::Desired {
+                claim,
+                current: value,
+                ..
+            } => Self::Desired {
+                claim: claim.clone(),
+                current: value.as_ref().map(current).transpose()?,
+            },
+            NodeView::Command { claim, .. } => Self::Command {
+                claim: claim.clone(),
+            },
+        })
+    }
 }
-fn decode_node<T: DeserializeOwned>(node: &NodeView) -> Result<DecodedNode<T>, PayloadError> {
-    Ok(match node {
-        NodeView::State { current } => DecodedNode::State(decode_current(current)?),
-        NodeView::Event { last_publisher } => DecodedNode::Event {
-            last_publisher: last_publisher.clone(),
-        },
-        NodeView::Desired {
-            definition,
-            claim,
-            current,
-        } => DecodedNode::Desired {
-            definition: definition.clone(),
-            claim: claim.clone(),
-            current: current.as_ref().map(decode_current).transpose()?,
-        },
-        NodeView::Command { definition, claim } => DecodedNode::Command {
-            definition: definition.clone(),
-            claim: claim.clone(),
-        },
-    })
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error("{topic} is not covered by this observer's selectors")]
+    NotObserved { topic: TopicPath },
+    #[error("{topic} is a {actual:?} node, not {expected:?}")]
+    WrongKind {
+        topic: TopicPath,
+        expected: NodeKind,
+        actual: NodeKind,
+    },
+    #[error("could not decode {topic}: {source}")]
+    Payload {
+        topic: TopicPath,
+        #[source]
+        source: PayloadError,
+    },
 }
+
+/// Anything naming a set of topics: selector text such as `"/battery/*"`, a
+/// [`Selector`], a [`TopicPath`], or a [`Topic`] handle (exactly that topic).
+pub trait SelectorSource: sealed::Source {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError>;
+}
+impl sealed::Source for str {}
+impl SelectorSource for str {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError> {
+        Selector::parse(self)
+    }
+}
+impl sealed::Source for String {}
+impl SelectorSource for String {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError> {
+        Selector::parse(self)
+    }
+}
+impl sealed::Source for Selector {}
+impl SelectorSource for Selector {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError> {
+        Ok(self.clone())
+    }
+}
+impl sealed::Source for TopicPath {}
+impl SelectorSource for TopicPath {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError> {
+        Ok(Selector::from(self))
+    }
+}
+impl<T, K: TopicKind> sealed::Source for Topic<T, K> {}
+impl<T, K: TopicKind> SelectorSource for Topic<T, K> {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError> {
+        Ok(self.selector())
+    }
+}
+impl<S: SelectorSource + ?Sized> sealed::Source for &S {}
+impl<S: SelectorSource + ?Sized> SelectorSource for &S {
+    fn to_selector(&self) -> Result<Selector, SelectorParseError> {
+        (**self).to_selector()
+    }
+}
+
+/// One selector source or a collection of them, as accepted by
+/// [`Session::observe`](crate::Session::observe) and friends:
+/// `"/battery/*"`, `&topic`, `["/a/*", "/b"]`, a tuple of different kinds
+/// such as `(&hue, &brightness, "/battery/*")`, or a `Vec`/slice.
+pub trait IntoSelectors {
+    fn into_selectors(self) -> Result<Vec<Selector>, SelectorParseError>;
+}
+impl<S: SelectorSource> IntoSelectors for S {
+    fn into_selectors(self) -> Result<Vec<Selector>, SelectorParseError> {
+        Ok(vec![self.to_selector()?])
+    }
+}
+impl<S: SelectorSource, const N: usize> IntoSelectors for [S; N] {
+    fn into_selectors(self) -> Result<Vec<Selector>, SelectorParseError> {
+        self.iter().map(SelectorSource::to_selector).collect()
+    }
+}
+impl<S: SelectorSource> IntoSelectors for Vec<S> {
+    fn into_selectors(self) -> Result<Vec<Selector>, SelectorParseError> {
+        self.iter().map(SelectorSource::to_selector).collect()
+    }
+}
+impl<S: SelectorSource> IntoSelectors for &[S] {
+    fn into_selectors(self) -> Result<Vec<Selector>, SelectorParseError> {
+        self.iter().map(SelectorSource::to_selector).collect()
+    }
+}
+
+macro_rules! tuple_selectors {
+    ($($name:ident),+) => {
+        impl<$($name: SelectorSource),+> IntoSelectors for ($($name,)+) {
+            #[allow(non_snake_case, reason = "the type parameters name the tuple fields")]
+            fn into_selectors(self) -> Result<Vec<Selector>, SelectorParseError> {
+                let ($($name,)+) = self;
+                Ok(vec![$($name.to_selector()?),+])
+            }
+        }
+    };
+}
+tuple_selectors!(A, B);
+tuple_selectors!(A, B, C);
+tuple_selectors!(A, B, C, D);
+tuple_selectors!(A, B, C, D, E);
+tuple_selectors!(A, B, C, D, E, F);
+tuple_selectors!(A, B, C, D, E, F, G);
+tuple_selectors!(A, B, C, D, E, F, G, H);

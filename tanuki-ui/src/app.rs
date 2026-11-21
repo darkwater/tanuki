@@ -6,8 +6,8 @@ use std::{
 
 use tokio::{sync::oneshot, task::JoinHandle};
 
-use tanuki_client::{ClientError, RawListener, Session, SessionEnd};
-use tanuki_protocol::{ClientName, Selector, SnapshotView, UpdateView};
+use tanuki_client::{ClientError, Closed, Event, Listener, Reconnect, Resync, Session, Status};
+use tanuki_protocol::{ClientName, SnapshotView};
 
 use crate::model::{ConnectionStatus, Model, ModelError};
 
@@ -32,8 +32,8 @@ impl ConnectionConfig {
 impl Default for ConnectionConfig {
     fn default() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        // PID separates simultaneous local processes; the counter also separates
-        // inspectors constructed inside one process. Attribution, not authentication.
+        // Stateless connections never replace each other, so the name is only
+        // attribution; PID and counter keep simultaneous inspectors apart in logs.
         let name = format!(
             "tanuki-ui-{}-{}",
             std::process::id(),
@@ -52,17 +52,18 @@ pub enum AppError {
     Task(#[from] tokio::task::JoinError),
     #[error(transparent)]
     Client(#[from] ClientError),
-    #[error(transparent)]
-    Ended(#[from] SessionEnd),
+    #[error("session ended: {0}")]
+    Ended(Closed),
     #[error(transparent)]
     Model(#[from] ModelError),
 }
 
 struct LiveConnection {
     session: Session,
-    // A terminal listener is removed, but the session stays owned until joined
-    // during explicit reconnect/exit. In particular, lag never registers again.
-    listener: Option<RawListener>,
+    // Removed once the stream ends or fails; the session stays owned until
+    // joined during explicit reconnect/exit.
+    listener: Option<Listener>,
+    baseline: SnapshotView,
 }
 
 struct ConnectionAttempt {
@@ -124,40 +125,30 @@ impl App {
         self.next_update().await
     }
 
-    fn install(&mut self, mut connection: LiveConnection) -> Result<(), AppError> {
-        let snapshot = connection
-            .listener
-            .as_ref()
-            .expect("new listener")
-            .initial_snapshot()
-            .clone();
-        // Registration, not historical hello, is the baseline for this listener.
+    fn install(&mut self, connection: LiveConnection) -> Result<(), AppError> {
+        // The listener's own baseline, not hello's, precedes its updates.
         let result = self
             .model
-            .replace_snapshot(snapshot)
+            .replace_snapshot(connection.baseline.clone())
             .map_err(AppError::from);
-        if result.is_err() {
-            connection.listener = None;
-        }
-        self.connection = Some(connection); // Still own failed setup for joined close.
-        if result.is_ok() {
-            self.model.set_status(ConnectionStatus::Live);
+        self.connection = Some(connection);
+        match &result {
+            Ok(()) => self.model.set_status(ConnectionStatus::Live),
+            Err(_) => self.drop_listener(),
         }
         result
     }
 
-    #[cfg(test)]
-    async fn install_session(&mut self, session: Session) -> Result<(), AppError> {
-        let listener = session.listen_updates().await?;
-        self.install(LiveConnection {
-            session,
-            listener: Some(listener),
-        })
+    fn drop_listener(&mut self) {
+        if let Some(connection) = &mut self.connection {
+            connection.listener = None;
+        }
     }
 
-    /// Apply exactly one complete batch. Suitable as a branch of tokio::select!;
-    /// cancelling the receive does not dequeue data. With no active listener,
-    /// remain pending so an input/tick loop cannot spin or auto-reconnect.
+    /// Apply exactly one complete batch or baseline. Suitable as a branch of
+    /// tokio::select!; cancelling the receive does not dequeue data. With no
+    /// active listener, remain pending so an input/tick loop cannot spin or
+    /// auto-reconnect.
     pub async fn next_update(&mut self) -> Result<(), AppError> {
         if let Some(attempt) = &mut self.attempt {
             // Awaiting a borrowed JoinHandle is cancellation safe: a render tick
@@ -180,70 +171,79 @@ impl App {
             }
             return result;
         }
-        let Some(listener) = self
-            .connection
-            .as_mut()
-            .and_then(|connection| connection.listener.as_mut())
-        else {
+        let Some(connection) = self.connection.as_mut() else {
+            return pending().await;
+        };
+        let Some(listener) = connection.listener.as_mut() else {
             return pending().await;
         };
         let received = listener.recv().await;
-        self.accept_received(received)
+        let ended = match connection.session.status().current() {
+            Status::Closed(closed) => Some(closed),
+            _ => None,
+        };
+        self.accept_received(received, ended)
     }
 
-    // This boundary also permits deterministic injection of terminal SDK results
-    // in unit tests. The SDK's own tests cover raw queue delivery and overflow.
+    // This boundary also permits deterministic injection of SDK results in unit
+    // tests. The SDK's own tests cover queue delivery and lag resynchronisation.
     fn accept_received(
         &mut self,
-        received: Result<Option<UpdateView>, SessionEnd>,
+        received: Option<Event>,
+        ended: Option<Closed>,
     ) -> Result<(), AppError> {
         let result = match received {
-            Ok(Some(update)) => self.model.apply(update).map_err(AppError::from),
-            Ok(None) => {
-                self.model.set_status(ConnectionStatus::Disconnected);
-                Ok(())
+            Some(Event::Update(update)) => self.model.apply(update).map_err(AppError::from),
+            Some(Event::Snapshot { snapshot, reason }) => {
+                if reason != Resync::Started {
+                    tracing::warn!(?reason, "inspector resynchronised from a fresh baseline");
+                }
+                self.model
+                    .replace_snapshot(SnapshotView::from(&snapshot))
+                    .map_err(AppError::from)
             }
-            Err(SessionEnd::Lagged) => {
-                self.model.set_status(ConnectionStatus::Lagged);
-                Err(SessionEnd::Lagged.into())
-            }
-            Err(error) => Err(error.into()),
+            None => match ended {
+                Some(Closed::Failed(cause)) => Err(AppError::Ended(Closed::Failed(cause))),
+                _ => {
+                    self.model.set_status(ConnectionStatus::Disconnected);
+                    Ok(())
+                }
+            },
         };
         if let Err(error) = &result {
-            if !matches!(self.model.status(), ConnectionStatus::Lagged) {
-                self.model
-                    .set_status(ConnectionStatus::Error(error.to_string()));
-            }
+            self.model
+                .set_status(ConnectionStatus::Error(error.to_string()));
             tracing::warn!(error = %crate::format::safe_text(&error.to_string()), "inspector stream ended; cached view is stale");
         }
-        if (result.is_err() || matches!(self.model.status(), ConnectionStatus::Disconnected))
-            && let Some(connection) = &mut self.connection
-        {
-            connection.listener = None;
+        if result.is_err() || matches!(self.model.status(), ConnectionStatus::Disconnected) {
+            self.drop_listener();
         }
         result
     }
 
     /// Always await on exit. Dropping App signals SDK shutdown as a fallback,
-    /// but only this explicit method joins the session's driver/writer tasks.
+    /// but only this explicit method joins the session's background task.
     pub async fn close(&mut self) -> Result<(), AppError> {
         self.model.set_status(ConnectionStatus::Disconnected);
         if let Some(attempt) = self.attempt.take() {
             let _ = attempt.cancel.send(());
             if let Some(connection) = attempt.task.await?? {
-                connection.session.close().await?;
+                connection.session.close().await;
             }
         }
         if let Some(connection) = self.connection.take() {
             drop(connection.listener);
-            connection.session.close().await?;
+            connection.session.close().await;
         }
         Ok(())
     }
 }
 
-/// Cancellation is checked before connect and during registration. Every Session
+/// Cancellation is checked during connect and registration. Every Session
 /// obtained by the job is either returned to App or closed/joined by this job.
+/// The inspector connects statelessly: it never replaces a same-named client's
+/// managed session (and with it any input claims). It reconnects only when
+/// asked, so the display keeps an explicit, labeled stale state.
 async fn open(
     config: ConnectionConfig,
     previous: Option<LiveConnection>,
@@ -251,35 +251,42 @@ async fn open(
 ) -> Result<Option<LiveConnection>, AppError> {
     if let Some(previous) = previous {
         drop(previous.listener);
-        if let Err(error) = previous.session.close().await {
-            tracing::warn!(error=%crate::format::safe_text(&error.to_string()),"previous inspector session joined before reconnect");
-        }
+        previous.session.close().await;
     }
+    let connect = Session::builder(config.url(), config.client.as_str())
+        .stateless()
+        .reconnect(Reconnect::Never)
+        .connect();
     let session = tokio::select! {biased;
         _=&mut cancelled=>return Ok(None),
-        session=Session::connect(config.url(),config.client.clone(),vec![Selector::parse("/**").expect("valid selection")])=>session?,
+        session=connect=>session?,
     };
-    let listener = tokio::select! {biased;
-        _=&mut cancelled=>None,
-        listener=session.listen_updates()=>Some(listener),
-    };
-    match listener {
-        Some(Ok(listener)) => {
-            for warning in session.hello_warnings() {
-                tracing::warn!(?warning, "inspector hello accepted with warning");
-            }
-            Ok(Some(LiveConnection {
-                session,
-                listener: Some(listener),
-            }))
+    let mut listener = match session.listen("/**") {
+        Ok(listener) => listener,
+        Err(error) => {
+            session.close().await;
+            return Err(error.into());
         }
-        result => {
-            let closed = session.close().await;
-            if let Some(Err(error)) = result {
-                return Err(error.into());
+    };
+    let first = tokio::select! {biased;
+        _=&mut cancelled=>None,
+        event=listener.recv()=>event,
+    };
+    match first {
+        Some(Event::Snapshot { snapshot, .. }) => Ok(Some(LiveConnection {
+            session,
+            listener: Some(listener),
+            baseline: SnapshotView::from(&snapshot),
+        })),
+        _ => {
+            let ended = session.status().current();
+            session.close().await;
+            match ended {
+                Status::Closed(Closed::Failed(cause)) => {
+                    Err(AppError::Ended(Closed::Failed(cause)))
+                }
+                _ => Ok(None),
             }
-            closed?;
-            Ok(None)
         }
     }
 }
@@ -287,9 +294,10 @@ async fn open(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tanuki_client::{Disconnect, Snapshot};
     use tanuki_protocol::{
-        ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, TopicPath, Value,
-        WireValue,
+        ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, TopicPath,
+        UpdateView, Value, WireValue,
     };
 
     fn baseline(sequence: u64) -> SnapshotView {
@@ -314,34 +322,45 @@ mod tests {
     }
 
     #[test]
-    fn terminal_receive_results_preserve_stale_data_and_typed_errors() {
+    fn baselines_replace_data_and_a_failed_end_keeps_stale_data_with_its_cause() {
         let mut app = App::new(ConnectionConfig::default());
         app.model.replace_snapshot(baseline(10)).unwrap();
         app.model.set_status(ConnectionStatus::Live);
-        assert!(matches!(
-            app.accept_received(Err(SessionEnd::Lagged)),
-            Err(AppError::Ended(SessionEnd::Lagged))
-        ));
-        assert_eq!(app.model.status(), &ConnectionStatus::Lagged);
+        // A lagged listener is resynchronised rather than ended.
+        let empty = Snapshot::from(SnapshotView {
+            sequence: 12,
+            nodes: Default::default(),
+        });
+        app.accept_received(
+            Some(Event::Snapshot {
+                snapshot: empty,
+                reason: Resync::Lagged,
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(app.model.status(), &ConnectionStatus::Live);
+        assert_eq!(app.model.sequence(), 12);
+        app.model.replace_snapshot(baseline(13)).unwrap();
+
+        let cause = Disconnect::Protocol("broken stream".into());
+        let error = app
+            .accept_received(None, Some(Closed::Failed(cause)))
+            .unwrap_err();
+        assert!(matches!(error, AppError::Ended(Closed::Failed(_))));
+        assert_eq!(
+            app.model.status(),
+            &ConnectionStatus::Error("session ended: protocol error: broken stream".into())
+        );
         assert!(
             app.model
                 .node(&TopicPath::parse("/cached").unwrap())
                 .is_some()
         );
         app.model.set_status(ConnectionStatus::Live);
-        let error = app
-            .accept_received(Err(SessionEnd::Protocol("broken stream".into())))
-            .unwrap_err();
-        assert!(matches!(error, AppError::Ended(SessionEnd::Protocol(_))));
-        assert_eq!(
-            app.model.status(),
-            &ConnectionStatus::Error("protocol violation: broken stream".into())
-        );
-        assert_eq!(app.model.sequence(), 10);
-        app.model.set_status(ConnectionStatus::Live);
-        app.accept_received(Ok(None)).unwrap();
+        app.accept_received(None, Some(Closed::ByClient)).unwrap();
         assert_eq!(app.model.status(), &ConnectionStatus::Disconnected);
-        assert_eq!(app.model.sequence(), 10);
+        assert_eq!(app.model.sequence(), 13);
     }
 
     #[test]
@@ -355,13 +374,16 @@ mod tests {
             .unwrap()
             .clone();
         let error = app
-            .accept_received(Ok(Some(UpdateView {
-                sequence: 10,
-                changes: vec![ChangeView::Removed {
-                    topic: "/cached".parse().unwrap(),
-                    previous,
-                }],
-            })))
+            .accept_received(
+                Some(Event::Update(UpdateView {
+                    sequence: 10,
+                    changes: vec![ChangeView::Removed {
+                        topic: "/cached".parse().unwrap(),
+                        previous,
+                    }],
+                })),
+                None,
+            )
             .unwrap_err();
         assert!(matches!(
             error,
@@ -395,13 +417,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registration_uses_current_listener_baseline_and_lag_requires_reconnect() {
+    async fn the_inspector_is_stateless_and_reconnect_installs_a_current_baseline() {
         use std::{
             sync::{Arc, Mutex},
             time::Duration,
         };
         use tanuki::{core::Core, domain::Timestamp, server::serve_with_core};
-        use tanuki_client::ExpiryUpdate;
+        use tanuki_client::{ClaimRelease, DesiredTopic, StateTopic};
         use tokio::{net::TcpListener, sync::oneshot, time::timeout};
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
@@ -409,58 +431,55 @@ mod tests {
         let task = tokio::spawn(serve_with_core(
             listener,
             Arc::new(Mutex::new(Core::new())),
-            Arc::new(|| Timestamp::new(jiff::Timestamp::from_second(1_700_000_000).unwrap())),
+            Arc::new(|| Timestamp::new(jiff::Timestamp::now())),
             async {
                 let _ = stopped.await;
             },
         ));
+        // A controller with the same name as the inspector keeps its claim.
+        let controller = Session::connect(&url, "inspector").await.unwrap();
+        let desired = DesiredTopic::<u8>::new("/lamp/desired").unwrap();
+        let mut control = controller
+            .control(&desired, ClaimRelease::Immediate)
+            .await
+            .unwrap();
         let config = ConnectionConfig::new(url.clone(), ClientName::parse("inspector").unwrap());
-        let observer = Session::connect(
-            &url,
-            config.client.clone(),
-            vec![Selector::parse("/**").unwrap()],
-        )
-        .await
-        .unwrap();
-        assert!(observer.initial_snapshot().nodes.is_empty());
-        let mut barrier = observer.listen_updates().await.unwrap();
-        let producer = Session::connect(&url, ClientName::parse("producer").unwrap(), vec![])
-            .await
-            .unwrap();
-        let receipt = producer
-            .state::<i64>("/between-hello-and-listen")
-            .unwrap()
-            .publish(&5, ExpiryUpdate::Clear)
-            .await
-            .unwrap();
-        timeout(Duration::from_secs(5), barrier.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        // The barrier proves the observer driver has applied the intervening write.
-        // A second registration must capture it even though hello did not.
         let mut app = App::new(config);
-        app.install_session(observer).await.unwrap();
-        let topic = TopicPath::parse("/between-hello-and-listen").unwrap();
-        assert!(app.model.node(&topic).is_some());
-        assert_eq!(app.model.sequence(), receipt.sequence);
-        app.model.set_filter("between".into());
-        let error = app.accept_received(Err(SessionEnd::Lagged)).unwrap_err();
-        assert!(matches!(error, AppError::Ended(SessionEnd::Lagged)));
-        assert_eq!(app.model.status(), &ConnectionStatus::Lagged);
-        assert!(app.connection.as_ref().unwrap().listener.is_none());
-        tokio::select! { biased;
-            _ = app.next_update() => panic!("terminated listener must stay inactive"),
-            () = std::future::ready(()) => {}
-        }
-        // Only an explicit reconnect may install another listener/baseline.
-        app.reconnect().await.unwrap();
+        timeout(Duration::from_secs(5), app.reconnect())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(app.model.status(), &ConnectionStatus::Live);
-        assert_eq!(app.model.filter(), "between");
-        assert!(app.model.node(&topic).is_some());
+        assert!(matches!(controller.status().current(), Status::Connected));
+
+        let producer = Session::connect(&url, "producer").await.unwrap();
+        let topic = StateTopic::<i64>::new("/after-connect").unwrap();
+        let receipt = producer.publish(&topic, &5).await.unwrap();
+        while app.model.sequence() < receipt.sequence {
+            timeout(Duration::from_secs(5), app.next_update())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert!(app.model.node(topic.path()).is_some());
+        app.model.set_filter("after".into());
+        // An explicit reconnect installs a fresh baseline and keeps navigation.
+        timeout(Duration::from_secs(5), app.reconnect())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(app.model.status(), &ConnectionStatus::Live);
+        assert_eq!(app.model.filter(), "after");
+        assert!(app.model.node(topic.path()).is_some());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), control.recv())
+                .await
+                .is_err(),
+            "the controller kept its claim"
+        );
         app.close().await.unwrap();
-        producer.close().await.unwrap();
+        producer.close().await;
+        controller.close().await;
         let _ = stop.send(());
         timeout(Duration::from_secs(5), task)
             .await

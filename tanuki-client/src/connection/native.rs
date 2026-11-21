@@ -1,4 +1,4 @@
-use super::{Codec, ConnectionError, MAX_MESSAGE_BYTES};
+use super::{Codec, ConnectionError, Incoming, MAX_MESSAGE_BYTES};
 use crate::protocol::{ClientMessage, ServerMessage};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -52,31 +52,15 @@ impl Connection {
             return Ok(None);
         }
         loop {
-            let Some(frame) = self.socket.next().await else {
-                self.ended = true;
-                return Ok(None);
-            };
-            match frame? {
-                Message::Text(text) => return Ok(Some(serde_json::from_str(&text)?)),
-                Message::Binary(bytes) => {
-                    return Ok(Some(crate::protocol::decode_messagepack(&bytes)?));
-                }
-                Message::Ping(_) => self.socket.flush().await?,
-                Message::Pong(_) | Message::Frame(_) => {}
-                Message::Close(frame) => {
+            match decode_frame(self.socket.next().await) {
+                Ok(Incoming::Message(message)) => return Ok(Some(message)),
+                // Tungstenite queued the pong; flushing sends it.
+                Ok(Incoming::Control) => self.socket.flush().await?,
+                result => {
                     self.ended = true;
-                    // Tungstenite queued the close acknowledgement.
+                    // Tungstenite queued any close acknowledgement.
                     let _ = self.socket.flush().await;
-                    if let Some(frame) = frame {
-                        let code = u16::from(frame.code);
-                        if code != 1000 && code != 1001 {
-                            return Err(ConnectionError::Closed {
-                                code,
-                                reason: frame.reason.to_string(),
-                            });
-                        }
-                    }
-                    return Ok(None);
+                    return result.map(|_| None);
                 }
             }
         }
@@ -100,4 +84,28 @@ pub(crate) fn encode_message(
         return Err(ConnectionError::MessageTooLarge);
     }
     Ok(frame)
+}
+
+/// Decodes one incoming frame. Message size is limited by the socket config.
+pub(crate) fn decode_frame(
+    frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+) -> Result<Incoming, ConnectionError> {
+    match frame {
+        None => Ok(Incoming::Closed),
+        Some(Err(source)) => Err(ConnectionError::Transport(source)),
+        Some(Ok(Message::Text(text))) => Ok(Incoming::Message(serde_json::from_str(&text)?)),
+        Some(Ok(Message::Binary(bytes))) => Ok(Incoming::Message(
+            crate::protocol::decode_messagepack(&bytes)?,
+        )),
+        Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => Ok(Incoming::Control),
+        Some(Ok(Message::Close(frame))) => match frame {
+            Some(frame) if !matches!(u16::from(frame.code), 1000 | 1001) => {
+                Err(ConnectionError::Closed {
+                    code: frame.code.into(),
+                    reason: frame.reason.to_string(),
+                })
+            }
+            _ => Ok(Incoming::Closed),
+        },
+    }
 }

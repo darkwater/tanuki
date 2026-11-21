@@ -268,28 +268,28 @@ cargo test --all-targets --all-features
 cargo test --release --all-targets --all-features
 ```
 
-## Native SDK acceptance — 2026-10-07
+## Native SDK acceptance — rewritten 2026-11-21
 
-All tests below run in `cargo test --workspace` and its release-mode counterpart.
-Real-socket tests bind loopback port 0 and use `server::serve_with_core`; run them
-with local networking permitted. Scripted peers are restricted to client failure
-injection and do not substitute for production-server acceptance.
+The SDK runs against the production server over loopback (`tanuki/tests/native_sdk.rs`),
+against scripted peers (`tanuki-client/tests/session_failures.rs`), and in a
+real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
 
-| Contract/story | Evidence |
+| Behaviour | Coverage |
 | --- | --- |
-| SDK-01, U1/T1 | `tanuki-protocol/tests/requests.rs` covers bidirectional request codecs, validated names/paths, null presence and discriminator order; existing protocol/domain/HTTP/socket suites remain regressions |
-| SDK-02, T1 | `tanuki/tests/native_sdk.rs::direct_connection_receives_hello_reply_update_and_remote_error_in_both_codecs` covers mixed frame codecs and correlated replies/errors; `direct_empty_producer_selection_exposes_replacement_close_reason_once` covers empty hello and direct close 4001 |
-| SDK-03, C3/US-01.A1 | `session_writes_without_listener_polling_and_registers_current_baselines` and `registration_racing_with_commits_loses_no_retained_update_and_observer_drop_is_independent` exercise current baseline registration, interleaving and two consumers |
-| SDK-03, T1/C1 | `a_full_raw_queue_reports_lag_once_without_stalling_another_listener` and `replacement_and_drop_end_listeners_but_preserve_weak_handle_lifetime` exercise full queues, fresh registration, close 4001, hello warnings, weak handles and drop |
-| SDK-03 failure injection | `tanuki-client/tests/session_failures.rs` covers cancellation/late replies, pending capacity, lost reply/unknown outcome, oversized local failure, uncorrelated errors, duplicate sequences and invalid option limits; `remote_slow_consumer_reason_preempts_a_full_data_queue` injects close 1013 |
-| SDK-04, U1 | `tanuki-client/tests/payload.rs` covers Serde structs/enums/options/bytes, literal reserved keys, i64 limits, unsigned overflow, nonfinite values, map-key rejection and decode errors |
-| SDK-04/05, US-07.A1/A2 | `tanuki/tests/native_sdk.rs::typed_lamp_handles_keep_claims_explicit_and_batch_rejection_atomic` covers local-only handles, explicit claim/submission, cross-session rejection and rollback of mixed state/event writes |
-| SDK-05, US-09.A1/A2/A4 | `observers_deliver_initial_empty_then_atomic_complete_immutable_snapshots` and `observation_keeps_null_missing_kind_errors_and_metadata_changes_distinct` cover whole snapshots, removal, claim-only metadata, null/absent payload and decode recovery |
-| SDK-05, US-07.A3/US-01.A4 | `sdk_observers_receive_timer_removal_and_desired_expiry_without_losing_claim` observes production deadline transitions with explicit controlled wall time and real transport |
-| SDK-05 latest state/lag | `observe::tests::unread_outputs_coalesce_but_each_input_delta_is_applied` synchronizes on private watch version, without sleeps; `projection_input_lag_is_terminal_even_with_unread_output` forces a full input queue before scheduling the projection |
-| SDK-05 clean shutdown | `session::tests::clean_closure_drains_already_admitted_batches` and `observe::tests::clean_projection_closure_delivers_the_last_unseen_snapshot` distinguish clean draining from abnormal termination; `tanuki/tests/native_sdk.rs::standard_stream_observation_is_native_send_and_ends_after_joined_close` verifies standard Stream polling and native Send ergonomics |
-| SDK-06, US-01.A1/A2/US-09.A3/A5 | `tanuki/tests/native_sdk.rs::sdk_battery_producer_and_dashboard_combine_with_stateless_phone_http` runs a typed laptop, union-selected dashboard and same-name stateless HTTP phone through the production server |
-| SDK-06, occurrences/T1 | `instant_occurrences_remain_ordered_batches_and_are_not_replayed_to_late_listeners` and `both_socket_codecs_preserve_bytes_semantic_time_and_literal_tag_maps_in_requests_updates_and_snapshots` verify occurrence order, late baseline and full-message value preservation |
+| Direct connection: hello, mixed codecs, update-before-reply, errors | `direct_connection_exchanges_hello_update_reply_and_errors_in_both_codecs` |
+| Wildcard observation, typed values, read-your-writes, provenance, NotObserved/WrongKind (US-01, US-09) | `observers_see_wildcards_typed_values_and_their_own_writes` |
+| Atomic batches, local payload errors at commit, rejected batches without effect, leases | `batches_commit_atomically_and_report_encoding_and_rejection_errors` |
+| Controllers: pending intent, each submission once (also repeats), clear, claim loss, stateless cannot claim (US-07, US-08) | `a_controller_receives_each_request_until_its_claim_is_taken` |
+| Typed event occurrences in batch order; command controllers | `events_and_commands_arrive_typed_and_in_order` |
+| Listener lag resynchronises with current state | `a_lagging_listener_is_resynchronised_with_the_current_state`; browser `a_lagging_listener_is_resynchronised_without_affecting_another` |
+| Server restart: status, fail-fast writes, resumed observers, re-claimed inputs | `sessions_reconnect_resume_observers_and_reclaim_inputs` |
+| A reconnecting controller does not take back a claimed input | `a_reconnecting_controller_does_not_take_back_an_input_claimed_meanwhile` |
+| `start()` retries until the server appears | `start_keeps_trying_until_the_server_appears` |
+| Replacement ends the old session; close and drop end observers | `a_replaced_managed_session_ends_while_the_new_one_continues`, `closing_ends_observers_and_rejects_later_calls` |
+| Bytes, semantic time and literal tag maps through `Topic<Value>` in both codecs | `both_codecs_preserve_bytes_semantic_time_and_literal_tag_maps` |
+| Reply timeout and late replies, unknown outcome, oversize, sequence regression, trailing bytes, 4001 without reconnect, close during a write, failing first connect | `session_failures.rs` (one test each) |
+| Native `wss://` reaches the TLS handshake | `tanuki-client/tests/tls.rs` |
+| Serde payload conversion | `tanuki-client/tests/payload.rs` |
 | Regression found by SDK | `tanuki/tests/persistence.rs::binary_semantic_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
 
 Behavioral red phases caught missing receive behavior, missing projection
@@ -327,15 +327,12 @@ Behavioral regressions reproduced and corrected:
   previously panicked with capacity overflow. The visitor now grows runtime
   lists only as elements arrive. `truncated_messagepack_array_returns_a_decode_error`
   also exercises a real maximum-length array32 header with no payload.
-- `session_failures::dropping_session_rejects_queued_writes_as_definitely_unsent`
-  synchronizes admission and drop on the current-thread runtime. Before the fix,
-  the queued request could be sent or classified as unknown. It now returns
-  `SessionGone`, and the peer confirms no write arrived.
-- `shutdown_keeps_transmitted_writes_unknown_and_rejects_new_writes_locally`
-  confirms the opposite boundary: an already received but unacknowledged write
-  retains `OutcomeUnknown`, while writes after termination fail locally.
-- `binary_frame_with_trailing_data_terminates_without_delivering_a_partial_message`
-  previously delivered an update from a malformed binary message. Shared frame
+- `session_failures::closing_answers_a_write_in_flight_as_closed` and
+  `a_connection_lost_after_sending_leaves_the_outcome_unknown` pin the
+  outcome boundary: a write the peer received but never answered is
+  `OutcomeUnknown` on connection loss and `Closed` on an explicit close.
+- `trailing_messagepack_bytes_fail_without_applying_a_partial_message`
+  covers the earlier regression where a malformed binary message delivered an update. Shared frame
   decoding now rejects trailing data in direct and session clients and in the
   server. `websocket_api::trailing_messagepack_data_rejects_the_entire_write_without_mutation`
   exercises the production server, verifies no sequence or state change, and
@@ -433,18 +430,16 @@ logic over ephemeral loopback WebSockets, with simulated producers:
 | Empty and populated listener baselines; later wildcard paths | `empty_populated_and_future_wildcard_topics_follow_the_live_listener` |
 | Whole paired lamp batches, duplicate-value metadata refresh and state expiry | `whole_batches_metadata_and_scheduled_expiry_reach_the_model` |
 | `/**` includes reserved diagnostics in both snapshots and deltas; explicit system selectors agree | `broad_subscription_includes_exposed_system_diagnostics` |
-| Duplicate-name kick preserves stale data; explicit reconnect discards absent nodes | `duplicate_replacement_marks_cache_stale_and_reconnect_replaces_baseline` |
+| A same-named managed session does not replace the stateless inspector; explicit reconnect installs a fresh baseline | `a_same_named_managed_session_does_not_replace_the_stateless_inspector` |
 | Server shutdown and failed reconnect invalidate currentness without erasing cache | `shutdown_and_failed_reconnect_preserve_stale_display_and_join_session` |
-| Generated local names coexist under normal server replacement semantics | `generated_names_allow_multiple_inspectors_without_replacement` |
+| Generated local names coexist (stateless connections never replace) | `generated_names_allow_multiple_inspectors_without_replacement` |
 | Cancelled idle receive and multiple commits before rendering lose no batches | `cancelled_idle_receive_and_delayed_rendering_do_not_skip_batches` |
 
-App unit tests inject exact SDK receive results for clean end, lag and error,
-checking stale-state retention and typed error sources. Another production-server
-unit test uses a received batch as a barrier after a write between hello and
-registration: installing the listener must use the newer baseline. It then
-injects lag at the SDK-result boundary, verifies the listener is removed and
-receiving stays pending, and explicitly reconnects. No sleep-based lag test or
-SDK behavior change is needed. Model replacement coverage accepts a restarted
+App unit tests inject SDK events for lag resynchronisation, clean end and
+failed end, checking stale-state retention and typed error sources. A
+production-server unit test connects the inspector with the same name as a
+claiming controller, verifies the controller keeps its claim, follows live
+updates and explicitly reconnects to a fresh baseline. Model replacement coverage accepts a restarted
 sequence, preserves surviving navigation and rejects malformed snapshots without
 mutation. The library README example is a compiled doctest.
 

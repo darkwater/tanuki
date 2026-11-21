@@ -178,7 +178,6 @@ impl ViewState {
             ConnectionStatus::Live => format!("LIVE  sequence {}", m.sequence()),
             ConnectionStatus::Connecting => "CONNECTING • STALE cache".into(),
             ConnectionStatus::Disconnected => "DISCONNECTED • STALE cache".into(),
-            ConnectionStatus::Lagged => "LAGGED • STALE cache • r reconnect".into(),
             ConnectionStatus::Error(e) => format!("ERROR • STALE cache • {}", safe_text(e)),
         };
         let area = f.area();
