@@ -336,12 +336,10 @@ pub enum NodeView {
         last_publisher: ProvenanceView,
     },
     Desired {
-        definition: InputDefinitionView,
         claim: Option<ClaimView>,
         current: Option<CurrentValueView>,
     },
     Command {
-        definition: InputDefinitionView,
         claim: Option<ClaimView>,
     },
 }
@@ -387,9 +385,6 @@ impl NodeView {
         }
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct InputDefinitionView {}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CurrentValueView {
@@ -490,6 +485,27 @@ impl RequestId {
     }
 }
 
+impl From<&str> for RequestId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl From<String> for RequestId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// An accepted write: the commit's global sequence and any warnings. It does
+/// not promise that a device acted or that the commit was persisted. The
+/// same shape is the `data` of a successful HTTP write.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CommitView {
+    pub sequence: u64,
+    pub warnings: Vec<DiagnosticView>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
@@ -503,9 +519,10 @@ pub enum ServerMessage {
         sequence: u64,
         changes: Vec<ChangeView>,
     },
+    /// The answer to a successful `write`.
     Reply {
         request_id: RequestId,
-        result: RawJson,
+        result: CommitView,
     },
     Error {
         request_id: Option<RequestId>,

@@ -84,13 +84,20 @@ fn null_payload_presence_and_discriminator_order_are_preserved() {
     assert!(serde_json::from_str::<WireOperation>(missing).is_err());
     assert!(serde_json::from_str::<NodeView>(r#"{"kind":"state","current":null}"#).is_err());
     assert!(matches!(
-        serde_json::from_str::<ServerMessage>(r#"{"result":null,"request_id":"w","type":"reply"}"#)
-            .unwrap(),
+        serde_json::from_str::<ServerMessage>(
+            r#"{"result":{"sequence":1,"warnings":[]},"request_id":"w","type":"reply"}"#
+        )
+        .unwrap(),
         ServerMessage::Reply {
-            result: serde_json::Value::Null,
+            result: CommitView { sequence: 1, .. },
             ..
         }
     ));
+    // A reply always carries a commit.
+    assert!(
+        serde_json::from_str::<ServerMessage>(r#"{"result":null,"request_id":"w","type":"reply"}"#)
+            .is_err()
+    );
 }
 
 #[test]

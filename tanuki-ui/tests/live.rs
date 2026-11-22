@@ -114,7 +114,7 @@ impl Writer {
         loop {
             match receive(self.connection.recv()).await.unwrap() {
                 Some(ServerMessage::Reply { request_id, result }) if request_id.as_str() == id => {
-                    return result["sequence"].as_u64().unwrap();
+                    return result.sequence;
                 }
                 Some(ServerMessage::Error { error, .. }) => panic!("write rejected: {error:?}"),
                 Some(_) => {}

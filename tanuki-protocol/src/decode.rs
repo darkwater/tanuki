@@ -117,7 +117,6 @@ struct NodeFields {
     kind: String,
     current: Option<CurrentValueView>,
     last_publisher: Option<ProvenanceView>,
-    definition: Option<InputDefinitionView>,
     claim: Option<ClaimView>,
 }
 impl<'de> Deserialize<'de> for NodeView {
@@ -131,14 +130,10 @@ impl<'de> Deserialize<'de> for NodeView {
                 last_publisher: required(f.last_publisher, "last_publisher")?,
             }),
             "desired" => Ok(Self::Desired {
-                definition: required(f.definition, "definition")?,
                 claim: f.claim,
                 current: f.current,
             }),
-            "command" => Ok(Self::Command {
-                definition: required(f.definition, "definition")?,
-                claim: f.claim,
-            }),
+            "command" => Ok(Self::Command { claim: f.claim }),
             other => Err(de::Error::unknown_variant(
                 other,
                 &["state", "event", "desired", "command"],
@@ -192,8 +187,7 @@ struct ServerFields {
     nodes: Option<BTreeMap<TopicPath, NodeView>>,
     warnings: Option<Vec<DiagnosticView>>,
     changes: Option<Vec<ChangeView>>,
-    #[serde(default, deserialize_with = "present")]
-    result: Option<serde_json::Value>,
+    result: Option<CommitView>,
     error: Option<ErrorView>,
 }
 impl<'de> Deserialize<'de> for ServerMessage {

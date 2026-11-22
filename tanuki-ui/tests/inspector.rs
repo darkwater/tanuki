@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use tanuki_protocol::{
-    ChangeView, CurrentValueView, InputDefinitionView, NodeView, OccurrenceView, ProvenanceView,
-    SnapshotView, TopicPath, UpdateView, Value, WireValue,
+    ChangeView, CurrentValueView, NodeView, OccurrenceView, ProvenanceView, SnapshotView,
+    TopicPath, UpdateView, Value, WireValue,
 };
 use tanuki_ui::{format::*, model::*};
 
@@ -77,17 +77,13 @@ fn four_kinds_and_payload_states_are_distinct() {
     let nodes = [
         state(Value::Null),
         NodeView::Desired {
-            definition: InputDefinitionView {},
             claim: None,
             current: None,
         },
         NodeView::Event {
             last_publisher: provenance("event producer"),
         },
-        NodeView::Command {
-            definition: InputDefinitionView {},
-            claim: None,
-        },
+        NodeView::Command { claim: None },
     ];
     assert_eq!(
         nodes.each_ref().map(kind_label),
@@ -320,7 +316,6 @@ fn controls_in_paths_and_claims_are_displayed_without_mutating_dtos() {
         },
     };
     let node = NodeView::Desired {
-        definition: InputDefinitionView {},
         claim: Some(claim),
         current: Some(CurrentValueView {
             value: WireValue::new(Value::Null),

@@ -11,12 +11,6 @@ pub use request::{RequestConversionError, expiry_update, nonnegative_duration};
 use serde::Serialize;
 pub use tanuki_protocol::*;
 
-#[derive(Serialize)]
-pub struct CommitView {
-    sequence: u64,
-    warnings: Vec<DiagnosticView>,
-}
-
 impl From<&crate::core::CommitOutcome> for CommitView {
     fn from(outcome: &crate::core::CommitOutcome) -> Self {
         Self {
@@ -123,12 +117,10 @@ impl From<&Node> for NodeView {
                 last_publisher: ProvenanceView::from(node.last_publisher()),
             },
             Node::Desired(node) => Self::Desired {
-                definition: InputDefinitionView {},
                 claim: node.claim().map(ClaimView::from),
                 current: node.current().map(CurrentValueView::from),
             },
             Node::Command(node) => Self::Command {
-                definition: InputDefinitionView {},
                 claim: node.claim().map(ClaimView::from),
             },
         }

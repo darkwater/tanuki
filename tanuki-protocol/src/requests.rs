@@ -87,12 +87,46 @@ pub enum WireInputKind {
 pub enum WireExpiry {
     Preserve,
     Clear,
-    Set { duration: String },
+    /// A fixed ISO 8601 duration such as `PT1H`; the server rejects invalid
+    /// or negative text with `invalid_duration` or `negative_duration`.
+    Set {
+        duration: String,
+    },
+}
+
+impl WireExpiry {
+    /// Expire `duration` after the write is applied.
+    #[must_use]
+    pub fn after(duration: std::time::Duration) -> Self {
+        Self::Set {
+            duration: iso_duration(duration),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum WireRelease {
     Immediate,
-    After { duration: String },
+    /// Keep the claim for a fixed ISO 8601 duration after disconnect.
+    After {
+        duration: String,
+    },
+}
+
+impl WireRelease {
+    /// Keep the claim for `duration` after the session disconnects.
+    #[must_use]
+    pub fn after(duration: std::time::Duration) -> Self {
+        Self::After {
+            duration: iso_duration(duration),
+        }
+    }
+}
+
+/// Durations beyond jiff's range saturate; the server then rejects them with
+/// `deadline_out_of_range` instead of the client panicking.
+fn iso_duration(duration: std::time::Duration) -> String {
+    let duration = jiff::SignedDuration::try_from(duration).unwrap_or(jiff::SignedDuration::MAX);
+    jiff::fmt::temporal::SpanPrinter::new().duration_to_string(&duration)
 }

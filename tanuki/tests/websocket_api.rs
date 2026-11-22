@@ -291,7 +291,7 @@ async fn json_hello_snapshot_then_own_atomic_update_then_write_reply() {
         panic!("the correlated reply must follow the update");
     };
     assert_eq!(request_id.as_str(), "write-1");
-    assert_eq!(result["sequence"], sequence);
+    assert_eq!(result.sequence, sequence);
 
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;

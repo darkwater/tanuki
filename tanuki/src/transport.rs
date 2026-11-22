@@ -4,7 +4,7 @@ use axum::{
     Extension, Json, Router,
     extract::{
         FromRequestParts, Path, Query, State, WebSocketUpgrade,
-        rejection::{JsonRejection, QueryRejection},
+        rejection::JsonRejection,
         ws::{CloseFrame, Message, WebSocket},
     },
     http::{StatusCode, request::Parts},
@@ -678,8 +678,7 @@ fn apply_websocket_write(
             }
             ServerMessage::Reply {
                 request_id,
-                result: serde_json::to_value(CommitView::from(&outcome))
-                    .expect("commit replies always serialize"),
+                result: CommitView::from(&outcome),
             }
         }
         Err(error) => api_server_error(Some(request_id), error),
@@ -858,9 +857,32 @@ struct StateRequest {
     expiry: Option<WireExpiry>,
 }
 
-#[derive(Deserialize)]
-struct ReadQuery {
-    select: Selector,
+/// The selection of an HTTP read: one or more `select` parameters, like the
+/// selector list of a WebSocket hello (`?select=/battery/*&select=/lamp/**`).
+/// Axum's `Query` cannot collect repeated keys, so this parses the raw query.
+struct ReadQuery(Selection);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ReadQuery {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let invalid = |message: String| ApiError::bad_request(ErrorCode::InvalidQuery, message);
+        let selectors = form_urlencoded::parse(parts.uri.query().unwrap_or_default().as_bytes())
+            .filter(|(key, _)| key == "select")
+            .map(|(_, value)| {
+                Selector::parse(&value).map_err(|error| invalid(format!("select={value}: {error}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if selectors.is_empty() {
+            return Err(invalid(
+                "at least one `select` parameter is required".into(),
+            ));
+        }
+        Ok(Self(Selection::new(selectors)))
+    }
 }
 
 async fn batch_write(
@@ -909,27 +931,21 @@ fn apply(
 
 async fn snapshot(
     State(state): State<HttpState>,
-    query: Result<Query<ReadQuery>, QueryRejection>,
+    ReadQuery(selection): ReadQuery,
 ) -> Result<Json<ApiResponse<SnapshotView>>, ApiError> {
-    let Query(query) =
-        query.map_err(|error| ApiError::bad_request(ErrorCode::InvalidQuery, error.body_text()))?;
-    let snapshot = state
-        .read(&Selection::new(vec![query.select]))
-        .map_err(ApiError::from_runtime)?;
+    let snapshot = state.read(&selection).map_err(ApiError::from_runtime)?;
     Ok(Json(ApiResponse::success(SnapshotView::from(&snapshot))))
 }
 
 async fn sse(
     State(state): State<HttpState>,
-    query: Result<Query<ReadQuery>, QueryRejection>,
+    ReadQuery(selection): ReadQuery,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let Query(query) =
-        query.map_err(|error| ApiError::bad_request(ErrorCode::InvalidQuery, error.body_text()))?;
     let lease = state.track_stream().map_err(ApiError::from_runtime)?;
     let stopped = state.shutdown_signal();
     let subscription = state
         .subscribe(
-            Selection::new(vec![query.select]),
+            selection,
             SubscriptionCapacity::new(SUBSCRIPTION_BATCH_CAPACITY)
                 .expect("configured subscription capacity is nonzero"),
         )

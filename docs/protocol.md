@@ -47,8 +47,8 @@ prefix.
 | --- | --- | --- |
 | `POST /v1/state/{topic...}` | `{"value":72,"expiry":{"mode":"clear"}}` | Convenience retained-state write |
 | `POST /v1/write` | `{"operations":[...]}` | One atomic operation batch |
-| `GET /v1/snapshot?select=/battery/*` | one selector | Selection-filtered retained snapshot |
-| `GET /v1/sse?select=/battery/*` | one selector | Snapshot followed by live atomic update events |
+| `GET /v1/snapshot?select=/battery/*` | one or more `select` | Selection-filtered retained snapshot |
+| `GET /v1/sse?select=/battery/*&select=/lamp/**` | one or more `select` | Snapshot followed by live atomic update events |
 | `PUT /v1/schemas/{name}` | complete schema declaration | Atomically install or replace one named schema |
 | `PUT /v1/links/{name}` | `{"mount":"/view","target":"/canonical"}` | Atomically install or replace a writable subtree link |
 | `DELETE /v1/links/{name}` | none | Remove a link and retract its projected nodes |
@@ -70,7 +70,11 @@ codec, so the bound also covers MessagePack, and a single value always fits a
 1 MiB WebSocket message. A larger value rejects the whole batch with
 `value_too_large` (HTTP 413).
 
-Successes are `{"ok":true,"data":...}`.
+Successes are `{"ok":true,"data":...}`. A write's `data` is a commit:
+`{"sequence":43,"warnings":[]}` (`tanuki_protocol::CommitView`), the same
+object a WebSocket `reply` carries as `result`. Reads repeat `select` for
+several selectors, like a WebSocket hello's list; a missing or invalid
+selector is `invalid_query`.
 
 ### Error codes
 
@@ -165,7 +169,9 @@ MessagePack array lengths are untrusted: runtime lists allocate as elements
 decode, rather than reserving memory for a potentially truncated array header.
 These checks do not establish a total decoded-memory budget.
 
-State and desired nodes use an explicit `current` wrapper. Desired
+Input nodes (desired and command) carry their `claim`; the former empty
+`"definition": {}` field was removed on 2026-11-22. State and desired nodes
+use an explicit `current` wrapper. Desired
 `"current":null` means no payload exists; `"current":{"value":null,...}`
 means `Value::Null` was actually submitted. This distinction is preserved in
 snapshots and updates.
@@ -178,7 +184,7 @@ acknowledgement:
 ```json
 {"type":"snapshot","request_id":"s1","sequence":42,"nodes":{},"warnings":[]}
 {"type":"update","sequence":43,"changes":[]}
-{"type":"reply","request_id":"w1","result":{}}
+{"type":"reply","request_id":"w1","result":{"sequence":43,"warnings":[]}}
 {"type":"error","request_id":"w1","error":{"code":"...","message":"..."}}
 ```
 

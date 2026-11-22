@@ -821,3 +821,60 @@ async fn raw_http(address: std::net::SocketAddr, request: &str) -> String {
     stream.read_to_end(&mut response).await.unwrap();
     String::from_utf8(response).unwrap()
 }
+
+#[tokio::test]
+async fn reads_accept_several_selectors_like_websocket_hello() {
+    let (app, _, _runtime) = test_app();
+    let mut request = json_request(
+        "POST",
+        "/v1/write",
+        json!({"operations": [
+            {"op": "publish_state", "topic": "/battery/laptop", "value": 80},
+            {"op": "publish_state", "topic": "/tv/volume", "value": 12},
+            {"op": "publish_state", "topic": "/tv/mute", "value": false},
+            {"op": "publish_state", "topic": "/lamp/hue", "value": 120}
+        ]}),
+    );
+    request
+        .headers_mut()
+        .insert("tanuki-client", "test".parse().unwrap());
+    assert_eq!(
+        app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::OK
+    );
+    // Repeated `select`; braces (with a comma) stay inside one selector.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/snapshot?select=/battery/*&select=/tv/%7Bvolume,mute%7D")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    let mut topics: Vec<_> = body["data"]["nodes"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    topics.sort();
+    assert_eq!(topics, ["/battery/laptop", "/tv/mute", "/tv/volume"]);
+
+    for uri in ["/v1/snapshot", "/v1/snapshot?select=nope", "/v1/sse"] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(
+            response_json(response).await["error"]["code"],
+            "invalid_query",
+            "{uri}"
+        );
+    }
+}

@@ -21,7 +21,7 @@ while let Some(message) = connection.recv().await? {
     match message {
         ServerMessage::Snapshot { sequence, nodes, .. } => println!("{sequence}: {} nodes", nodes.len()),
         ServerMessage::Update { sequence, changes } => println!("{sequence}: {changes:?}"),
-        ServerMessage::Reply { request_id, result } => println!("{request_id:?}: {result}"),
+        ServerMessage::Reply { request_id, result } => println!("{request_id:?} committed as {}", result.sequence),
         ServerMessage::Error { request_id, error } => eprintln!("{request_id:?}: {error:?}"),
     }
 }

@@ -19,7 +19,6 @@ fn typed_view_fields_serialize_to_the_established_json() {
         nodes: [(
             "/lamp/desired".parse().unwrap(),
             NodeView::Desired {
-                definition: InputDefinitionView {},
                 claim: Some(ClaimView {
                     id: 2,
                     owner: "lamp controller".parse().unwrap(),
@@ -48,7 +47,6 @@ fn typed_view_fields_serialize_to_the_established_json() {
         "sequence": 7,
         "nodes": {"/lamp/desired": {
             "kind": "desired",
-            "definition": {},
             "claim": {"id": 2, "owner": "lamp controller", "session": 3,
                       "release": {"mode": "after", "duration": "PT1M30S"}},
             "current": {"value": 70,
@@ -82,4 +80,49 @@ fn error_codes_are_snake_case_and_unknown_codes_still_decode() {
     let future: ErrorView =
         serde_json::from_value(json!({"code": "added_later", "message": "new"})).unwrap();
     assert_eq!(future.code, ErrorCode::Unknown);
+}
+
+#[test]
+fn write_replies_are_typed_commits() {
+    let message = ServerMessage::Reply {
+        request_id: RequestId::from("w1"),
+        result: CommitView {
+            sequence: 43,
+            warnings: vec![DiagnosticView::NodeKindChanged {
+                topic: "/lamp".parse().unwrap(),
+                previous: NodeKind::State,
+                replacement: NodeKind::Desired,
+            }],
+        },
+    };
+    let expected = json!({
+        "type": "reply",
+        "request_id": "w1",
+        "result": {"sequence": 43, "warnings": [{"code": "node_kind_changed", "topic": "/lamp",
+                                                 "previous": "state", "replacement": "desired"}]}
+    });
+    assert_eq!(serde_json::to_value(&message).unwrap(), expected);
+    assert_eq!(
+        serde_json::from_value::<ServerMessage>(expected).unwrap(),
+        message
+    );
+}
+
+#[test]
+fn durations_have_typed_constructors_with_the_wire_text() {
+    use std::time::Duration;
+    assert_eq!(
+        WireExpiry::after(Duration::from_secs(90)),
+        WireExpiry::Set {
+            duration: "PT1M30S".into()
+        }
+    );
+    assert_eq!(
+        WireRelease::after(Duration::from_millis(1500)),
+        WireRelease::After {
+            duration: "PT1.5S".into()
+        }
+    );
+    assert_eq!(RequestId::from("a"), RequestId::new("a".into()));
+    assert_eq!(RequestId::from(String::from("b")).as_str(), "b");
 }
