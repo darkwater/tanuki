@@ -283,10 +283,13 @@ and in a real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
 | Replacement surfaces close code 4001 and reason `session_replaced` | browser `a_replaced_managed_session_closes_with_4001` |
 | Invalid URLs and oversized outgoing messages fail locally; the connection stays usable | browser `invalid_urls_and_oversized_messages_fail_locally` |
 | Native `wss://` reaches the TLS handshake | `tanuki-client/tests/tls.rs` |
-| Serde payload conversion | `tanuki-protocol/tests/payload.rs` |
+| Serde payload conversion: enums, options, `serde_bytes`, `Value` as a nested Serde type (exact, not tagged), Tanuki JSON and native MessagePack for `Value`, `u8` sequences as bytes but fixed arrays and tuples as lists | `tanuki-protocol/tests/payload.rs` |
 | Regression found by the earlier SDK | `tanuki/tests/persistence.rs::binary_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
 
-Red phase: reading after `close()` failed with
+Red phases: with `Value` implementing format-aware Serde but conversion still
+through serde-value (human-readable), `to_value(&value)` baked tags into the
+payload (`{"$map": {... "bytes": {"$bytes": ...}}}`) and `Vec<u8>` became a
+list; Tanuki's own binary serializer fixed both. Reading after `close()` failed with
 `ResetWithoutClosingHandshake` because the server returned on a client close
 frame without flushing the queued acknowledgement. The server now flushes it
 (`transport::acknowledge_close`), including for a close sent instead of hello.

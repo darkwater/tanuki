@@ -28,7 +28,7 @@ fn typed_view_fields_serialize_to_the_established_json() {
                     },
                 }),
                 current: Some(CurrentValueView {
-                    value: WireValue::new(Value::Integer(70)),
+                    value: Value::Integer(70),
                     last_write: provenance(),
                     expires_at: Some("2023-11-14T22:23:20.5Z".parse().unwrap()),
                 }),

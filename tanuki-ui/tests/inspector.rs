@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use tanuki_protocol::{
     ChangeView, CurrentValueView, NodeView, OccurrenceView, ProvenanceView, SnapshotView,
-    TopicPath, UpdateView, Value, WireValue,
+    TopicPath, UpdateView, Value,
 };
 use tanuki_ui::{format::*, model::*};
 
@@ -18,7 +18,7 @@ fn provenance(client: &str) -> ProvenanceView {
 fn state(value: Value) -> NodeView {
     NodeView::State {
         current: CurrentValueView {
-            value: WireValue::new(value),
+            value,
             last_write: provenance("writer"),
             expires_at: None,
         },
@@ -129,7 +129,7 @@ fn whole_batches_remove_stale_details_and_keep_occurrences_separate() {
             ChangeView::Event {
                 topic: "/pulse".parse().unwrap(),
                 event: OccurrenceView {
-                    value: WireValue::new(Value::Integer(99)),
+                    value: Value::Integer(99),
                     provenance: provenance("sender"),
                 },
             },
@@ -189,7 +189,7 @@ fn metadata_updates_gaps_errors_and_staleness_do_not_corrupt_state() {
     let mut m = model(vec![("/a", state(Value::Null))]);
     let changed = NodeView::State {
         current: CurrentValueView {
-            value: WireValue::new(Value::Null),
+            value: Value::Null,
             last_write: provenance("new writer\u{202e}"),
             expires_at: Some("2026-11-01T00:00:00Z".parse().unwrap()),
         },
@@ -318,7 +318,7 @@ fn controls_in_paths_and_claims_are_displayed_without_mutating_dtos() {
     let node = NodeView::Desired {
         claim: Some(claim),
         current: Some(CurrentValueView {
-            value: WireValue::new(Value::Null),
+            value: Value::Null,
             last_write: provenance("writer"),
             expires_at: None,
         }),

@@ -1,9 +1,9 @@
-use tanuki_protocol::{FiniteF64, Value, WireValue};
+use tanuki_protocol::{FiniteF64, Value};
 
 #[test]
 fn truncated_messagepack_array_returns_a_decode_error() {
     // array32 with a maximum length, but no elements. No large payload exists.
-    assert!(rmp_serde::from_slice::<WireValue>(&[0xdd, 0xff, 0xff, 0xff, 0xff]).is_err());
+    assert!(rmp_serde::from_slice::<Value>(&[0xdd, 0xff, 0xff, 0xff, 0xff]).is_err());
 }
 
 #[test]
@@ -20,14 +20,14 @@ fn finite_float_bits_survive_json_and_messagepack_round_trips() {
         }))
         .filter(|value| value.is_finite())
     {
-        let original = WireValue::new(Value::Float(FiniteF64::new(value).unwrap()));
+        let original = Value::Float(FiniteF64::new(value).unwrap());
         let json = serde_json::to_string(&original).unwrap();
         let binary = rmp_serde::to_vec_named(&original).unwrap();
         for decoded in [
-            serde_json::from_str::<WireValue>(&json).unwrap(),
-            rmp_serde::from_slice::<WireValue>(&binary).unwrap(),
+            serde_json::from_str::<Value>(&json).unwrap(),
+            rmp_serde::from_slice::<Value>(&binary).unwrap(),
         ] {
-            let Value::Float(decoded) = decoded.into_inner() else {
+            let Value::Float(decoded) = decoded else {
                 panic!("float became a different runtime kind: {json}")
             };
             assert_eq!(decoded.get().to_bits(), value.to_bits(), "{json}");

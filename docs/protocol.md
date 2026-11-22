@@ -1,212 +1,174 @@
 # Protocol
 
-Protocol version 1 exposes JSON over HTTP and JSON text or MessagePack binary
-messages over WebSocket. The representation remains provisional until
-checkpoint B reviews snapshot/update/error DTOs; incompatible changes are
-allowed before that checkpoint.
+Tanuki version 1 speaks JSON over HTTP, server-sent events, and JSON text or
+MessagePack binary messages over one WebSocket. This is the reference for
+writing a client. The representation is still provisional (checkpoint B);
+incompatible changes are allowed before it is accepted, and are recorded at
+the end of this document.
 
-## Current operation boundary
+## Concepts
 
-A nonempty `WriteBatch` is attributed through a `WriteContext` and applied at
-an explicit server timestamp. One accepted batch produces one ordered,
-sequence-numbered `UpdateBatch` plus zero or more warnings. A rejected batch
-has no node, occurrence, or sequence effects.
+- A **topic** is a path such as `/battery/laptop`: `/`-separated non-empty
+  segments. `/$...` is the reserved, read-only system namespace.
+- A **selector** matches topics: `*` is one segment, `**` any number of
+  segments (including none), and `{a,b}` alternatives within a segment, as in
+  `/battery/*`, `/lamp/**` or `/tv/{volume,mute}`.
+- A **node** is what exists at a topic. There are four kinds:
 
-State publications retain their latest complete runtime value and provenance.
-Event publications update publisher metadata and emit an occurrence in the
-current batch; occurrence payloads never appear in snapshots. A snapshot is a
-selection-filtered map of current nodes at one commit sequence.
+  | Kind | Retained? | Written by | Meaning |
+  | --- | --- | --- | --- |
+  | `state` | yes | `publish_state` | an observed fact, such as a battery level |
+  | `event` | no | `publish_event` | something that happened; only the last publisher is retained |
+  | `desired` | yes | `submit_desired` | a requested value for an input, such as a target volume |
+  | `command` | no | `submit_command` | a one-off request to an input |
 
-Input definitions exist independently of claims and payloads. Desired
-submissions retain their latest value and submitter provenance without changing
-the claim. Command submissions emit an occurrence and retain no payload.
-Claiming requires a current managed session, but definition and submission may
-use an attributed stateless context. A batch may atomically define, claim, and
-submit on one input topic in operation order.
+  Desired and command nodes are **inputs**: they are defined first and can be
+  **claimed** by one managed session, the input's controller.
+- Every write is one atomic **batch** of operations. An accepted batch is one
+  **commit** with a global **sequence** number and produces one **update**: the
+  complete set of changes, in order. A rejected batch has no effect.
+- A **client name** (such as `laptop` or `kitchen tablet`) attributes writes.
+  It is attribution, not authentication.
+- A **managed session** is a WebSocket connection that can claim inputs. A
+  later managed connection with the same name replaces it. Stateless
+  connections and HTTP requests are attributed but never claim, replace or get
+  replaced.
 
-The current core executes repeated same-topic operations sequentially against
-one private candidate and rejects writes to the reserved `$` namespace. The
-observable update coalesces retained mutations to the final node shape while
-preserving every event and command occurrence in operation order. Thus a
-create followed by removal can commit successfully with no retained change
-visible to subscribers. The persistence format is internal and not a durable
-API.
+Sequences are global and increase; a subscription skips commits that touched
+nothing it selects, so a gap is not a loss. There is no replay: a client that
+reconnects starts again from a fresh snapshot.
 
-## HTTP version 1
+## Values
 
-Writes require a validated client name supplied by either the `tanuki-client`
-header or `client` query parameter. If both are present they must agree. This is
-attribution, not authentication, and creates no managed session. Reads are
-anonymous. The header deliberately has no `X-` prefix; that convention is
-deprecated by RFC 6648.
+A value is null, a boolean, a signed 64-bit integer, a finite 64-bit float, a
+string, bytes, a list, or a map with string keys. There are no timestamp or
+duration values: a date or interval inside a payload is a string or integer,
+and schemas can validate or cast it.
 
-Reference: [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) for the `X-`
-prefix.
-
-| Method and path | Body/query | Meaning |
-| --- | --- | --- |
-| `POST /v1/state/{topic...}` | `{"value":72,"expiry":{"mode":"clear"}}` | Convenience retained-state write |
-| `POST /v1/write` | `{"operations":[...]}` | One atomic operation batch |
-| `GET /v1/snapshot?select=/battery/*` | one or more `select` | Selection-filtered retained snapshot |
-| `GET /v1/sse?select=/battery/*&select=/lamp/**` | one or more `select` | Snapshot followed by live atomic update events |
-| `PUT /v1/schemas/{name}` | complete schema declaration | Atomically install or replace one named schema |
-| `PUT /v1/links/{name}` | `{"mount":"/view","target":"/canonical"}` | Atomically install or replace a writable subtree link |
-| `DELETE /v1/links/{name}` | none | Remove a link and retract its projected nodes |
-
-Batch operations use an `op` discriminator: `publish_state`, `publish_event`,
-`define_input`, `claim_input`, `submit_desired`, `submit_command`,
-`clear_desired`, and `remove_node`. Retained writes accept an expiry object:
-`{"mode":"preserve"}`, `{"mode":"clear"}`, or
-`{"mode":"set","duration":"PT1H"}`. Omission means `clear`: a writer that
-says nothing about expiry never inherits a deadline another writer chose.
-`preserve` explicitly keeps the existing absolute deadline (none for a new
-value). Only a deadline of the same node kind is kept: publishing state over a
-desired node discards the desired payload and its deadline together. Claim releases similarly use `immediate` or `after` with a nonnegative
-fixed ISO-8601 duration.
-
-Each value's JSON encoding, measured after any schema or alias cast, is
-limited to 256 KiB (`tanuki::core::MAX_VALUE_JSON_BYTES`). JSON is the larger
-codec, so the bound also covers MessagePack, and a single value always fits a
-1 MiB WebSocket message. A larger value rejects the whole batch with
-`value_too_large` (HTTP 413).
-
-Successes are `{"ok":true,"data":...}`. A write's `data` is a commit:
-`{"sequence":43,"warnings":[]}` (`tanuki_protocol::CommitView`), the same
-object a WebSocket `reply` carries as `result`. Reads repeat `select` for
-several selectors, like a WebSocket hello's list; a missing or invalid
-selector is `invalid_query`.
-
-### Error codes
-
-HTTP error bodies and WebSocket `error` messages share one set of codes
-(`tanuki_protocol::ErrorCode`). A code unknown to an older client decodes as
-`ErrorCode::Unknown`; the message still explains it.
-
-| Code | HTTP | Meaning |
-| --- | --- | --- |
-| `already_initialized` | — | A second WebSocket `hello` |
-| `hello_required` | — | The first WebSocket message was not `hello` |
-| `invalid_message` | — | A WebSocket message could not be decoded |
-| `invalid_json`, `invalid_query` | 400 | Malformed HTTP body or query |
-| `missing_client`, `invalid_client`, `conflicting_client` | 400 | HTTP write attribution absent, invalid, or contradictory |
-| `invalid_topic`, `invalid_duration`, `negative_duration`, `empty_batch` | 400 | Invalid request fields |
-| `invalid_schema`, `invalid_link` | 400/409 | Invalid schema or link declaration or topology |
-| `deadline_out_of_range` | 400 | Expiry or grace beyond the timestamp range |
-| `session_required` | 400 | Claiming needs a managed session (HTTP and stateless WebSocket cannot claim) |
-| `system_topic` | 403 | Writes to `/$...` are forbidden |
-| `input_not_defined` | 404 | Submission/claim/clear on an undefined input |
-| `not_found`, `method_not_allowed` | 404/405 | Unknown endpoint or method |
-| `session_expired` | 409 | The managed session was replaced or disconnected |
-| `claim_authority_required` | 409 | Another session's claim controls the definition |
-| `wrong_node_kind` | 409 | The operation does not fit the existing node kind |
-| `schema_overlap`, `existing_schema_violations` | 409 | Schema installation conflicts |
-| `value_too_large` | 413 | A value's JSON encoding exceeds 256 KiB |
-| `schema_violation` | 422 | A denying schema rejected the batch |
-| `capacity_exhausted`, `internal_error` | 500 | Server-side failure |
-| `server_shutdown` | 503 | Shutdown has closed admission | Every adapter, extractor, routing,
-and core failure uses `{"ok":false,"error":{"code":"...","message":"..."}}`
-with an appropriate HTTP status. A successful write returns its commit sequence
-and structured warning list; it does not promise command execution or durable
-storage.
-
-Schema installation accepts `{"force":false,"rules":[...]}`. Each rule has a
-`selector`, `enforcement` (`warn` or `deny`), optional `nullable`, optional
-`node_kind`, `expected_update_interval`, a tagged `validator`, and optional explicit cast. Initial validator types are `any`,
-`kind`, `integer_range`, `float_range`, and `string_enum`; initial casts are
-`string_to_integer`, `string_to_float`, and `string_to_bool`. The default mode
-rejects current deny violations. `force:true` removes deny-invalid state and
-clears deny-invalid desired current values while preserving definitions and
-claims. Warning violations remain and are returned as diagnostics. A complete
-declaration atomically replaces the same schema name.
-Like other HTTP mutations, schema installation requires client attribution by
-`tanuki-client` or `?client=`; this is not authentication or authorization.
-
-Link installation and deletion require the same attribution. A link projects
-the target subtree beneath its mount in snapshots and update batches. Writes to
-an alias are translated to the canonical topic after alias schema validation;
-the canonical schema is then applied. Link changes report a commit sequence
-when visible aliases were added or removed. Deleting an absent link is an
-idempotent success.
-
-`expected_update_interval` is an optional positive fixed ISO-8601 duration such
-as `"PT5M"`. It applies to retained state and present desired values matched by
-the rule. The shortest matching interval is effective.
-
-## Read-only diagnostics
-
-Active conditions appear as state nodes and ordinary atomic updates beneath
-`/$diagnostics/**`. Current paths are:
-
-- `/$diagnostics/freshness/<source...>` for retained values whose expected
-  update interval elapsed;
-- `/$diagnostics/links/<link-name>` for schema-disabled linked views.
-
-The value is a map containing a stable `code` plus relevant context such as the
-source topic, interval, last update, link name, and violation message. Onset is
-an upsert; recovery is a removal. These paths are Tanuki-owned: clients may
-select them but cannot write them, schemas do not apply, and snapshots derive
-them instead of persisting them.
-
-Ordinary JSON nulls, booleans, signed safe integers, finite numbers, strings,
-arrays, and objects map directly to runtime values. The tagged forms are:
+In JSON, ordinary values map directly. Three tagged forms cover the rest:
 
 ```json
 {"$bytes":"AAEC/w=="}
 {"$int":"9223372036854775807"}
-{"$map":{"$bytes":"literal, not a tag"}}
+{"$map":{"$bytes":"a literal key, not a tag"}}
 ```
 
-Integers outside JavaScript's exact range encode with `$int`; unsigned values
-outside signed 64-bit range are rejected. A literal map containing any reserved
-tag key must use `$map`. Encoding is recursive and lossless for the accepted
-initial value profile. There are no timestamp or duration values: dates and
-intervals inside payloads are strings or integers. `$timestamp` and `$duration`
-are not reserved and form ordinary maps.
+Integers outside JavaScript's exact range (±(2⁵³−1)) use `$int`; unsigned
+values beyond the signed 64-bit range are rejected. A map that has a key
+`$bytes`, `$int` or `$map` must be wrapped in `$map`. Other `$` keys are
+ordinary. Floats round-trip bit-exactly.
 
-The shared JSON dependency enables exact float round-trip parsing, preserving
-finite f64 bits (including subnormals and signed zero) across the wire.
-MessagePack array lengths are untrusted: runtime lists allocate as elements
-decode, rather than reserving memory for a potentially truncated array header.
-These checks do not establish a total decoded-memory budget.
+MessagePack uses native types, including `bin` for bytes, and no extension
+types; a message containing one is rejected.
 
-Input nodes (desired and command) carry their `claim`; the former empty
-`"definition": {}` field was removed on 2026-11-22. State and desired nodes
-use an explicit `current` wrapper. Desired
-`"current":null` means no payload exists; `"current":{"value":null,...}`
-means `Value::Null` was actually submitted. This distinction is preserved in
-snapshots and updates.
+Each value's JSON encoding, measured after any schema or alias cast, is limited
+to 256 KiB (`value_too_large`, HTTP 413). One value therefore always fits in a
+1 MiB WebSocket message.
 
-## Subscription messages
+## Nodes
 
-The accepted stream uses a correlated snapshot as successful subscription
-acknowledgement:
+Snapshots map topics to nodes; updates carry nodes in their changes. A node is
+an object tagged by `kind`:
 
 ```json
-{"type":"snapshot","request_id":"s1","sequence":42,"nodes":{},"warnings":[]}
-{"type":"update","sequence":43,"changes":[]}
-{"type":"reply","request_id":"w1","result":{"sequence":43,"warnings":[]}}
-{"type":"error","request_id":"w1","error":{"code":"...","message":"..."}}
+{"kind":"state","current":{"value":82,
+  "last_write":{"client":"laptop","session":7,"at":"2026-11-22T10:00:00Z"},
+  "expires_at":"2026-11-22T10:01:30Z"}}
+{"kind":"event","last_publisher":{"client":"doorbell","session":null,"at":"2026-11-22T10:00:00Z"}}
+{"kind":"desired","claim":{"id":3,"owner":"lamp","session":9,"release":{"mode":"immediate"}},
+  "current":{"value":70,"last_write":{"client":"phone","session":null,"at":"..."},"expires_at":null}}
+{"kind":"command","claim":null}
 ```
 
-Changes are tagged `upsert`, `event`, `command`, or `removed`. Upsert carries a
-complete node view; removal carries the previous complete node. Consumers apply
-the entire changes array before exposing a recomputed shape. Instant
-occurrences are returned separately by the minimal client view and never enter
-its retained node map.
+- `current` (state and desired) is the retained value with its provenance:
+  who wrote it (`session` is null for stateless writes) and when, and the
+  optional expiry. A desired node without a pending request has
+  `"current":null`; `"current":{"value":null,...}` means `null` was submitted.
+- `claim` (desired and command) names the controlling session and what happens
+  to the claim when that session disconnects: `{"mode":"immediate"}`, or
+  `{"mode":"after","duration":"PT30S"}` to keep it for a grace period.
+- Times are RFC 3339 timestamps; durations are ISO 8601 fixed durations.
 
-The sequence is the global in-memory commit sequence, not a replay cursor.
-Filtered subscriptions legitimately skip commits that affect no selected
-topic, so a numeric gap alone does not prove message loss. Reconnection starts
-from a new snapshot; replay is not promised.
+## Write operations
 
-## Server-sent events version 1
+A batch is a list of operations tagged by `op`, applied in order:
 
-`GET /v1/sse?select=<selector>` opens an anonymous read-only subscription. Its
-first event is always `snapshot`; later `update` events each contain one
-complete selected commit batch. The SSE `data` field is the JSON encoding of
-`SnapshotView` or `UpdateView` respectively, without the WebSocket message
-type or request ID. The SSE `id` is the same global sequence carried in the
-JSON body:
+| `op` | Fields | Effect |
+| --- | --- | --- |
+| `publish_state` | `topic`, `value`, `expiry`? | Retain a state value |
+| `publish_event` | `topic`, `value` | Emit an event occurrence |
+| `define_input` | `topic`, `kind` (`desired` or `command`) | Create an input |
+| `claim_input` | `topic`, `release` | Claim an input (managed sessions only) |
+| `submit_desired` | `topic`, `value`, `expiry`? | Request a desired value |
+| `submit_command` | `topic`, `value` | Emit a command occurrence |
+| `clear_desired` | `topic` | Clear the pending desired value |
+| `remove_node` | `topic` | Remove a node |
+
+`expiry` is `{"mode":"clear"}` (no deadline; the default when omitted),
+`{"mode":"set","duration":"PT90S"}` (a lease, renewed by writing again), or
+`{"mode":"preserve"}` (keep the existing absolute deadline of a node of the
+same kind). A writer that omits expiry never inherits a deadline another writer
+chose. `release` is `{"mode":"immediate"}` or `{"mode":"after","duration":"PT30S"}`.
+
+A batch may define, claim and submit on one input in operation order. Writes to
+`/$...` are rejected. Repeated operations on one topic run in order; the update
+shows each retained node's final shape plus every event and command occurrence.
+An accepted write returns a **commit**:
+
+```json
+{"sequence":43,"warnings":[]}
+```
+
+Warnings are successful-operation diagnostics, such as a schema warning or a
+node changing kind; each has a `code` and context. A commit means the server
+accepted the write, not that a device acted.
+
+## HTTP
+
+Successful responses are `{"ok":true,"data":...}`; failures are
+`{"ok":false,"error":{"code":"...","message":"..."}}` with the status from the
+error table below.
+
+| Method and path | Body or query | Result |
+| --- | --- | --- |
+| `POST /v1/write` | `{"operations":[...]}` | commit |
+| `POST /v1/state/{topic...}` | `{"value":72,"expiry":{...}}` (expiry optional) | commit |
+| `GET /v1/snapshot?select=...` | one or more `select` | `{"sequence":42,"nodes":{...}}` |
+| `GET /v1/sse?select=...` | one or more `select` | event stream (below) |
+| `PUT /v1/schemas/{name}` | schema declaration | installation result |
+| `PUT /v1/links/{name}` | `{"mount":"/view","target":"/canonical"}` | installation result |
+| `DELETE /v1/links/{name}` | — | removal result |
+
+Writes, schema and link changes need a client name in the `tanuki-client`
+header or the `client` query parameter (they must agree if both are given).
+Reads are anonymous. Repeat `select` for several selectors
+(`?select=/battery/*&select=/lamp/**`); URL-encode braces.
+
+```sh
+curl -H 'tanuki-client: phone' -H 'content-type: application/json' \
+  -d '{"value":72,"expiry":{"mode":"set","duration":"PT1H"}}' \
+  http://127.0.0.1:5167/v1/state/battery/phone
+```
+
+A schema declaration is `{"force":false,"rules":[...]}`. Each rule has a
+`selector`, `enforcement` (`warn` or `deny`), optional `nullable`, optional
+`node_kind`, optional `expected_update_interval` (an ISO 8601 duration such as
+`"PT5M"`), a tagged `validator` (`any`, `kind`, `integer_range`, `float_range`,
+`string_enum`) and an optional cast (`string_to_integer`, `string_to_float`,
+`string_to_bool`). Installation replaces the schema of that name atomically and
+by default rejects existing denying violations; `force:true` removes them
+instead. Patterns of different schemas may not overlap.
+
+A link projects its target subtree beneath its mount in snapshots and updates;
+writes to an alias are translated to the canonical topic (alias schema first,
+then canonical schema). Deleting an absent link succeeds.
+
+## Server-sent events
+
+`GET /v1/sse?select=...` is an anonymous read-only subscription. The first
+event is `snapshot`, then one `update` event per selected commit. `data` is the
+JSON of the snapshot or update (without `type` or `request_id`), and `id` is
+its sequence:
 
 ```text
 event: snapshot
@@ -218,218 +180,185 @@ id: 43
 data: {"sequence":43,"changes":[]}
 ```
 
-The server emits a keep-alive comment after 15 seconds without data. It does
-not interpret `Last-Event-ID`: reconnecting creates an ordinary new
-subscription and sends its current snapshot, with no missed-event replay. A
-subscriber that exhausts the core's 64-batch queue is disconnected; it does
-not block writers or split/coalesce a batch.
+A keep-alive comment follows 15 seconds without data. `Last-Event-ID` is
+ignored: reconnecting yields a new snapshot. A subscriber that falls 64 commits
+behind is disconnected.
 
-## WebSocket version 1
+## WebSocket
 
-`GET /v1/ws` upgrades to a managed full-duplex session. The first data message
-must be `hello`; its frame kind selects the codec for unsolicited server
-snapshots and updates:
+`GET /v1/ws` upgrades to a WebSocket. Every text frame is one JSON message and
+every binary frame one MessagePack message; a client may mix them. A reply uses
+the codec of the request's frame; unsolicited snapshots and updates use the
+codec of the hello. Each message is at most 1 MiB and must contain exactly one
+encoded message (trailing data rejects it before any effect).
 
-```json
-{"type":"hello","request_id":"h1","client":"laptop","selectors":["/battery/*"]}
-```
+### Client messages
 
-Every text frame contains JSON and every binary frame contains MessagePack,
-including when a client mixes them on one connection. A request-correlated
-reply uses the request frame's codec. A successful
-hello receives exactly one correlated `snapshot` before ordinary replies or
-updates. The snapshot's `warnings` include managed-session replacement.
-
-Hello's optional `session` field chooses what the connection establishes
-besides its subscription:
-
-- `"managed"` (the default when omitted) opens a managed session. It can claim
-  inputs, and a later managed hello with the same client name replaces it.
-- `"stateless"` attributes writes to the client name exactly like a stateless
-  HTTP request. It cannot claim inputs and neither replaces nor is replaced by
-  any other connection, so dashboards, inspectors and browser tabs can share a
-  name. Its write provenance carries no session.
-
-Later client messages are `write` messages whose `operations` array is
-identical to the HTTP batch operation array:
+Every client message has a `type` and a `request_id` (any string) that the
+server echoes in its answer.
 
 ```json
-{"type":"write","request_id":"w1","operations":[{"op":"publish_state","topic":"/battery/laptop","value":87,"expiry":{"mode":"clear"}}]}
+{"type":"hello","request_id":"h","client":"laptop","selectors":["/battery/*"],"session":"managed"}
+{"type":"write","request_id":"w1","operations":[{"op":"publish_state","topic":"/battery/laptop","value":82}]}
+{"type":"select","request_id":"s1","selectors":["/battery/*","/lamp/**"]}
 ```
 
-or `select` messages, which replace the connection's selection:
+- `hello` must be the first message. `session` is `"managed"` (the default) or
+  `"stateless"`. The selectors start the connection's subscription (possibly
+  empty).
+- `write` sends one batch with the same operations as HTTP.
+- `select` replaces the subscription's selectors.
+
+### Server messages
 
 ```json
-{"type":"select","request_id":"s2","selectors":["/battery/*","/lamp/**"]}
+{"type":"snapshot","request_id":"h","sequence":42,"nodes":{},"warnings":[]}
+{"type":"update","sequence":43,"changes":[...]}
+{"type":"reply","request_id":"w1","result":{"sequence":43,"warnings":[]}}
+{"type":"error","request_id":"w1","error":{"code":"empty_batch","message":"..."}}
 ```
 
-A `select` is answered by a correlated `snapshot` of the new selection (with
-no warnings). Updates queued for the old selection are discarded because the
-new snapshot is taken after all of them; later updates follow the new
-selection only. An empty list is valid and stops all updates.
+- `snapshot` answers `hello` and `select`: every selected node at one commit.
+  A hello's snapshot `warnings` report, for example, that it replaced an older
+  managed session.
+- `update` is one complete commit, filtered to the selection. Changes are
+  tagged `type`: `upsert` (`topic`, complete `node`), `removed` (`topic`,
+  `previous` node), `event` and `command` (`topic`, plus `event` or `command`
+  holding `value` and `provenance`). Apply all changes of an update together.
+- `reply` answers a successful `write` with its commit.
+- `error` answers a failed request. A message that could not be decoded at all
+  gets `request_id: null`.
 
-A data message must contain exactly one encoded protocol message. Trailing
-JSON or MessagePack data rejects the whole message before applying a write.
-The shared `decode_messagepack` helper enforces this for the server and the
-Rust connection.
+### Ordering guarantees
 
-A write's own selected update, and any update queued before it, is sent
-before its reply. When the reply arrives, a client that applies updates in
-order therefore already reflects its own write (read-your-writes), provided
-the write touched its selection. Updates from unrelated concurrent writers can
-also be queued, so clients distinguish correlated replies by `request_id`
-rather than assuming every adjacent message is a pair. Decode failures whose ID cannot be recovered
-use `request_id: null` and the malformed frame's codec.
+- A hello is answered by exactly one snapshot before any other message.
+- A `select` is answered by a snapshot of the new selection; updates queued
+  for the old selection are dropped, because the snapshot already includes
+  them.
+- A write's own update (if selected), and every update queued before it, is
+  sent before its reply. A client that applies updates in order therefore
+  already reflects its write when the reply arrives. Updates from other writers
+  can arrive at any time, so match replies by `request_id`.
 
-Opening another managed WebSocket with the same client replaces the old
-session. The old socket closes with code 4001 and reason `session_replaced`;
-same-name stateless HTTP traffic does not replace it. Normal disconnect runs
-claim cleanup. A slow core subscription closes with code 1013 and reason
-`slow_consumer`; reconnecting starts from a fresh snapshot.
+### A sample conversation
 
-Liveness uses ordinary WebSocket mechanisms (provisional defaults):
+```text
+→ {"type":"hello","request_id":"h","client":"lamp","selectors":["/lamp/**"]}
+← {"type":"snapshot","request_id":"h","sequence":10,"nodes":{},"warnings":[]}
+→ {"type":"write","request_id":"w1","operations":[
+    {"op":"define_input","topic":"/lamp/desired","kind":"desired"},
+    {"op":"claim_input","topic":"/lamp/desired","release":{"mode":"immediate"}}]}
+← {"type":"update","sequence":11,"changes":[{"type":"upsert","topic":"/lamp/desired",
+    "node":{"kind":"desired","claim":{"id":1,"owner":"lamp","session":4,"release":{"mode":"immediate"}},"current":null}}]}
+← {"type":"reply","request_id":"w1","result":{"sequence":11,"warnings":[]}}
+   (another client submits 70 over HTTP)
+← {"type":"update","sequence":12,"changes":[{"type":"upsert","topic":"/lamp/desired",
+    "node":{"kind":"desired","claim":{...},"current":{"value":70,"last_write":{...},"expires_at":null}}}]}
+→ {"type":"write","request_id":"w2","operations":[{"op":"publish_state","topic":"/lamp/brightness","value":70}]}
+← {"type":"update","sequence":13,"changes":[{"type":"upsert","topic":"/lamp/brightness","node":{...}}]}
+← {"type":"reply","request_id":"w2","result":{"sequence":13,"warnings":[]}}
+```
 
-| Condition | Default | Close |
+### Sessions, claims and disconnects
+
+A managed hello opens a session; a later managed hello with the same client
+name replaces it, and the old connection closes with 4001. When a managed
+session ends (close, replacement, timeout), its claims are released, or kept
+for their grace period. Stateless connections cannot claim
+(`session_required`) and are never replaced. After reconnecting, a controller
+must claim its inputs again.
+
+### Close codes and liveness
+
+A close frame carries a numeric code and a stable reason string:
+
+| Code | Reason | When |
 | --- | --- | --- |
-| No hello after the upgrade | 10 s | 1008 `hello_timeout` |
-| Server ping interval once open | 20 s | — |
-| Peer sends nothing at all (data, ping or pong) | 60 s | 1011 `peer_timeout` |
-| One outgoing write does not complete | 10 s | connection dropped |
-| An encoded outgoing message exceeds 1 MiB | — | 1009 `message_too_big` |
+| 1001 | `server_shutdown` | the server is shutting down |
+| 1008 | `hello_timeout` | no hello within 10 seconds |
+| 1009 | `message_too_big` | an outgoing message, such as a snapshot of many large values, would exceed 1 MiB |
+| 1011 | `peer_timeout` | nothing (not even a pong) received for 60 seconds |
+| 1013 | `slow_consumer` | the connection fell 64 commits behind |
+| 4001 | `session_replaced` | a newer managed connection with the same name |
 
-Peers answer pings automatically while their WebSocket library reads the
-stream. A `tanuki_client::Connection` user that stops calling `recv` stops
-answering and is disconnected after the silence window. The server acknowledges
-a client's close frame before dropping the connection.
-The server answers peer pings itself and never sends a duplicate pong. A
-silence or write timeout runs ordinary disconnect cleanup, so a controller
-that vanishes without closing TCP releases its claims (or starts their grace).
+The server pings every 20 seconds; WebSocket libraries answer automatically
+while the client keeps reading. A send that does not complete within 10 seconds
+drops the connection. The server acknowledges a client's close frame. After any
+close, reconnect with a new hello and replace cached state with the new
+snapshot; retrying after 4001 would take the name back from the newer session.
 
-Inbound frames and individually encoded outbound messages are limited to 1
-MiB. The per-value limit keeps a single value deliverable, but a snapshot or
-update combining several large values can still exceed 1 MiB; that connection
-then closes with 1009 instead of vanishing silently (see `open-questions.md`).
-Each subscription currently buffers at most 64 complete commit batches; the
-open byte-budget decision is tracked in `open-questions.md`.
+## Diagnostics
 
-MessagePack uses native primitives and binary values and no extension types;
-a value containing an extension type (including the standard timestamp type
-`-1`) is rejected.
+Active conditions appear as read-only state nodes under `/$diagnostics/**`:
 
-## Persistence format 3
+- `/$diagnostics/freshness/<topic...>`: a value whose schema's
+  `expected_update_interval` elapsed. Its value is a map with `code`
+  (`overdue_update`), `topic`, `expected_update_interval` and `last_updated`
+  (strings).
+- `/$diagnostics/links/<name>`: a link disabled by a schema.
 
-The local snapshot is MessagePack with `format: "tanuki-snapshot"` and
-`version: 3`. It is an internal restart format, not a client transport or an
-acknowledgement log. It contains one coherent commit sequence and retained
-node/definition metadata, installed schemas and link definitions, but no live sessions, claims,
-event occurrences, or command occurrences. Future incompatible formats must use a new version;
-unknown versions are treated as invalid snapshots. Timestamp and duration
-values were removed from the value model without a version change; a version 3
-snapshot that still contains one, or a schema requiring one, is invalid. At startup invalid data is
-copied beside the configured file with a `.bak` suffix (or `.bak.N` without
-overwriting an earlier backup), a warning is logged, and Tanuki starts with
-empty state. Ordinary read or backup I/O failures still fail startup.
+Onset is an upsert and recovery a removal. Select them like any topic
+(`/**` includes them).
 
-## Native Rust SDK usage
+## Error codes
 
-`tanuki-protocol` supplies bidirectional v1 requests/messages and lossless value
-codecs. View DTOs carry validated types: topics are `TopicPath`, writers and
-claim owners `ClientName`, times `jiff::Timestamp`, claim grace
-`jiff::SignedDuration`, node kinds `NodeKind`, and error codes `ErrorCode`.
-Their JSON and MessagePack text is unchanged; invalid paths or names are
-rejected while decoding. `WireValue` (formerly `JsonValue`) is the
-codec-aware value wrapper, and `to_value`/`from_value` plus the
-`decode::<T>()` helpers on `WireValue`, `CurrentValueView` and
-`OccurrenceView` convert ordinary Serde types. The server supplies conversion functions `snapshot_message` and
-`update_message` for authoritative core data. Payload-bearing tagged enum
-decoding keeps the original JSON/MessagePack decoder through nested fields;
-bytes, extension values and literal reserved-key maps now round-trip through
-whole requests, snapshots and updates, not just standalone value fixtures.
+HTTP error bodies and WebSocket `error` messages share one set of codes. A
+client should treat unknown codes as generic failures (the Rust type decodes
+them as `ErrorCode::Unknown`).
 
-`tanuki-client` is the protocol layer: `Connection` sends typed client
-messages and receives typed server messages over one WebSocket, natively
-(`ws://`, and `wss://` through the default `rustls` feature) or in the browser,
-and splits into a cloneable `Sender` and a `Receiver`. Hello, request IDs,
-caching and reconnection belong to the application. See
-[the client README](../tanuki-client/README.md).
+| Code | HTTP | Meaning |
+| --- | --- | --- |
+| `hello_required` | — | The first WebSocket message was not `hello` |
+| `already_initialized` | — | A second `hello` |
+| `invalid_message` | — | A WebSocket message could not be decoded |
+| `invalid_json`, `invalid_query` | 400 | Malformed HTTP body or query (including missing or invalid `select`) |
+| `missing_client`, `invalid_client`, `conflicting_client` | 400 | HTTP attribution absent, invalid or contradictory |
+| `invalid_topic`, `invalid_duration`, `negative_duration`, `empty_batch` | 400 | Invalid request fields |
+| `deadline_out_of_range` | 400 | Expiry or grace beyond the timestamp range |
+| `session_required` | 400 | Claiming needs a managed session |
+| `invalid_schema`, `invalid_link` | 400/409 | Invalid schema or link declaration or topology |
+| `system_topic` | 403 | Writes to `/$...` are forbidden |
+| `input_not_defined` | 404 | Submit, claim or clear on an undefined input |
+| `not_found`, `method_not_allowed` | 404/405 | Unknown endpoint or method |
+| `session_expired` | 409 | The managed session was replaced or disconnected |
+| `claim_authority_required` | 409 | Another session's claim controls the input |
+| `wrong_node_kind` | 409 | The operation does not fit the existing node's kind |
+| `schema_overlap`, `existing_schema_violations` | 409 | Schema installation conflicts |
+| `value_too_large` | 413 | A value's JSON encoding exceeds 256 KiB |
+| `schema_violation` | 422 | A denying schema rejected the batch |
+| `capacity_exhausted`, `internal_error` | 500 | Server-side failure |
+| `server_shutdown` | 503 | The server is shutting down |
 
-## Server boundary and shutdown — 2026-10-07
+## Rust crates
 
-HTTP and WebSocket request conversion shares `protocol::RequestConversionError`
-and the same validated `WriteBatch` conversion. Typed commit and management
-response DTOs reuse `DiagnosticView`; HTTP envelopes and the existing generic
-WebSocket reply result retain their version-1 JSON shape. No wire or snapshot
-version change is required by this refactor.
+`tanuki-protocol` has the message types (`ClientMessage`, `ServerMessage`,
+`WireOperation`, `NodeView`, `ChangeView`, `CommitView`, `ErrorCode`, ...) with
+validated `TopicPath`, `Selector` and `ClientName`, and `Value`. `Value` is an
+ordinary Serde type with the encoding above (tagged in JSON, native in
+MessagePack); `to_value`/`from_value` and the views' `decode::<T>()` convert any
+Serde type, where `Vec<u8>` becomes bytes and fixed arrays such as `[u8; 3]`
+stay lists. `SelectedView` is a minimal cache that applies snapshots and updates.
 
-Once shutdown closes admission, a request that reaches a still-draining adapter
-is rejected with the common `server_shutdown` code (HTTP 503). Already accepted
-writes remain committed even if shutdown prevents delivery of their reply.
-WebSockets attempt close code 1001 with reason `server_shutdown`; a forced
-socket close may instead appear as EOF or transport failure. HTTP/SSE draining
-and WebSocket close delivery have a provisional one-second window, after which
-remaining socket I/O is cancelled. Reconnect obtains a new snapshot as usual.
+`tanuki-client` is a WebSocket connection for these messages, native and in the
+browser; see [its README](../tanuki-client/README.md).
 
-Link management rejects names `.` and `..` with `invalid_link`; other existing
-valid punctuation, spaces, and Unicode names remain supported. Restore rejects
-reserved canonical nodes and denying policy violations before exposing state;
-warning policies still accept without casting stored data.
+## Persistence
 
-## Inspector foundation consumer — Task 01
+The server's restart snapshot is MessagePack with `format: "tanuki-snapshot"`,
+`version: 3`: one coherent commit with retained nodes, input definitions,
+schemas and links, but no sessions, claims or occurrences. It is internal, not
+an API. Invalid data is moved aside to `.bak` (or `.bak.N`) with a warning, and
+the server starts empty. A version 3 snapshot that still contains a timestamp or
+duration value, or a schema requiring one, is invalid since those values were
+removed.
 
-The headless `tanuki-ui` model consumes existing `SnapshotView`/`UpdateView` and
-`NodeView` DTOs through `SelectedView`; it introduces no endpoint or wire change.
-It accepts increasing sequence gaps, applies complete batches, and keeps instant
-occurrences out of retained state. Invalid topic strings are rejected before
-cache mutation. Schema/link enumeration and explanation are still unavailable;
-the detail formatter explicitly labels schema information unavailable rather
-than claiming no schema applies. Live subscription/system-namespace scope will
-be verified through real transport in Task 02.
+## Changes
 
-## Inspector live consumer — Task 02
-
-The inspector subscribes to `/**` (since 2026-11-22 through a raw
-`Connection` with a stateless hello). Real-server tests confirm this subscription includes
-exposed `/$diagnostics/**` as well as ordinary topics, both in initial snapshots
-and later updates. Schema matchers' ordinary-only restriction does not apply
-to subscription matching. No `/$connections/**` projection currently exists;
-the observer is a managed session but cannot be shown as a connection node.
-No new protocol surface is added to fill that gap in this task.
-
-Listener registration's baseline replaces the cache on explicit reconnect;
-hello is not reused as that baseline. Complete batches are consumed in order;
-raw lag is terminal and marks cached data stale. Clean shutdown and transport
-reset are distinct SDK outcomes, both non-live. Reconnect is a new session and
-snapshot, with no retry/replay promise. Explicit duplicate names preserve
-server replacement semantics; generated local defaults avoid ordinary local
-collisions. Session close joins client tasks, not server-side cleanup delivery.
-
-## Inspector milestone 1 terminal — Task 03
-
-`tanuki-ui` now exposes the existing node inspection surface through a read-only
-terminal application, with configurable WebSocket URL/client name. It still
-uses only the SDK `/**` snapshot/update stream, preserves complete batches and
-separates instant metadata from occurrences. A bounded connection job changes
-UI ownership, not wire behavior: explicit reconnect joins the old session and
-registers a new listener/baseline. Connecting/disconnected/lagged/error data is
-labeled stale; there is no retry or replay.
-
-No schema/link enumeration or explanation endpoint is introduced. The terminal
-says schema information is unavailable and still cannot fabricate the missing
-connection-topic projection. Public inspection API design is checkpoint B,
-Task 04. Milestone 1 node inspection is not complete public-state coverage.
-
-## Browser Rust SDK — 2026-10-31
-
-The same Rust `Connection`, `Session`, typed write and observation APIs now work
-on browser `wasm32-unknown-unknown`, using `/v1/ws` unchanged. JSON remains the
-outgoing default; binary MessagePack and mixed incoming frame codecs work too.
-Limits, initial baselines, whole-batch publication, lag, replacement code/reason,
-and local versus unknown write outcomes retain their SDK meanings.
-
-Browser WebSockets support `ws://` and browser-managed `wss://`; an HTTPS page
-normally needs a TLS proxy and `wss://`. TLS deployment was not tested here.
-Browser control frames, certificates and networking restrictions are outside
-Rust's socket API, and handshake errors may omit details. Browser receive size
-checks occur after complete-message allocation; timers depend on event-loop
-scheduling. Native TLS, JavaScript bindings and automatic reconnect remain
-outside this increment. See [SDK usage](../tanuki-client/README.md#browser-webassembly).
+- 2026-11-22: `Value` is the wire value type in Rust (`WireValue` removed);
+  replies carry a typed commit (`CommitView`; JSON unchanged); input nodes lost
+  the empty `"definition": {}`; HTTP reads accept repeated `select`; the server
+  acknowledges client close frames.
+- 2026-11-21: timestamp and duration values removed (`$timestamp`,
+  `$duration`, MessagePack extension types); omitted expiry means `clear`;
+  stateless sessions and `select`; updates before replies; shared error codes;
+  liveness timeouts and close codes; 256 KiB value limit.

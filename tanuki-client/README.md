@@ -4,7 +4,7 @@ The Tanuki WebSocket protocol for Rust, on native Tokio and browser
 WebAssembly: open a connection, send typed client messages, receive typed
 server messages. Build state management on top of it.
 
-```rust,no_run
+```rust,no_run,standalone_crate
 use tanuki_client::{Connection, protocol::*};
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -56,17 +56,20 @@ snapshot before anything else, every update is one complete commit, and a
 write's own update arrives before its reply.
 
 `tanuki_client::protocol` (the `tanuki-protocol` crate) has the message types,
-the [`Value`](protocol::Value) runtime value with
-[`to_value`](protocol::to_value)/[`from_value`](protocol::from_value) for Serde
-types, and [`SelectedView`](protocol::SelectedView), a minimal cache that
-applies snapshots and updates for one selection.
+the [`Value`](protocol::Value) runtime value, and
+[`SelectedView`](protocol::SelectedView), a minimal cache that applies
+snapshots and updates for one selection. Payloads are plain Serde:
+[`to_value`](protocol::to_value) and [`from_value`](protocol::from_value)
+convert any `Serialize`/`Deserialize` type, and `Value` is itself an ordinary
+Serde type, so it can appear inside your own payload structs. `Vec<u8>`
+becomes bytes; fixed arrays such as `[u8; 3]` stay lists.
 
 ## Sending and receiving concurrently
 
 `send` takes `&self` and `recv` takes `&mut self`. To receive in one task while
 sending from others, split the connection; the [`Sender`] is cheap to clone:
 
-```rust,no_run
+```rust,no_run,standalone_crate
 use tanuki_client::{Connection, protocol::*};
 
 # async fn example(connection: Connection) -> Result<(), tanuki_client::ConnectionError> {

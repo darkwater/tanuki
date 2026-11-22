@@ -80,7 +80,7 @@ pub fn value_type(node: &NodeView) -> &'static str {
             "none (instant)"
         };
     };
-    match current.value.as_inner() {
+    match &current.value {
         Value::Null => "null",
         Value::Bool(_) => "bool",
         Value::Integer(_) => "integer",
@@ -106,7 +106,7 @@ pub fn details(path: &TopicPath, node: Option<&NodeView>) -> Vec<String> {
     lines.push(format!("Kind: {}", kind_label(node)));
     lines.push(format!("Value type: {}", value_type(node)));
     if let Some(current) = current(node) {
-        lines.push(format!("Value: {}", value_text(current.value.as_inner())));
+        lines.push(format!("Value: {}", value_text(&current.value)));
         provenance(&mut lines, &current.last_write);
         lines.push(format!(
             "Expires: {}",

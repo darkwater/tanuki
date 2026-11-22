@@ -13,7 +13,7 @@ fn path(p: &str) -> TopicPath {
 fn state(value: Value) -> NodeView {
     NodeView::State {
         current: CurrentValueView {
-            value: WireValue::new(value),
+            value,
             last_write: ProvenanceView {
                 client: "writer\u{202e}".parse().unwrap(),
                 session: Some(7),

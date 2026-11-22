@@ -28,7 +28,7 @@ fn publish(request_id: &str, topic: &str, value: Value) -> ClientMessage {
         request_id: RequestId::new(request_id.into()),
         operations: vec![WireOperation::PublishState {
             topic: TopicPath::parse(topic).unwrap(),
-            value: WireValue::new(value),
+            value,
             expiry: None,
         }],
     }
@@ -66,7 +66,7 @@ async fn exchanges_hello_updates_replies_and_errors_in_both_codecs() {
         let ChangeView::Upsert { node, .. } = &changes[0] else {
             panic!("an upsert");
         };
-        assert_eq!(node.current().unwrap().value.as_inner(), &bytes);
+        assert_eq!(&node.current().unwrap().value, &bytes);
         assert!(matches!(
             recv(&mut connection).await,
             ServerMessage::Reply { request_id, .. } if request_id.as_str() == "w1"

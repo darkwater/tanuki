@@ -78,7 +78,7 @@ fn publish(request_id: &str, topic: &str, value: Value) -> ClientMessage {
         request_id: RequestId::new(request_id.into()),
         operations: vec![WireOperation::PublishState {
             topic: TopicPath::parse(topic).unwrap(),
-            value: WireValue::new(value),
+            value,
             expiry: None,
         }],
     }
@@ -188,7 +188,7 @@ async fn both_codecs_preserve_bytes_floats_and_literal_tag_maps() {
             let ChangeView::Upsert { node, .. } = &changes[0] else {
                 panic!("expected an upsert");
             };
-            assert_eq!(node.current().unwrap().value.as_inner(), value);
+            assert_eq!(&node.current().unwrap().value, value);
             next(&mut writer).await; // reply
 
             // ...and through a fresh snapshot.
@@ -207,7 +207,7 @@ async fn both_codecs_preserve_bytes_floats_and_literal_tag_maps() {
                 panic!("expected the hello snapshot");
             };
             let node = &nodes[&TopicPath::parse("/codec/probe").unwrap()];
-            assert_eq!(node.current().unwrap().value.as_inner(), value);
+            assert_eq!(&node.current().unwrap().value, value);
             reader.close().await.unwrap();
         }
         writer.close().await.unwrap();

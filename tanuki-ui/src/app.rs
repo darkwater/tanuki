@@ -276,7 +276,6 @@ mod tests {
     use super::*;
     use tanuki_protocol::{
         ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, TopicPath, Value,
-        WireValue,
     };
 
     fn baseline(sequence: u64) -> SnapshotView {
@@ -286,7 +285,7 @@ mod tests {
                 "/cached".parse().unwrap(),
                 NodeView::State {
                     current: CurrentValueView {
-                        value: WireValue::new(Value::Integer(42)),
+                        value: Value::Integer(42),
                         last_write: ProvenanceView {
                             client: "writer".parse().unwrap(),
                             session: None,

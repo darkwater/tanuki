@@ -59,7 +59,7 @@ struct OperationFields {
     op: String,
     topic: TopicPath,
     #[serde(default, deserialize_with = "present")]
-    value: Option<WireValue>,
+    value: Option<Value>,
     expiry: Option<WireExpiry>,
     kind: Option<WireInputKind>,
     release: Option<WireRelease>,

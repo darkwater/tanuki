@@ -211,8 +211,14 @@ are drained and logs the slow-consumer reason; reconnect creates a fresh core
 subscription rather than a replay session.
 
 JSON uses the explicit `$bytes`/`$int`/`$map` tag mapping. MessagePack carries
-bytes natively and uses no extension types. `Value` is exactly the Serde data
-model (no timestamps or durations), so Serde payloads convert losslessly. Each incoming frame selects its
+bytes natively and uses no extension types. `Value` itself implements Serde in
+that format-aware way (`is_human_readable` picks the tagged JSON form or native
+types), so it is the wire value type and an ordinary payload type at once.
+`to_value`/`from_value` (`tanuki-protocol/src/payload/`) are Tanuki's own
+serializer and deserializer for `Value`; they report themselves as binary, so a
+`Value` nested in a Serde type keeps its exact shape instead of being baked
+into tags, and a sequence of `u8` elements becomes bytes while tuples and
+fixed arrays stay lists. Each incoming frame selects its
 own decoder and its correlated reply codec; the hello codec remains the codec
 for unsolicited snapshots and updates. Both codecs deserialize to the same
 transport-independent `Value` enum.

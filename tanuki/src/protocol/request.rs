@@ -38,13 +38,10 @@ impl TryFrom<WireOperation> for WriteOperation {
                 expiry,
             } => Self::PublishState {
                 topic,
-                value: value.into_inner(),
+                value,
                 expiry: expiry_update(expiry)?,
             },
-            WireOperation::PublishEvent { topic, value } => Self::PublishEvent {
-                topic,
-                value: value.into_inner(),
-            },
+            WireOperation::PublishEvent { topic, value } => Self::PublishEvent { topic, value },
             WireOperation::DefineInput { topic, kind } => Self::DefineInput {
                 topic,
                 kind: kind.into(),
@@ -60,13 +57,10 @@ impl TryFrom<WireOperation> for WriteOperation {
                 expiry,
             } => Self::SubmitDesired {
                 topic,
-                value: value.into_inner(),
+                value,
                 expiry: expiry_update(expiry)?,
             },
-            WireOperation::SubmitCommand { topic, value } => Self::SubmitCommand {
-                topic,
-                value: value.into_inner(),
-            },
+            WireOperation::SubmitCommand { topic, value } => Self::SubmitCommand { topic, value },
             WireOperation::ClearDesired { topic } => Self::ClearDesired { topic },
             WireOperation::RemoveNode { topic } => Self::RemoveNode { topic },
         })

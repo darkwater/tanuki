@@ -8,7 +8,7 @@ use tanuki::{
     core::{Core, SchemaInstallMode},
     domain::{Node, Selection, Selector, Timestamp, TopicPath, Value},
     link::{LinkDefinition, LinkName},
-    protocol::{DiagnosticView, NodeView, ServerMessage, WireValue},
+    protocol::{DiagnosticView, NodeView, ServerMessage},
     schema::{Enforcement, NullPolicy, Schema, SchemaName, SchemaRule, ValueValidator},
     server::serve_with_core_and_timeouts,
     transport::{Clock, Heartbeat, SharedCore, WebSocketTimeouts},
@@ -408,7 +408,7 @@ async fn messagepack_uses_the_same_snapshot_reply_and_update_messages() {
     }) else {
         panic!("battery update must be state");
     };
-    assert_eq!(current.value, WireValue::new(Value::Integer(91)));
+    assert_eq!(current.value, Value::Integer(91));
 
     socket.close(None).await.unwrap();
     wait_for_session_count(&server.core, 0).await;

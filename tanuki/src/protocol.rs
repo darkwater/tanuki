@@ -130,7 +130,7 @@ impl From<&Node> for NodeView {
 impl From<&RetainedValue> for CurrentValueView {
     fn from(value: &RetainedValue) -> Self {
         Self {
-            value: WireValue::new(value.value().clone()),
+            value: value.value().clone(),
             last_write: ProvenanceView::from(value.last_write()),
             expires_at: value.expires_at().map(|deadline| deadline.get().get()),
         }
@@ -195,7 +195,7 @@ impl From<&Change> for ChangeView {
 impl From<&EventOccurrence> for OccurrenceView {
     fn from(value: &EventOccurrence) -> Self {
         Self {
-            value: WireValue::new(value.value().clone()),
+            value: value.value().clone(),
             provenance: ProvenanceView::from(value.publisher()),
         }
     }
@@ -204,7 +204,7 @@ impl From<&EventOccurrence> for OccurrenceView {
 impl From<&CommandOccurrence> for OccurrenceView {
     fn from(value: &CommandOccurrence) -> Self {
         Self {
-            value: WireValue::new(value.value().clone()),
+            value: value.value().clone(),
             provenance: ProvenanceView::from(value.submitter()),
         }
     }

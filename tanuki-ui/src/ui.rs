@@ -245,7 +245,7 @@ impl ViewState {
                         | Some(NodeView::Desired {
                             current: Some(current),
                             ..
-                        }) => value_text(current.value.as_inner()),
+                        }) => value_text(&current.value),
                         _ => String::new(),
                     };
                     let label = format!(

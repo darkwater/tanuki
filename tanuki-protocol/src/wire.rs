@@ -9,7 +9,7 @@ use serde::{
 use serde_json::{Map, Value as RawJson, json};
 use thiserror::Error;
 
-use crate::{ClientName, ErrorCode, FiniteF64, FromValue, PayloadError, TopicPath, Value};
+use crate::{ClientName, ErrorCode, FiniteF64, PayloadError, TopicPath, Value};
 
 const TAGS: [&str; 3] = ["$bytes", "$int", "$map"];
 
@@ -28,50 +28,25 @@ pub fn decode_messagepack<T: de::DeserializeOwned>(
     Ok(value)
 }
 
-/// A runtime value with Tanuki's codec-aware encoding: tags (`$bytes`, `$int`,
-/// `$map`) for JSON and native types for MessagePack.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WireValue(Value);
-
-impl WireValue {
-    /// Decodes into a Serde type or [`Value`]; see [`FromValue`].
-    pub fn decode<T: FromValue>(&self) -> Result<T, PayloadError> {
-        T::from_value(&self.0)
-    }
-
-    #[must_use]
-    pub fn new(value: Value) -> Self {
-        Self(value)
-    }
-
-    #[must_use]
-    pub fn as_inner(&self) -> &Value {
-        &self.0
-    }
-
-    pub fn into_inner(self) -> Value {
-        self.0
-    }
-}
-
-impl Serialize for WireValue {
+/// Tanuki's value encoding is format-aware: human-readable formats (JSON) use
+/// the tagged form (`$bytes`, `$int`, `$map`), binary formats (MessagePack)
+/// native types. Both round-trip exactly.
+impl Serialize for Value {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            encode(&self.0).serialize(serializer)
+            encode(self).serialize(serializer)
         } else {
-            BinaryValue(&self.0).serialize(serializer)
+            BinaryValue(self).serialize(serializer)
         }
     }
 }
 
-impl<'de> Deserialize<'de> for WireValue {
+impl<'de> Deserialize<'de> for Value {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         if deserializer.is_human_readable() {
-            decode(RawJson::deserialize(deserializer)?)
-                .map(Self)
-                .map_err(de::Error::custom)
+            decode(RawJson::deserialize(deserializer)?).map_err(de::Error::custom)
         } else {
-            BinaryOwnedValue::deserialize(deserializer).map(|value| Self(value.0))
+            BinaryOwnedValue::deserialize(deserializer).map(|value| value.0)
         }
     }
 }
@@ -388,15 +363,15 @@ impl NodeView {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CurrentValueView {
-    pub value: WireValue,
+    pub value: Value,
     pub last_write: ProvenanceView,
     pub expires_at: Option<jiff::Timestamp>,
 }
 
 impl CurrentValueView {
-    /// Decodes the value into a Serde type or [`Value`]; see [`FromValue`].
-    pub fn decode<T: FromValue>(&self) -> Result<T, PayloadError> {
-        self.value.decode()
+    /// Decodes the value into a Serde type or [`Value`].
+    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
+        crate::from_value(&self.value)
     }
 }
 
@@ -458,14 +433,14 @@ impl ChangeView {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OccurrenceView {
-    pub value: WireValue,
+    pub value: Value,
     pub provenance: ProvenanceView,
 }
 
 impl OccurrenceView {
-    /// Decodes the payload into a Serde type or [`Value`]; see [`FromValue`].
-    pub fn decode<T: FromValue>(&self) -> Result<T, PayloadError> {
-        self.value.decode()
+    /// Decodes the payload into a Serde type or [`Value`].
+    pub fn decode<T: de::DeserializeOwned>(&self) -> Result<T, PayloadError> {
+        crate::from_value(&self.value)
     }
 }
 

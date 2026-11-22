@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use tanuki_protocol::{
     ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, SelectedView,
-    SnapshotView, UpdateView, Value, WireValue,
+    SnapshotView, UpdateView, Value,
 };
 
 fn path(input: &str) -> tanuki_protocol::TopicPath {
@@ -11,7 +11,7 @@ fn path(input: &str) -> tanuki_protocol::TopicPath {
 
 fn current(value: i64, at: &str) -> CurrentValueView {
     CurrentValueView {
-        value: WireValue::new(Value::Integer(value)),
+        value: Value::Integer(value),
         last_write: ProvenanceView {
             client: "lamp".parse().unwrap(),
             session: None,
@@ -70,8 +70,8 @@ fn complete_update_is_applied_before_the_new_shape_is_observed() {
     else {
         panic!("expected brightness state")
     };
-    assert_eq!(hue.value, WireValue::new(Value::Integer(120)));
-    assert_eq!(brightness.value, WireValue::new(Value::Integer(70)));
+    assert_eq!(hue.value, Value::Integer(120));
+    assert_eq!(brightness.value, Value::Integer(70));
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn removals_change_shape_and_occurrences_stay_out_of_retained_nodes() {
     let occurrence = ChangeView::Event {
         topic: "/doorbell/rang".parse().unwrap(),
         event: tanuki_protocol::OccurrenceView {
-            value: WireValue::new(Value::Bool(true)),
+            value: Value::Bool(true),
             provenance: ProvenanceView {
                 client: "doorbell".parse().unwrap(),
                 session: None,

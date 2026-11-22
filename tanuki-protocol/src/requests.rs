@@ -1,4 +1,4 @@
-use crate::{ClientName, RequestId, Selector, TopicPath, WireValue};
+use crate::{ClientName, RequestId, Selector, TopicPath, Value};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -41,13 +41,13 @@ pub enum SessionMode {
 pub enum WireOperation {
     PublishState {
         topic: TopicPath,
-        value: WireValue,
+        value: Value,
         #[serde(default)]
         expiry: Option<WireExpiry>,
     },
     PublishEvent {
         topic: TopicPath,
-        value: WireValue,
+        value: Value,
     },
     DefineInput {
         topic: TopicPath,
@@ -59,13 +59,13 @@ pub enum WireOperation {
     },
     SubmitDesired {
         topic: TopicPath,
-        value: WireValue,
+        value: Value,
         #[serde(default)]
         expiry: Option<WireExpiry>,
     },
     SubmitCommand {
         topic: TopicPath,
-        value: WireValue,
+        value: Value,
     },
     ClearDesired {
         topic: TopicPath,

@@ -25,12 +25,12 @@ fn requests_round_trip_both_codecs_without_losing_tags_or_limits() {
             operations: vec![
                 WireOperation::PublishState {
                     topic: TopicPath::parse("/lamp/hue").unwrap(),
-                    value: WireValue::new(Value::Integer(i64::MAX)),
+                    value: Value::Integer(i64::MAX),
                     expiry: None,
                 },
                 WireOperation::PublishEvent {
                     topic: TopicPath::parse("/lamp/event").unwrap(),
-                    value: WireValue::new(Value::Bytes(vec![0, 255])),
+                    value: Value::Bytes(vec![0, 255]),
                 },
                 WireOperation::DefineInput {
                     topic: TopicPath::parse("/lamp/desired").unwrap(),
@@ -78,7 +78,7 @@ fn null_payload_presence_and_discriminator_order_are_preserved() {
         panic!()
     };
     assert!(
-        matches!(&operations[0],WireOperation::SubmitDesired { value, .. } if value.as_inner() == &Value::Null)
+        matches!(&operations[0],WireOperation::SubmitDesired { value, .. } if value == &Value::Null)
     );
     let missing = r#"{"op":"submit_desired","topic":"/lamp/desired"}"#;
     assert!(serde_json::from_str::<WireOperation>(missing).is_err());

@@ -132,7 +132,7 @@ impl Writer {
 fn publish(topic: &str, value: i64, expiry: Option<WireExpiry>) -> WireOperation {
     WireOperation::PublishState {
         topic: path(topic),
-        value: WireValue::new(Value::Integer(value)),
+        value: Value::Integer(value),
         expiry,
     }
 }
@@ -153,7 +153,7 @@ fn value(app: &App, p: &str) -> i64 {
     let Some(NodeView::State { current }) = app.model().node(&path(p)) else {
         panic!("missing state {p}")
     };
-    let Value::Integer(n) = current.value.as_inner() else {
+    let Value::Integer(n) = &current.value else {
         panic!("not an integer")
     };
     *n

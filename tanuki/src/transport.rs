@@ -30,7 +30,7 @@ use crate::{
     protocol::{
         ClientMessage, CommitView, ErrorCode, ErrorView, LinkInstallView, LinkRemovalView,
         RequestConversionError, RequestId, SchemaInstallView, ServerMessage, SessionMode,
-        SnapshotView, UpdateView, WireExpiry, WireOperation, WireValue, expiry_update,
+        SnapshotView, UpdateView, Value, WireExpiry, WireOperation, expiry_update,
         nonnegative_duration,
     },
     runtime::{OpenedConnection, RuntimeError, RuntimeHandle, StreamLease},
@@ -852,7 +852,7 @@ struct BatchRequest {
 
 #[derive(Deserialize)]
 struct StateRequest {
-    value: WireValue,
+    value: Value,
     #[serde(default)]
     expiry: Option<WireExpiry>,
 }
@@ -910,7 +910,7 @@ async fn single_state_write(
         actor,
         WriteBatch::new(vec![WriteOperation::PublishState {
             topic,
-            value: payload.value.into_inner(),
+            value: payload.value,
             expiry: expiry_update(payload.expiry).map_err(ApiError::from_request_conversion)?,
         }])
         .map_err(|error| ApiError::bad_request(ErrorCode::EmptyBatch, error.to_string()))?,
