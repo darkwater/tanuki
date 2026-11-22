@@ -1,50 +1,82 @@
 use super::{Codec, ConnectionError, Incoming, MAX_MESSAGE_BYTES};
 use crate::protocol::{ClientMessage, ServerMessage};
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
-pub(crate) use gloo_net::websocket::Message;
-use gloo_net::websocket::{State, WebSocketError, futures::WebSocket};
+use futures_util::{
+    Sink, SinkExt, Stream, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
+use gloo_net::websocket::{Message, State, WebSocketError, futures::WebSocket};
 use std::{
     pin::Pin,
+    rc::Rc,
     task::{Context, Poll},
 };
+use tokio::sync::Mutex;
 
-/// Direct browser WebSocket access, using the same wire messages as native clients.
-pub struct Connection {
-    pub(crate) socket: Socket,
+// Browser sockets live on one thread, so the halves share the sink with `Rc`.
+type Shared = Rc<Mutex<SplitSink<Socket, Message>>>;
+
+/// The sending half of a [`Connection`](super::Connection). Clones share the
+/// socket; each message is sent whole.
+#[derive(Clone)]
+pub struct Sender {
+    sink: Shared,
     codec: Codec,
+}
+
+/// The receiving half of a [`Connection`](super::Connection).
+pub struct Receiver {
+    stream: SplitStream<Socket>,
     ended: bool,
 }
-impl Connection {
-    pub async fn open(url: &str) -> Result<Self, ConnectionError> {
-        Self::open_with_codec(url, Codec::Json).await
-    }
-    pub async fn open_with_codec(url: &str, codec: Codec) -> Result<Self, ConnectionError> {
+
+impl Sender {
+    pub(super) async fn open(url: &str, codec: Codec) -> Result<(Self, Receiver), ConnectionError> {
         let ws = WebSocket::open(url).map_err(WebSocketError::MessageSendError)?;
         let mut socket = Socket(Some(ws));
         // Gloo's constructor starts the handshake; readiness waits for its open event.
         std::future::poll_fn(|cx| Pin::new(&mut socket).poll_ready(cx)).await?;
-        Ok(Self {
-            socket,
-            codec,
-            ended: false,
-        })
+        let (sink, stream) = socket.split();
+        Ok((
+            Self {
+                sink: Rc::new(Mutex::new(sink)),
+                codec,
+            },
+            Receiver {
+                stream,
+                ended: false,
+            },
+        ))
     }
-    pub async fn send(&mut self, message: &ClientMessage) -> Result<(), ConnectionError> {
+
+    /// Sends one message in this connection's codec.
+    pub async fn send(&self, message: &ClientMessage) -> Result<(), ConnectionError> {
         self.send_with_codec(message, self.codec).await
     }
+
     pub async fn send_with_codec(
-        &mut self,
+        &self,
         message: &ClientMessage,
         codec: Codec,
     ) -> Result<(), ConnectionError> {
-        self.socket.send(encode_message(message, codec)?).await?;
+        let frame = encode_message(message, codec)?;
+        self.sink.lock().await.send(frame).await?;
         Ok(())
     }
+
+    /// Starts a normal close (code 1000).
+    pub async fn close(&self) -> Result<(), ConnectionError> {
+        self.sink.lock().await.close().await?;
+        Ok(())
+    }
+}
+
+impl Receiver {
+    /// See [`Connection::recv`](super::Connection::recv).
     pub async fn recv(&mut self) -> Result<Option<ServerMessage>, ConnectionError> {
         if self.ended {
             return Ok(None);
         }
-        match decode_frame(self.socket.next().await) {
+        match decode_frame(self.stream.next().await) {
             Ok(Incoming::Message(message)) => Ok(Some(message)),
             result => {
                 self.ended = true;
@@ -52,16 +84,11 @@ impl Connection {
             }
         }
     }
-    pub async fn close(&mut self) -> Result<(), ConnectionError> {
-        self.socket.close().await?;
-        self.ended = true;
-        Ok(())
-    }
 }
 
 // Gloo's Sink::poll_close is a no-op. Own the socket in an Option so closing a
-// direct connection or the session writer actually requests a browser close.
-pub(crate) struct Socket(Option<WebSocket>);
+// connection actually requests a browser close; the receiving half then ends.
+struct Socket(Option<WebSocket>);
 impl Stream for Socket {
     type Item = Result<Message, WebSocketError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -104,10 +131,7 @@ impl Sink<Message> for Socket {
     }
 }
 
-pub(crate) fn encode_message(
-    message: &ClientMessage,
-    codec: Codec,
-) -> Result<Message, ConnectionError> {
+fn encode_message(message: &ClientMessage, codec: Codec) -> Result<Message, ConnectionError> {
     let frame = match codec {
         Codec::Json => Message::Text(serde_json::to_string(message)?),
         Codec::MessagePack => Message::Bytes(rmp_serde::to_vec_named(message)?),
@@ -122,7 +146,7 @@ pub(crate) fn encode_message(
     Ok(frame)
 }
 
-pub(crate) fn decode_frame(
+fn decode_frame(
     frame: Option<Result<Message, WebSocketError>>,
 ) -> Result<Incoming, ConnectionError> {
     match frame {

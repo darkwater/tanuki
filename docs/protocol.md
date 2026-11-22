@@ -264,9 +264,8 @@ selection only. An empty list is valid and stops all updates.
 
 A data message must contain exactly one encoded protocol message. Trailing
 JSON or MessagePack data rejects the whole message before applying a write.
-The shared `decode_messagepack` helper enforces this for the server, direct
-Rust connection, and session driver; a malformed incoming server message ends
-the session without delivering its partial update.
+The shared `decode_messagepack` helper enforces this for the server and the
+Rust connection.
 
 A write's own selected update, and any update queued before it, is sent
 before its reply. When the reply arrives, a client that applies updates in
@@ -293,8 +292,9 @@ Liveness uses ordinary WebSocket mechanisms (provisional defaults):
 | An encoded outgoing message exceeds 1 MiB | — | 1009 `message_too_big` |
 
 Peers answer pings automatically while their WebSocket library reads the
-stream; the SDK session driver always does. A raw `Connection` user that stops
-calling `recv` stops answering and is disconnected after the silence window.
+stream. A `tanuki_client::Connection` user that stops calling `recv` stops
+answering and is disconnected after the silence window. The server acknowledges
+a client's close frame before dropping the connection.
 The server answers peer pings itself and never sends a duplicate pong. A
 silence or write timeout runs ordinary disconnect cleanup, so a controller
 that vanishes without closing TCP releases its claims (or starts their grace).
@@ -340,15 +340,11 @@ decoding keeps the original JSON/MessagePack decoder through nested fields;
 bytes, extension values and literal reserved-key maps now round-trip through
 whole requests, snapshots and updates, not just standalone value fixtures.
 
-`tanuki-client::Connection` exposes explicit hello/send/receive. `Session`
-(cloneable, reconnecting with backoff) manages selection with `select` as
-observers, listeners and controllers register, re-claims controlled inputs
-after reconnecting, and relies on update-before-reply ordering so observers
-reflect a write before its receipt resolves. A managed session closed with
-4001 ends instead of reconnecting. Stateless sessions use hello's `session:
-"stateless"`. Native clients support `ws://` and, through the default `rustls`
-feature, `wss://`; 1 MiB messages, JSON outgoing by default, optional
-MessagePack. Full APIs and semantics are in
+`tanuki-client` is the protocol layer: `Connection` sends typed client
+messages and receives typed server messages over one WebSocket, natively
+(`ws://`, and `wss://` through the default `rustls` feature) or in the browser,
+and splits into a cloneable `Sender` and a `Receiver`. Hello, request IDs,
+caching and reconnection belong to the application. See
 [the client README](../tanuki-client/README.md).
 
 ## Server boundary and shutdown — 2026-10-07
@@ -385,8 +381,8 @@ be verified through real transport in Task 02.
 
 ## Inspector live consumer — Task 02
 
-The inspector uses the existing native Session/raw-listener protocol only,
-subscribing to `/**`. Real-server tests confirm this subscription includes
+The inspector subscribes to `/**` (since 2026-11-22 through a raw
+`Connection` with a stateless hello). Real-server tests confirm this subscription includes
 exposed `/$diagnostics/**` as well as ordinary topics, both in initial snapshots
 and later updates. Schema matchers' ordinary-only restriction does not apply
 to subscription matching. No `/$connections/**` projection currently exists;
@@ -431,32 +427,3 @@ Rust's socket API, and handshake errors may omit details. Browser receive size
 checks occur after complete-message allocation; timers depend on event-loop
 scheduling. Native TLS, JavaScript bindings and automatic reconnect remain
 outside this increment. See [SDK usage](../tanuki-client/README.md#browser-webassembly).
-
-## TV volume example convention
-
-The native [TV bridge](../examples/tv-volume/README.md) uses existing protocol
-operations only: retained output `/tv/volume` (integer 0–100, 90-second lease)
-and claimed retained input `/tv/desired-volume` (integer 0–100). These paths are
-application conventions, not reserved protocol names. Invalid input is logged
-by the adapter and not sent to the TV; absent a configured denying schema, a
-Tanuki write receipt still means publication acceptance. Actual output comes
-only from TV notifications. A lease refresh on subscription renewal repeats the
-last observed value, rather than establishing a new physical measurement.
-
-SSDP discovery (2026-11-01) adds no Tanuki protocol messages. The bridge resolves
-its TV address and callback before connecting; `--discover` is a read-only
-SSDP/HTTP description listing with no Tanuki session or desired-input handling.
-
-The TV adapter accepts empty `LastChange` event values as no-op UPnP
-notifications. HTTP 200 acknowledges their subscription sequence; they do not
-publish a Tanuki value. This is an adapter compatibility rule and adds no new
-Tanuki message or operation.
-
-The mute increment adds application-convention paths `/tv/mute` (retained output
-boolean) and `/tv/desired-mute` (claimed retained input boolean). `true` means
-muted/request mute; `false` means unmuted/request unmute. Missing observed mute
-means unknown, not false. String/numeric input is logged and ignored by the
-adapter, while server acceptance still follows installed schemas. No automatic
-schema is added. Combined observed audio fields are one accepted write batch;
-SOAP acceptance never substitutes for a TV report. Existing protocol operations
-and encodings are unchanged.

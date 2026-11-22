@@ -38,7 +38,7 @@ browser bindings and real-device use remain unverified.
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tanuki/tests/native_sdk.rs::observers_see_wildcards_typed_values_and_their_own_writes` verifies typed `/battery/laptop` publication, a `/battery/*` observation decoded with `Snapshot::values` (a widget no longer needs to know device names in advance), stateless phone attribution and read-your-writes. Leases use `Expiry::After`. The compiled `publisher` and `dashboard` examples were exercised against the production binary on loopback. No battery widget/device deployment is claimed.
+- Rust client evidence: the session-SDK tests that covered this story were removed with the session layer on 2026-11-22. Protocol-level coverage remains in `tanuki/tests/websocket_api.rs` and `tanuki/tests/client_connection.rs`; Rust state-management coverage is pending the user's new client.
 
 - Core test links: [test plan](../test-plan.md) — C1, C3, L2, S1, T1; E1 steps 1 and 4.
 - `tanuki/tests/core_publication.rs::duplicate_state_write_refreshes_provenance_and_expiry`
@@ -78,3 +78,4 @@ browser bindings and real-device use remain unverified.
 
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
 - 2026-11-21: SDK rewrite: wildcard observation (`session.observe("/battery/*")`) with typed `values::<T>()`, automatic reconnect, and stateless sessions for widgets that run several times under one name. Simulated over loopback; no widget deployment verified.
+- 2026-11-22: The user is writing their own Rust client, so `tanuki-client` was reduced to the protocol layer (typed messages over one WebSocket) and the session SDK (Session, typed topics, observers, controllers) and its tests were removed. Server behaviour is unchanged; SDK-level criteria evidence is pending the new client.

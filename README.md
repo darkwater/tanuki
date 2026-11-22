@@ -18,19 +18,17 @@ provisional limits are listed in
 
 ## Workspace layout
 
-The repository root is a virtual Cargo workspace. Core packages live directly
-at the root; standalone device examples live under `examples/`:
+The repository root is a virtual Cargo workspace:
 
 - `tanuki/` — authoritative server library, binary and integration tests
 - `tanuki-protocol/` — shared wire types/codecs and validated primitives
-- `tanuki-client/` — native/browser Rust SDK, examples and client tests
+- `tanuki-client/` — native/browser Rust WebSocket protocol client
 - `tanuki-ui/` — read-only terminal inspector and model/formatting/connection library
-- [`examples/tv-volume/`](examples/tv-volume/README.md) — UPnP volume publication and control service
 
 Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the
-workspace root. See [the SDK guide](tanuki-client/README.md) for the Rust
-client: a cloneable, reconnecting session; typed topic handles; atomic writes;
-wildcard observation; and controllers for claimed inputs.
+workspace root. [`tanuki-client`](tanuki-client/README.md) is the protocol
+layer only: typed messages over one WebSocket, with state management left to
+the application.
 
 ## Run it
 

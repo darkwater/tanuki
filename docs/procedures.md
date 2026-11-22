@@ -231,42 +231,17 @@ in-progress save is joined before the final snapshot is captured. A final failur
 returned to the process rather than hidden. Crash recovery may lose writes
 since the last completed replacement; there is no WAL or replay.
 
-## Native SDK operation
+## Protocol client operation
 
-Run the ordinary Rust examples with the commands in
-[the client README](../tanuki-client/README.md). They use the production
-WebSocket endpoint; HTTP remains available for one-off phone/remote submissions.
-The controller example defines and claims desired brightness explicitly and
-simulates a device report atomically. Its accepted report is not physical-device
-verification. Separate processes use distinct example client names.
-
-Retain Session for the intended connection lifetime. Creating/cloning a topic
-handle is local and holds no claim or strong session ownership. Dropping an
-observer cancels that projection; dropping Session signals native shutdown.
-Prefer `close().await` to join driver/writer and projection tasks. It attempts a
-normal WebSocket close, waits at most one second for writer shutdown and reports
-prior abnormal failure. Server disconnect/grace work still follows the existing
-core session lifecycle; client close has no server cleanup acknowledgement.
-
-Raw lag is terminal for only the affected receiver; fresh registration recovers
-current retained state without replaying occurrences. Slow snapshot output can
-coalesce safely because its projection consumes every delta. Abnormal closure
-has a path independent of data queues and reports once; clean close drains
-admitted deltas and exposes final unseen latest state. Prior snapshots are
-historical immutable values. Replacement code 4001 and slow-consumer code 1013
-remain inspectable in connection termination reasons.
-
-Inspect write warnings on success. A local pre-send failure differs from a reply
-timeout or lost connection after transmission may have begun; the latter have
-unknown outcomes. Cancellation is not rollback. There is no automatic mutation
-retry, connection replacement loop or claim recovery in the SDK. Reconnecting
-means explicitly creating a new Session with a fresh baseline.
-
-Shutdown closes command admission and rejects writes still in the driver
-command queue with `SessionGone`: those frames never reached the socket writer.
-Writes already handed to that writer retain unknown-outcome semantics. A stop
-signal observed before the driver runs takes precedence over queued commands.
-Termination is published only after command admission has closed.
+`tanuki_client::Connection` is one WebSocket with no background tasks. Send
+hello first; keep receiving for the connection's lifetime (the native receiver
+answers pings, and the server closes a peer silent for 60 seconds). Split the
+connection to receive in one task while sending from others. A normal close is
+`close()` followed by receiving until `None`; the server acknowledges it.
+Request IDs, reply correlation, caching, reconnection and timeouts are the
+application's: after a disconnect, open a new connection, send hello again and
+replace any cache with the new snapshot. Nothing is replayed, and the outcome
+of a write whose reply never arrived is unknown.
 
 ## Inspector model procedures — Task 01
 
@@ -289,24 +264,22 @@ The binary only prints its implementation status and acquires no terminal state.
 
 Create App with a configured WebSocket URL/client name (defaults: loopback
 `/v1/ws`, `tanuki-ui-<pid>-<counter>`). Initially it is disconnected and empty.
-An explicit reconnect marks the old cache connecting/stale, removes the old
-listener and closes/joins the old session, logging a prior abnormal termination.
-It connects once through the native SDK with `/**`, installs a raw listener,
-validates/replaces from registration's baseline and then marks the view live.
+An explicit reconnect marks the old cache connecting/stale and closes the old
+connection. It opens one `Connection`, sends a stateless hello for `/**`,
+validates/replaces from that hello's snapshot and then marks the view live.
 Failure retains the old data with an error state; there is no retry or replay.
 
 Each `next_update().await` applies one complete batch. Rendering/input can
-cancel an idle receive without dequeuing a batch. A clean end marks disconnected
-(after SDK drainage); lag marks lagged and other failures mark error. Cache is
-retained and the listener removed so later receives remain pending. Explicit
+cancel an idle receive without dequeuing a batch. A clean end marks disconnected;
+any abnormal close (including 1013 for a slow consumer) marks error. Cache is
+retained and the connection dropped so later receives remain pending. Explicit
 reconnect replaces all retained data, preserving surviving navigation/filtering;
 it does not append occurrences. Expiry is a production-server batch, not a UI
 timer or polling procedure. Connecting/disconnected/lagged/error all mean that
 the display must not be presented as current.
 
-Normal/error exit must await App close to join the SDK session, including
-already terminated sessions. Prior abnormal SDK reasons can still be returned
-after joining. Client join does not wait for server cleanup acknowledgement;
+Normal/error exit should await App close to close the connection normally.
+Client close does not wait for server cleanup acknowledgement;
 production server shutdown separately joins its session cleanup. The future
 terminal loop must not draw during a network await or hold a server lock while
 drawing. Task 03 supplies input/render ticks, controls and restoration; the
@@ -333,75 +306,26 @@ Schema details are unavailable, never implied to be absent.
 
 Resize is handled through terminal events and Ratatui auto-resizing. Under
 60x10, show a resize/status/quit fallback without unsigned size arithmetic
-underflow. Render ticks are capped at 100 ms and may coalesce redraws; each SDK
+underflow. Render ticks are capped at 100 ms and may coalesce redraws; each received
 batch still applies. Any non-live state denotes stale cached data. User values,
 paths, attribution, filter, URL and error text are escaped before display.
 
 On q, Ctrl-C, terminal EOF or I/O error, drop the terminal guard first, then
-cancel/join any connection job and close/join the live SDK session. A prior
-abnormal SDK reason may still produce a failing exit code after successful
-cleanup. Partial setup errors and Rust unwinding restore via Drop too. No
+cancel/join any connection job and close the live connection. Partial setup errors and Rust unwinding restore via Drop too. No
 blocking destructor, panic-catching wrapper or speculative framework is used.
 The separate POSIX PTY smoke procedure in `tanuki-ui/tools/terminal-smoke.py`
 checks real terminal attributes and actual production binaries in temporary
 snapshot storage. It is distinct from headless CI and deployment verification.
 
-## Browser SDK procedures — 2026-10-31
+## Browser procedures — 2026-10-31
 
 Install `wasm32-unknown-unknown` for the pinned nightly, then run
 `cargo check -p tanuki-client --target wasm32-unknown-unknown --locked`.
 A Rust browser application depends on the same client crate; Cargo selects its
-browser dependencies. Drive application futures through a framework's local
-executor or `wasm_bindgen_futures::spawn_local`, without a Tokio runtime. The
-[SDK guide](../tanuki-client/README.md#browser-webassembly) includes usage and tests.
-
-Connect/hello waits for the browser open event and correlated snapshot under the
-configured deadline. Registration captures current state before forwarding new
-complete batches. Writes still pass server validation before commit/publication;
-the browser does not become another mutation authority. Errors and local unsent
-versus potentially applied outcomes remain visible. Browser timer delays during
-backgrounding/suspension do not authorize a retry. Reconnecting is an explicit
-new Session with a fresh snapshot, with no occurrence replay.
-
-On application teardown, drop observers and await Session close when possible.
-It joins SDK tasks and requests a normal socket close; server disconnect/expiry
-procedures run on the server afterward. Drop signals shutdown but cannot make
-page unload run queued futures. Browser certificate/mixed-content restrictions
-apply; use a TLS proxy for HTTPS deployments. The test helper starts the actual
-production binary on an assigned loopback port with temporary persistence, waits
-for its readiness log, runs browser tests and then sends SIGINT and joins it.
-
-## TV volume bridge
-
-See [configuration, discovery and service instructions](../examples/tv-volume/README.md).
-Run `cargo run -p tanuki-tv-volume -- --discover` for read-only SSDP listing,
-then `cargo run -p tanuki-tv-volume -- --device UDN_OR_NAME` to start. A single
-discovered renderer also permits no-argument startup. Callback address/port
-selection is automatic; `--callback-url`, `--listen` and `--tanuki-url` override
-it. The callback must reach `/notify` from the TV. The previous explicit
-`DESCRIPTION_URL CALLBACK_URL [LISTEN_ADDR] [TANUKI_WS_URL]` syntax still works.
-No service is automatically installed. A supplied systemd user-unit template restarts failures.
-Startup subscribes and explicitly claims retained intent. Shutdown attempts
-unsubscribe, callback-task termination, output removal and session close;
-input definition/value survive. Lost subscriptions require a fresh process
-subscription; stale output expires if cleanup cannot reach Tanuki. Read-only
-LAN discovery was verified on 2026-11-01. Volume control and event delivery still
-have simulated-device acceptance only. Read-only listing exits
-before connecting to Tanuki or applying retained control intent.
-
-Samsung notifications containing empty/whitespace `LastChange` are acknowledged
-and counted in subscription order while retaining the last observed volume.
-They no longer cause the next real event to look like a sequence gap. Out-of-order arrivals wait up to one second in a 64-event reorder buffer. A
-missing event that does not arrive in that interval, a full reorder buffer, or
-callback queue overflow still requires the documented fresh subscription/restart
-procedure. Live diagnostics while media is playing must
-use a receive-only subscriber; starting the regular bridge can apply retained
-control intent.
-
-The bridge also claims `/tv/desired-mute` and publishes `/tv/mute`. Submit a
-boolean desired value to mute/unmute; still-unexpired intent can be applied at
-startup just like desired volume. No live control tests should run while media
-is playing. Mute remains absent until reported, then has the same 90-second
-expiry/renewal policy. Volume/mute reports and cleanup use atomic batches where
-both fields change. Claim loss on either input stops the service, even when its
-pending payload is invalid; shutdown releases both claims and retains intent.
+browser dependencies. Drive futures through a framework's local executor or
+`wasm_bindgen_futures::spawn_local`, without a Tokio runtime. Page unload
+cannot guarantee a clean WebSocket close. Browser certificate/mixed-content
+restrictions apply; use a TLS proxy for HTTPS deployments. The test helper
+starts the actual production binary on an assigned loopback port with temporary
+persistence, waits for its readiness log, runs browser tests and then sends
+SIGINT and joins it.

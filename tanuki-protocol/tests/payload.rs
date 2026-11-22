@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use tanuki_client::protocol::Value;
-use tanuki_client::{from_value, to_value};
+use tanuki_protocol::{Value, from_value, to_value};
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Payload {
     #[serde(rename = "$bytes")]

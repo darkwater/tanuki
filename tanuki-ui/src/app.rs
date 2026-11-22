@@ -1,4 +1,6 @@
-//! SDK ownership for a single live inspector. No rendering or extra update queue.
+//! Connection ownership for a single live inspector. No rendering or extra
+//! update queue: one stateless `/**` subscription whose hello snapshot is the
+//! baseline and whose updates are complete commit batches.
 use std::{
     future::pending,
     sync::atomic::{AtomicU64, Ordering},
@@ -6,8 +8,11 @@ use std::{
 
 use tokio::{sync::oneshot, task::JoinHandle};
 
-use tanuki_client::{ClientError, Closed, Event, Listener, Reconnect, Resync, Session, Status};
-use tanuki_protocol::{ClientName, SnapshotView};
+use tanuki_client::{Connection, ConnectionError};
+use tanuki_protocol::{
+    ClientMessage, ClientName, ErrorView, RequestId, Selector, ServerMessage, SessionMode,
+    SnapshotView, UpdateView,
+};
 
 use crate::model::{ConnectionStatus, Model, ModelError};
 
@@ -51,30 +56,25 @@ pub enum AppError {
     #[error("inspector connection task failed: {0}")]
     Task(#[from] tokio::task::JoinError),
     #[error(transparent)]
-    Client(#[from] ClientError),
-    #[error("session ended: {0}")]
-    Ended(Closed),
+    Connection(#[from] ConnectionError),
+    #[error("server rejected the subscription: {} ({})", .0.message, .0.code)]
+    Rejected(ErrorView),
+    #[error("server answered hello with an unexpected message")]
+    UnexpectedReply,
     #[error(transparent)]
     Model(#[from] ModelError),
 }
 
-struct LiveConnection {
-    session: Session,
-    // Removed once the stream ends or fails; the session stays owned until
-    // joined during explicit reconnect/exit.
-    listener: Option<Listener>,
-    baseline: SnapshotView,
-}
-
 struct ConnectionAttempt {
     cancel: oneshot::Sender<()>,
-    task: JoinHandle<Result<Option<LiveConnection>, AppError>>,
+    task: JoinHandle<Result<Option<(Connection, SnapshotView)>, AppError>>,
 }
 
 pub struct App {
     config: ConnectionConfig,
     model: Model,
-    connection: Option<LiveConnection>,
+    // Present while the stream is live; dropped once it ends or fails.
+    connection: Option<Connection>,
     attempt: Option<ConnectionAttempt>,
 }
 impl App {
@@ -125,29 +125,21 @@ impl App {
         self.next_update().await
     }
 
-    fn install(&mut self, connection: LiveConnection) -> Result<(), AppError> {
-        // The listener's own baseline, not hello's, precedes its updates.
+    fn install(&mut self, connection: Connection, baseline: SnapshotView) -> Result<(), AppError> {
         let result = self
             .model
-            .replace_snapshot(connection.baseline.clone())
+            .replace_snapshot(baseline)
             .map_err(AppError::from);
-        self.connection = Some(connection);
-        match &result {
-            Ok(()) => self.model.set_status(ConnectionStatus::Live),
-            Err(_) => self.drop_listener(),
+        if result.is_ok() {
+            self.connection = Some(connection);
+            self.model.set_status(ConnectionStatus::Live);
         }
         result
     }
 
-    fn drop_listener(&mut self) {
-        if let Some(connection) = &mut self.connection {
-            connection.listener = None;
-        }
-    }
-
-    /// Apply exactly one complete batch or baseline. Suitable as a branch of
+    /// Apply exactly one complete batch. Suitable as a branch of
     /// tokio::select!; cancelling the receive does not dequeue data. With no
-    /// active listener, remain pending so an input/tick loop cannot spin or
+    /// live connection, remain pending so an input/tick loop cannot spin or
     /// auto-reconnect.
     pub async fn next_update(&mut self) -> Result<(), AppError> {
         if let Some(attempt) = &mut self.attempt {
@@ -156,7 +148,7 @@ impl App {
             let joined = (&mut attempt.task).await;
             self.attempt = None;
             let result = match joined {
-                Ok(Ok(Some(connection))) => self.install(connection),
+                Ok(Ok(Some((connection, baseline)))) => self.install(connection, baseline),
                 Ok(Ok(None)) => {
                     self.model.set_status(ConnectionStatus::Disconnected);
                     Ok(())
@@ -174,41 +166,38 @@ impl App {
         let Some(connection) = self.connection.as_mut() else {
             return pending().await;
         };
-        let Some(listener) = connection.listener.as_mut() else {
-            return pending().await;
-        };
-        let received = listener.recv().await;
-        let ended = match connection.session.status().current() {
-            Status::Closed(closed) => Some(closed),
-            _ => None,
-        };
-        self.accept_received(received, ended)
+        let received = connection.recv().await;
+        self.accept_received(received)
     }
 
-    // This boundary also permits deterministic injection of SDK results in unit
-    // tests. The SDK's own tests cover queue delivery and lag resynchronisation.
+    // This boundary also permits deterministic injection of received messages
+    // in unit tests.
     fn accept_received(
         &mut self,
-        received: Option<Event>,
-        ended: Option<Closed>,
+        received: Result<Option<ServerMessage>, ConnectionError>,
     ) -> Result<(), AppError> {
         let result = match received {
-            Some(Event::Update(update)) => self.model.apply(update).map_err(AppError::from),
-            Some(Event::Snapshot { snapshot, reason }) => {
-                if reason != Resync::Started {
-                    tracing::warn!(?reason, "inspector resynchronised from a fresh baseline");
-                }
-                self.model
-                    .replace_snapshot(SnapshotView::from(&snapshot))
-                    .map_err(AppError::from)
+            Ok(Some(ServerMessage::Update { sequence, changes })) => self
+                .model
+                .apply(UpdateView { sequence, changes })
+                .map_err(AppError::from),
+            Ok(Some(ServerMessage::Snapshot {
+                sequence, nodes, ..
+            })) => self
+                .model
+                .replace_snapshot(SnapshotView { sequence, nodes })
+                .map_err(AppError::from),
+            // The inspector sends nothing after hello, so nothing is correlated.
+            Ok(Some(ServerMessage::Reply { .. })) => Ok(()),
+            Ok(Some(ServerMessage::Error { error, .. })) => {
+                tracing::warn!(code = %error.code, message = %crate::format::safe_text(&error.message), "server reported an error");
+                Ok(())
             }
-            None => match ended {
-                Some(Closed::Failed(cause)) => Err(AppError::Ended(Closed::Failed(cause))),
-                _ => {
-                    self.model.set_status(ConnectionStatus::Disconnected);
-                    Ok(())
-                }
-            },
+            Ok(None) => {
+                self.model.set_status(ConnectionStatus::Disconnected);
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
         };
         if let Err(error) = &result {
             self.model
@@ -216,88 +205,78 @@ impl App {
             tracing::warn!(error = %crate::format::safe_text(&error.to_string()), "inspector stream ended; cached view is stale");
         }
         if result.is_err() || matches!(self.model.status(), ConnectionStatus::Disconnected) {
-            self.drop_listener();
+            self.connection = None;
         }
         result
     }
 
-    /// Always await on exit. Dropping App signals SDK shutdown as a fallback,
-    /// but only this explicit method joins the session's background task.
+    /// Await on exit to close the WebSocket normally.
     pub async fn close(&mut self) -> Result<(), AppError> {
         self.model.set_status(ConnectionStatus::Disconnected);
         if let Some(attempt) = self.attempt.take() {
             let _ = attempt.cancel.send(());
-            if let Some(connection) = attempt.task.await?? {
-                connection.session.close().await;
+            if let Some((connection, _)) = attempt.task.await?? {
+                let _ = connection.close().await;
             }
         }
         if let Some(connection) = self.connection.take() {
-            drop(connection.listener);
-            connection.session.close().await;
+            let _ = connection.close().await;
         }
         Ok(())
     }
 }
 
-/// Cancellation is checked during connect and registration. Every Session
-/// obtained by the job is either returned to App or closed/joined by this job.
-/// The inspector connects statelessly: it never replaces a same-named client's
-/// managed session (and with it any input claims). It reconnects only when
-/// asked, so the display keeps an explicit, labeled stale state.
+/// Cancellation is checked during connect and hello. Every connection opened
+/// by the job is either returned to App or closed by this job. The inspector
+/// connects statelessly: it never replaces a same-named client's managed
+/// session (and with it any input claims). It reconnects only when asked, so
+/// the display keeps an explicit, labeled stale state.
 async fn open(
     config: ConnectionConfig,
-    previous: Option<LiveConnection>,
+    previous: Option<Connection>,
     mut cancelled: oneshot::Receiver<()>,
-) -> Result<Option<LiveConnection>, AppError> {
+) -> Result<Option<(Connection, SnapshotView)>, AppError> {
     if let Some(previous) = previous {
-        drop(previous.listener);
-        previous.session.close().await;
+        let _ = previous.close().await;
     }
-    let connect = Session::builder(config.url(), config.client.as_str())
-        .stateless()
-        .reconnect(Reconnect::Never)
-        .connect();
-    let session = tokio::select! {biased;
-        _=&mut cancelled=>return Ok(None),
-        session=connect=>session?,
+    let mut connection = tokio::select! {biased;
+        _ = &mut cancelled => return Ok(None),
+        connection = Connection::open(config.url()) => connection?,
     };
-    let mut listener = match session.listen("/**") {
-        Ok(listener) => listener,
-        Err(error) => {
-            session.close().await;
-            return Err(error.into());
-        }
-    };
+    connection
+        .send(&ClientMessage::Hello {
+            request_id: RequestId::new("inspector".into()),
+            client: config.client.clone(),
+            selectors: vec![Selector::parse("/**").expect("a valid selector")],
+            session: SessionMode::Stateless,
+        })
+        .await?;
     let first = tokio::select! {biased;
-        _=&mut cancelled=>None,
-        event=listener.recv()=>event,
+        _ = &mut cancelled => None,
+        first = connection.recv() => Some(first),
     };
-    match first {
-        Some(Event::Snapshot { snapshot, .. }) => Ok(Some(LiveConnection {
-            session,
-            listener: Some(listener),
-            baseline: SnapshotView::from(&snapshot),
-        })),
-        _ => {
-            let ended = session.status().current();
-            session.close().await;
-            match ended {
-                Status::Closed(Closed::Failed(cause)) => {
-                    Err(AppError::Ended(Closed::Failed(cause)))
-                }
-                _ => Ok(None),
-            }
+    let result = match first {
+        None => Ok(None),
+        Some(Ok(Some(ServerMessage::Snapshot {
+            sequence, nodes, ..
+        }))) => {
+            return Ok(Some((connection, SnapshotView { sequence, nodes })));
         }
-    }
+        Some(Ok(Some(ServerMessage::Error { error, .. }))) => Err(AppError::Rejected(error)),
+        Some(Ok(Some(_))) => Err(AppError::UnexpectedReply),
+        Some(Ok(None)) => Ok(None),
+        Some(Err(error)) => Err(error.into()),
+    };
+    let _ = connection.close().await;
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tanuki_client::{Disconnect, Snapshot};
     use tanuki_protocol::{
-        ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, TopicPath,
-        UpdateView, Value, WireValue,
+        ChangeView, ClientViewError, CurrentValueView, NodeView, ProvenanceView, TopicPath, Value,
+        WireValue,
     };
 
     fn baseline(sequence: u64) -> SnapshotView {
@@ -321,46 +300,48 @@ mod tests {
         }
     }
 
+    fn cached(app: &App) -> bool {
+        app.model
+            .node(&TopicPath::parse("/cached").unwrap())
+            .is_some()
+    }
+
     #[test]
-    fn baselines_replace_data_and_a_failed_end_keeps_stale_data_with_its_cause() {
+    fn a_failed_stream_keeps_stale_data_with_its_cause_and_a_clean_end_disconnects() {
         let mut app = App::new(ConnectionConfig::default());
         app.model.replace_snapshot(baseline(10)).unwrap();
         app.model.set_status(ConnectionStatus::Live);
-        // A lagged listener is resynchronised rather than ended.
-        let empty = Snapshot::from(SnapshotView {
-            sequence: 12,
-            nodes: Default::default(),
-        });
-        app.accept_received(
-            Some(Event::Snapshot {
-                snapshot: empty,
-                reason: Resync::Lagged,
-            }),
-            None,
-        )
+        // Server-reported errors are logged; the stream continues.
+        app.accept_received(Ok(Some(ServerMessage::Error {
+            request_id: None,
+            error: ErrorView {
+                code: tanuki_protocol::ErrorCode::InternalError,
+                message: "fixture".into(),
+            },
+        })))
         .unwrap();
         assert_eq!(app.model.status(), &ConnectionStatus::Live);
-        assert_eq!(app.model.sequence(), 12);
-        app.model.replace_snapshot(baseline(13)).unwrap();
 
-        let cause = Disconnect::Protocol("broken stream".into());
         let error = app
-            .accept_received(None, Some(Closed::Failed(cause)))
+            .accept_received(Err(ConnectionError::Closed {
+                code: 1013,
+                reason: "slow_consumer".into(),
+            }))
             .unwrap_err();
-        assert!(matches!(error, AppError::Ended(Closed::Failed(_))));
+        assert!(matches!(error, AppError::Connection(_)));
         assert_eq!(
             app.model.status(),
-            &ConnectionStatus::Error("session ended: protocol error: broken stream".into())
+            &ConnectionStatus::Error(
+                "server closed WebSocket with code 1013: slow_consumer".into()
+            )
         );
-        assert!(
-            app.model
-                .node(&TopicPath::parse("/cached").unwrap())
-                .is_some()
-        );
+        assert!(cached(&app));
+
         app.model.set_status(ConnectionStatus::Live);
-        app.accept_received(None, Some(Closed::ByClient)).unwrap();
+        app.accept_received(Ok(None)).unwrap();
         assert_eq!(app.model.status(), &ConnectionStatus::Disconnected);
-        assert_eq!(app.model.sequence(), 13);
+        assert_eq!(app.model.sequence(), 10);
+        assert!(cached(&app));
     }
 
     #[test]
@@ -374,27 +355,20 @@ mod tests {
             .unwrap()
             .clone();
         let error = app
-            .accept_received(
-                Some(Event::Update(UpdateView {
-                    sequence: 10,
-                    changes: vec![ChangeView::Removed {
-                        topic: "/cached".parse().unwrap(),
-                        previous,
-                    }],
-                })),
-                None,
-            )
+            .accept_received(Ok(Some(ServerMessage::Update {
+                sequence: 10,
+                changes: vec![ChangeView::Removed {
+                    topic: "/cached".parse().unwrap(),
+                    previous,
+                }],
+            })))
             .unwrap_err();
         assert!(matches!(
             error,
             AppError::Model(ModelError::Sequence(ClientViewError::OutOfOrder { .. }))
         ));
         assert!(matches!(app.model.status(), ConnectionStatus::Error(_)));
-        assert!(
-            app.model
-                .node(&TopicPath::parse("/cached").unwrap())
-                .is_some()
-        );
+        assert!(cached(&app));
     }
 
     #[tokio::test]
@@ -414,78 +388,6 @@ mod tests {
         app.close().await.unwrap();
         app.close().await.unwrap();
         assert_eq!(app.model.status(), &ConnectionStatus::Disconnected);
-    }
-
-    #[tokio::test]
-    async fn the_inspector_is_stateless_and_reconnect_installs_a_current_baseline() {
-        use std::{
-            sync::{Arc, Mutex},
-            time::Duration,
-        };
-        use tanuki::{core::Core, domain::Timestamp, server::serve_with_core};
-        use tanuki_client::{ClaimRelease, DesiredTopic, StateTopic};
-        use tokio::{net::TcpListener, sync::oneshot, time::timeout};
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}/v1/ws", listener.local_addr().unwrap());
-        let (stop, stopped) = oneshot::channel();
-        let task = tokio::spawn(serve_with_core(
-            listener,
-            Arc::new(Mutex::new(Core::new())),
-            Arc::new(|| Timestamp::new(jiff::Timestamp::now())),
-            async {
-                let _ = stopped.await;
-            },
-        ));
-        // A controller with the same name as the inspector keeps its claim.
-        let controller = Session::connect(&url, "inspector").await.unwrap();
-        let desired = DesiredTopic::<u8>::new("/lamp/desired").unwrap();
-        let mut control = controller
-            .control(&desired, ClaimRelease::Immediate)
-            .await
-            .unwrap();
-        let config = ConnectionConfig::new(url.clone(), ClientName::parse("inspector").unwrap());
-        let mut app = App::new(config);
-        timeout(Duration::from_secs(5), app.reconnect())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(app.model.status(), &ConnectionStatus::Live);
-        assert!(matches!(controller.status().current(), Status::Connected));
-
-        let producer = Session::connect(&url, "producer").await.unwrap();
-        let topic = StateTopic::<i64>::new("/after-connect").unwrap();
-        let receipt = producer.publish(&topic, &5).await.unwrap();
-        while app.model.sequence() < receipt.sequence {
-            timeout(Duration::from_secs(5), app.next_update())
-                .await
-                .unwrap()
-                .unwrap();
-        }
-        assert!(app.model.node(topic.path()).is_some());
-        app.model.set_filter("after".into());
-        // An explicit reconnect installs a fresh baseline and keeps navigation.
-        timeout(Duration::from_secs(5), app.reconnect())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(app.model.status(), &ConnectionStatus::Live);
-        assert_eq!(app.model.filter(), "after");
-        assert!(app.model.node(topic.path()).is_some());
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), control.recv())
-                .await
-                .is_err(),
-            "the controller kept its claim"
-        );
-        app.close().await.unwrap();
-        producer.close().await;
-        controller.close().await;
-        let _ = stop.send(());
-        timeout(Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
     }
 }
 

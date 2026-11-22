@@ -53,7 +53,7 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
   copying preserves the existing whole-batch and immutable-snapshot criteria;
   this adds no GUI or deployment claim.
 
-- Native SDK evidence: `tanuki/tests/native_sdk.rs` covers wildcard and multi-topic observation (`observe((&hue, &brightness, "/battery/*"))`), atomic paired output, immutable snapshots, removal, typed reads with NotObserved/WrongKind errors, stateless dashboards sharing a name, reconnect with resumed observers, and `start()` connecting once the server appears. Listener lag resynchronises with a `Lagged` baseline instead of ending. The compiled `dashboard` example shows status while disconnected. Browser tests run the same API in headless Chromium.
+- Rust client evidence: the session-SDK tests that covered this story were removed with the session layer on 2026-11-22. Protocol-level coverage remains in `tanuki/tests/websocket_api.rs` and `tanuki/tests/client_connection.rs`; Rust state-management coverage is pending the user's new client.
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, T1; E1 dashboard; add wildcard membership fixture.
 - `tanuki/tests/core_subscriptions.rs` verifies US-09.A1, A3, and A5 at the core boundary, including explicit empty snapshots and newly matching wildcard topics.
@@ -87,3 +87,4 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
   Rust web application integration is documented; no rendered dashboard,
   JavaScript SDK, TLS deployment or actual user deployment has been verified.
 - 2026-11-21: SDK rewrite driven by a human-written egui dashboard (fbk-red) that had bypassed the SDK for the raw connection: it needed `/battery/*` wildcards, a shareable session usable from UI code, automatic reconnection and native `wss://`. All four are now in the SDK (`observe` with selectors, cloneable `Session`, `Reconnect`, default `rustls` feature) and covered by tests. fbk-red itself has not been ported yet.
+- 2026-11-22: The user is writing their own Rust client, so `tanuki-client` was reduced to the protocol layer (typed messages over one WebSocket) and the session SDK (Session, typed topics, observers, controllers) and its tests were removed. Server behaviour is unchanged; SDK-level criteria evidence is pending the new client.

@@ -1,22 +1,38 @@
 use super::{Codec, ConnectionError, Incoming, MAX_MESSAGE_BYTES};
 use crate::protocol::{ClientMessage, ServerMessage};
-use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::protocol::WebSocketConfig};
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
+use std::sync::Arc;
+use tokio::{net::TcpStream, sync::Mutex};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream,
+    tungstenite::{Message, protocol::WebSocketConfig},
+};
 
-pub(crate) use tokio_tungstenite::tungstenite::Message;
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type Sink = Arc<Mutex<SplitSink<Socket, Message>>>;
 
-/// Direct wire access. Hello, request IDs and all response handling belong to the caller.
-pub struct Connection {
-    pub(crate) socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+/// The sending half of a [`Connection`](super::Connection). Clones share the
+/// socket; each message is sent whole.
+#[derive(Clone)]
+pub struct Sender {
+    sink: Sink,
     codec: Codec,
+}
+
+/// The receiving half of a [`Connection`](super::Connection).
+pub struct Receiver {
+    stream: SplitStream<Socket>,
+    // Tungstenite queues pongs and close acknowledgements on the socket; the
+    // receiver flushes them through the shared sink.
+    sink: Sink,
     ended: bool,
 }
-impl Connection {
-    pub async fn open(url: &str) -> Result<Self, ConnectionError> {
-        Self::open_with_codec(url, Codec::Json).await
-    }
-    pub async fn open_with_codec(url: &str, codec: Codec) -> Result<Self, ConnectionError> {
+
+impl Sender {
+    pub(super) async fn open(url: &str, codec: Codec) -> Result<(Self, Receiver), ConnectionError> {
         // rustls picks a provider from crate features only when exactly one is
         // enabled; another crate enabling aws-lc-rs would make wss:// panic.
         // Install ring unless the application already installed a provider.
@@ -29,53 +45,66 @@ impl Connection {
             .max_frame_size(Some(MAX_MESSAGE_BYTES));
         let (socket, _) =
             tokio_tungstenite::connect_async_with_config(url, Some(config), false).await?;
-        Ok(Self {
-            socket,
-            codec,
-            ended: false,
-        })
+        let (sink, stream) = socket.split();
+        let sink = Arc::new(Mutex::new(sink));
+        Ok((
+            Self {
+                sink: Arc::clone(&sink),
+                codec,
+            },
+            Receiver {
+                stream,
+                sink,
+                ended: false,
+            },
+        ))
     }
-    pub async fn send(&mut self, message: &ClientMessage) -> Result<(), ConnectionError> {
+
+    /// Sends one message in this connection's codec.
+    pub async fn send(&self, message: &ClientMessage) -> Result<(), ConnectionError> {
         self.send_with_codec(message, self.codec).await
     }
+
     pub async fn send_with_codec(
-        &mut self,
+        &self,
         message: &ClientMessage,
         codec: Codec,
     ) -> Result<(), ConnectionError> {
         let frame = encode_message(message, codec)?;
-        self.socket.send(frame).await?;
+        self.sink.lock().await.send(frame).await?;
         Ok(())
     }
+
+    /// Starts a normal close (code 1000).
+    pub async fn close(&self) -> Result<(), ConnectionError> {
+        self.sink.lock().await.close().await?;
+        Ok(())
+    }
+}
+
+impl Receiver {
+    /// See [`Connection::recv`](super::Connection::recv).
     pub async fn recv(&mut self) -> Result<Option<ServerMessage>, ConnectionError> {
         if self.ended {
             return Ok(None);
         }
         loop {
-            match decode_frame(self.socket.next().await) {
+            match decode_frame(self.stream.next().await) {
                 Ok(Incoming::Message(message)) => return Ok(Some(message)),
                 // Tungstenite queued the pong; flushing sends it.
-                Ok(Incoming::Control) => self.socket.flush().await?,
+                Ok(Incoming::Control) => self.sink.lock().await.flush().await?,
                 result => {
                     self.ended = true;
                     // Tungstenite queued any close acknowledgement.
-                    let _ = self.socket.flush().await;
+                    let _ = self.sink.lock().await.flush().await;
                     return result.map(|_| None);
                 }
             }
         }
     }
-    pub async fn close(&mut self) -> Result<(), ConnectionError> {
-        self.socket.close(None).await?;
-        self.ended = true;
-        Ok(())
-    }
 }
 
-pub(crate) fn encode_message(
-    message: &ClientMessage,
-    codec: Codec,
-) -> Result<Message, ConnectionError> {
+fn encode_message(message: &ClientMessage, codec: Codec) -> Result<Message, ConnectionError> {
     let frame = match codec {
         Codec::Json => Message::Text(serde_json::to_string(message)?.into()),
         Codec::MessagePack => Message::Binary(rmp_serde::to_vec_named(message)?.into()),
@@ -87,7 +116,7 @@ pub(crate) fn encode_message(
 }
 
 /// Decodes one incoming frame. Message size is limited by the socket config.
-pub(crate) fn decode_frame(
+fn decode_frame(
     frame: Option<Result<Message, tokio_tungstenite::tungstenite::Error>>,
 ) -> Result<Incoming, ConnectionError> {
     match frame {

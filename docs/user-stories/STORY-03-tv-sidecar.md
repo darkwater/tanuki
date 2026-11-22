@@ -31,7 +31,7 @@ TV interface, supported HDMI identifiers, tablet app and display/sleep behaviour
 ## Implementation and evidence
 
 - Core test links: [test plan](../test-plan.md) — C2, C3, L1, T1; E1 TV observer; add sidecar projection fixture.
-- Story-specific tests: `cargo test -p tanuki-tv-volume`; A5–A7 coverage is detailed below. A1–A4 remain deferred.
+- Story-specific tests: formerly `cargo test -p tanuki-tv-volume` in this workspace; the bridge moved to its own repository on 2026-11-22, so A5–A9 evidence below is historical here. A1–A4 remain deferred.
 - Real client: the TV volume example below, derived from `~/tv-volume.sh`; LAN discovery is verified below; physical volume control/event delivery and service deployment remain unverified.
 - Observed behaviour: volume publication/control is tested with a simulated TV and production Tanuki. Passing these tests does not establish real deployment.
 
@@ -42,8 +42,8 @@ TV interface, supported HDMI identifiers, tablet app and display/sleep behaviour
 ## Volume bridge increment — 2026-10-31
 
 The user requested both observation and control over Tanuki after discussing
-`~/tv-volume.sh` and UPnP GENA updates. The concrete client is now
-[`examples/tv-volume`](../../examples/tv-volume/README.md), named
+`~/tv-volume.sh` and UPnP GENA updates. The concrete client was
+`examples/tv-volume` (moved to its own repository on 2026-11-22), named
 `tv-volume bridge`: `/tv/volume` is observed retained integer state and
 `/tv/desired-volume` is requested retained integer input (0–100). No schema is
 automatically installed. Description/callback addresses are configured per
@@ -147,3 +147,10 @@ logged and not sent to the TV; claim takeover ends the bridge with a typed
 `ControlError::ClaimLost`. The bridge keeps one connection lifetime
 (`Reconnect::Never`) for its supervisor. Same simulated-TV coverage
 (`examples/tv-volume/tests/bridge.rs`); no hardware run.
+
+## Moved out — 2026-11-22
+
+The TV bridge was already extracted into its own project and was removed from
+this workspace together with the session SDK it used. The paths and behaviour
+recorded above remain the story's conventions; evidence for them now lives with
+the bridge, and none of it is re-verified here.

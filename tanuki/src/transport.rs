@@ -14,7 +14,7 @@ use axum::{
     },
     routing::{get, post, put},
 };
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::{SinkExt, Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize};
 
 use thiserror::Error;
@@ -422,12 +422,23 @@ async fn close_socket(
     let _ = within(limit, socket.send(close)).await;
 }
 
+/// The WebSocket library queues the reply to a peer's close frame; flushing
+/// sends it, so a client that closes normally sees a completed handshake
+/// instead of a reset.
+async fn acknowledge_close(socket: &mut WebSocket, limit: Option<Duration>) {
+    let _ = within(limit, socket.flush()).await;
+}
+
 async fn run_websocket_session(
     socket: &mut WebSocket,
     state: &HttpState,
     timeouts: WebSocketTimeouts,
 ) {
     let first = match within(timeouts.hello, socket.recv()).await {
+        Some(Some(Ok(Message::Close(_)))) => {
+            acknowledge_close(socket, timeouts.send).await;
+            return;
+        }
         Some(Some(Ok(first))) => first,
         Some(None | Some(Err(_))) => return,
         None => {
@@ -599,7 +610,10 @@ async fn websocket_loop(
                 last_heard = tokio::time::Instant::now();
                 let (incoming_codec, message) = match incoming {
                     Message::Ping(_) | Message::Pong(_) => continue,
-                    Message::Close(_) => return,
+                    Message::Close(_) => {
+                        acknowledge_close(socket, timeouts.send).await;
+                        return;
+                    }
                     Message::Text(_) | Message::Binary(_) => match decode_client_message(incoming) {
                         Ok(decoded) => decoded,
                         Err((incoming_codec, error)) => {

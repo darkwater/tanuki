@@ -361,45 +361,22 @@ loses `is_human_readable`, breaking MessagePack bytes/extensions and literal tag
 maps. Serialization and the v1 wire shape stay unchanged. Snapshot persistence's
 payload-bearing enum uses the same approach, without changing its file format.
 
-### Client SDK structure (rewritten 2026-11-21)
+### Protocol client structure (2026-11-22)
 
-Client modules are concrete boundaries. `connection` owns native/browser wire
-I/O and decodes frames into one `Incoming` enum per target. `driver` is the
-session's single background task. `session` is the cloneable public handle,
-builder, status and write API. `topic` holds session-independent typed handles
-and decoded nodes. `observe`, `listen` and `control` are the three consumer
-shapes.
+`tanuki-client` is the protocol layer only. The session layer (reconnecting
+`Session`, typed topic handles, observers, listeners, controllers) was removed
+on 2026-11-22 so applications can build their own state management; the
+tv-volume example that used it moved to its own repository.
 
-The driver owns the connection, a `SelectedView` cache, and every registered
-observer, listener and controller; API calls reach it as commands over an
-unbounded channel (writes are bounded separately by a semaphore). The server
-selection is the union of registered selectors: a registration that is not
-covered sends `select` and becomes ready when the answering snapshot arrives.
-Selections widen eagerly and shrink lazily (at the next widening or hello).
-Observers receive projected `Snapshot`s through watch channels, published only
-when a retained change matches their selectors. Listeners use bounded queues;
-on overflow the driver replaces the backlog with one `Lagged` baseline, so lag
-is never terminal. Because the server sends a write's update before its reply,
-the cache and every observer reflect a write before its receipt resolves.
-
-Each connection runs hello (with the selector union), re-claims controlled
-inputs (define + claim; never taking over another session's claim), publishes
-fresh baselines, then serves commands, frames and reply deadlines. On loss it
-fails in-flight writes as `OutcomeUnknown`, marks claims pending and follows
-the `Reconnect` policy, serving commands while waiting (writes fail fast with
-`Disconnected`; registrations queue). Close code 4001 ends the session as
-`Replaced` without reconnecting, which would take the name back. An explicit
-`control()` retries claim-only when defining is refused by another claim,
-because asking to control means taking over.
-
-A controller compares the observed claim id with the one its session holds,
-only on snapshots at least as new as the claiming commit, and reports each
-submission once (identified by its provenance). The driver publishes a
-snapshot before updating claim state, so a new claim never meets a stale
-snapshot. Observers, listeners and controllers hold weak session references
-and unregister on drop; dropping the last `Session` clone ends the driver.
-No write is ever retried; there is no replay, schema validation or framework
-integration in the SDK.
+`Connection` is a `Sender` plus a `Receiver`, so `split()` costs nothing and
+each target has one implementation. The sender shares the socket's sink behind
+a mutex (`Arc` natively, `Rc` in the browser, whose socket is single-threaded),
+is cheap to clone and sends with `&self`. The native receiver flushes that sink
+when Tungstenite has queued a pong or close acknowledgement, so a receiver
+running in its own task keeps the connection alive. `connection/native` and
+`connection/browser` each decode frames into one shared `Incoming` enum.
+Request IDs, reply correlation, caching, reconnection and timeouts belong to
+the application.
 
 ## Flat package layout — 2026-10-07
 
@@ -497,6 +474,12 @@ leaves cached nodes intact. Full batches apply through the existing Model/
 SelectedView boundary before a caller can draw; there is no extra queue or
 projection task. `next_update` is cancellation-safe at its receive await.
 
+Updated 2026-11-22: `App` now owns a raw `tanuki_client::Connection`. It sends
+one stateless hello for `/**`; that hello's snapshot is the baseline, and each
+update is applied as one batch. A slow-consumer close (1013) or any abnormal
+close ends the stream as an error with stale data; there is no SDK listener or
+lag resynchronisation.
+
 Disconnected, lagged and error states retain the last complete view as stale.
 Terminal input results remove the listener; a retained session can then be
 joined on explicit reconnect/exit. `next_update` stays pending while inactive,
@@ -554,74 +537,15 @@ translates text, binary, close and transport results. Common codec options and
 errors stay in `connection`. Browser control frames are handled by its WebSocket
 implementation. No dynamic transport trait or additional workspace crate is needed.
 
-`runtime` selects concrete native Tokio spawning/time or browser local tasks,
-abortable joined futures, Performance-based instants and cancel-on-drop timers.
-Native spawning retains Send bounds; browser spawning accepts local futures.
-Tokio's executor-independent sync channels, semaphore and select macro remain
-shared. Session still owns driver/writer/projections, and registration, mutation
-of the selected cache, publication, correlation and lag semantics are shared.
+The browser halves share the sink through `Rc`, matching the browser's
+single-threaded socket; no spawning or timer adapter is needed now that the
+session layer is gone.
 
 Browser close explicitly consumes/closes the underlying socket because Gloo's
-Sink close is a no-op. Awaited Session close joins SDK work and requests network
-closure; browser shutdown cannot acknowledge server cleanup. Native backpressure
+Sink close is a no-op; the receiving half then ends. Browser shutdown cannot
+acknowledge server cleanup. Native backpressure
 waits for socket readiness, whereas browser sends hand data to browser buffers.
-Gloo also queues incoming browser events without a bound. SDK queue capacities
-and the 1 MiB per-message check therefore do not bound total browser allocations;
-incoming size checks run after browser message assembly. This is the practical
-tradeoff for using the established browser adapter. It does not change the raw
-listener lag or complete-snapshot contracts. Page suspension can delay deadlines.
-
-## TV volume example — 2026-10-31
-
-`examples/tv-volume` is a standalone native application crate, not server
-functionality. Its library owns UPnP XML discovery/event parsing, a bounded
-Axum callback listener, subscription renewal and a Tanuki SDK session; the thin
-binary supplies configuration and shutdown signals. Tests replace the external
-TV with an HTTP producer/actuator while running actual Tanuki server logic.
-
-Validated notifications flow through the current subscription SID/sequence
-check into `/tv/volume` publication through the SDK and normal core validation.
-`/tv/desired-volume` observations validate 0–100 before SOAP SetVolume. Output
-is never fabricated from SOAP success. Registration can predate processing of
-the setup write's update, so claim checks wait for an observed snapshot at least
-as new as that write. Later claim takeover stops the bridge. Renewal refreshes
-the output lease from the last observed value; details and limitations are in
-[the example guide](../examples/tv-volume/README.md).
-
-The 2026-11-01 `discovery` module adds read-only SSDP search, HTTP description
-filtering and UDN deduplication before bridge startup. It owns no Tanuki state.
-Selection requires a single renderer, exact stable UDN, or unique friendly name.
-Default IPv4 discovery runs again after each supervised restart. The binary
-binds its listener and chooses the callback IP from the OS route to the TV;
-explicit callback overrides and the original positional configuration remain.
-`--discover` returns before any SDK connection or control execution. Description
-fetches are bounded and concurrent; Tokio JoinSet owns/cancels their tasks.
-
-The Samsung empty-event fix (2026-11-01) represents an empty `LastChange` as the
-existing `Notification { volume: None, .. }`. It follows the same callback queue
-and SID/SEQ validation as mute-only or unrelated events. Consequently it
-advances sequence tracking without a Tanuki publication; the parser does not
-manufacture a missing event or a volume value. Invalid XML and out-of-range
-volumes retain their error behavior. A bounded sequence buffer tolerates out-of-order arrivals observed during live
-testing (78 before 77, and 169 before 168). It holds at most 64 pending events
-and waits one second for a missing predecessor, applies contiguous changes in
-order, and publishes their latest volume. Duplicate/late arrivals cannot roll
-back output; sequence wrap skips the initial-event zero. A gap that remains
-unresolved ends this connection lifetime for supervised recovery.
-
-## TV mute increment — 2026-11-01
-
-The bridge parses `RenderingChange` with independently optional volume and mute
-fields for instance 0/Master. A field is absent until actually reported. The
-sequence buffer merges each field separately across contiguous notifications;
-a single SDK batch publishes all fields reported by the released change. The
-cached known fields are refreshed together at renewal, and both observed topics
-are removed together during startup/cleanup.
-
-`/tv/desired-volume` and `/tv/desired-mute` are defined/claimed atomically and
-observed as one selected view. Small per-input trackers check raw claim metadata
-before decoding payloads and deduplicate each input by write provenance. Both
-claims are checked before sending any action from that snapshot. A local Control
-enum selects SetVolume or SetMute XML/action/response tags. Device responses do
-not publish observed values. The parser and HTTP/SOAP client remain independent
-of Tanuki core mutation; all publications use the SDK and normal validation.
+Gloo also queues incoming browser events without a bound. The 1 MiB per-message
+check therefore does not bound total browser allocations; incoming size checks
+run after browser message assembly. This is the practical tradeoff for using
+the established browser adapter.

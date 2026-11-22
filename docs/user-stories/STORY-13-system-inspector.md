@@ -27,7 +27,7 @@ explore and understand the running system.
 ## Proposed delivery and open choices
 
 Checkpoint A was confirmed on 2026-10-31: a read-only native Rust terminal
-application named `tanuki-ui`, using the native SDK, with a live topic tree,
+application named `tanuki-ui`, using the Rust protocol client, with a live topic tree,
 search, detail pane and connection/help status. This follows the
 [mqttui reference](https://github.com/EdJoPaTo/mqttui). Ratatui/Crossterm is the
 selected toolkit (Ratatui 0.30.2/Crossterm 0.29.0), compiled on the existing nightly. The first milestone shows
@@ -119,3 +119,4 @@ Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 
 Implementation planning: [bounded inspector handoff](../inspector-implementation-plan.md).
 - 2026-11-21: The inspector connects as a stateless session (hello `session: "stateless"`): a duplicate name no longer replaces a controller's managed session or releases its claims. Lag now resynchronises from a fresh baseline instead of ending the stream; the LAGGED status is gone. Recovery remains an explicit reconnect, by design.
+- 2026-11-22: The inspector now uses the raw protocol connection (`tanuki_client::Connection`): one stateless hello for `/**`, whose snapshot is the baseline, then complete update batches. A slow-consumer close (1013) shows as an error with stale data; recovery is an explicit reconnect.

@@ -157,71 +157,25 @@ The unchanged `nightly-2026-10-01` now also has the installed
 `wasm32-unknown-unknown` standard library, and protocol/client checks pass for that
 target. This supersedes the earlier uninstalled-target limitation. Native Tokio
 network/runtime/time features and Tungstenite are target-specific dependencies.
-Browser dependencies are pinned Gloo Net 0.7.0 (WebSocket only), Gloo Timers 0.4.0
-(futures), wasm-bindgen-futures 0.4.80 and web-time 1.1.0. Browser tests use
+Browser dependencies are pinned Gloo Net 0.7.0 (WebSocket only). (Gloo Timers,
+wasm-bindgen-futures and web-time served the session layer and were removed with
+it on 2026-11-22.) Browser tests use
 wasm-bindgen-test 0.3.80 and matching wasm-bindgen-cli 0.2.130. Cargo.lock records
 the resolved browser graph; existing dependency versions and feature gates stay
 unchanged. No unstable gates or compatibility macro/trait dependencies are added.
 
-Standard Instant cannot supply browser monotonic time. API checks used the
-[nightly Instant docs](https://doc.rust-lang.org/nightly/std/time/struct.Instant.html),
-[Unstable Book](https://doc.rust-lang.org/nightly/unstable-book/),
-[web-time](https://docs.rs/web-time/1.1.0/web_time/),
-[Gloo WebSocket](https://docs.rs/gloo-net/0.7.0/gloo_net/websocket/futures/struct.WebSocket.html),
-[local spawning](https://wasm-bindgen.github.io/wasm-bindgen/api/wasm_bindgen_futures/fn.spawn_local.html),
-and pinned source for Gloo close/readiness, timer integer limits and Tokio's
-executor-independent sync APIs. Compile checks against the pin and browser tests
-verify the actual syntax and runtime behavior. Browser task cancellation uses
-futures-util's Abortable and Tokio oneshot results; WASM panic aborts are not
-recoverable task errors. Timer waits round up sub-millisecond waits and chunk
-at signed 32-bit milliseconds, rechecking the monotonic deadline after waking.
+API checks used the
+[Gloo WebSocket](https://docs.rs/gloo-net/0.7.0/gloo_net/websocket/futures/struct.WebSocket.html)
+docs and pinned source for Gloo close/readiness. The browser halves share the
+sink through `Rc` with Tokio's executor-independent `Mutex`.
 
 Headless Chrome/ChromeDriver 156.0.8078.80 ran the SDK against the production
 binary on loopback. Browser debug/release gates and setup live in
 [testing.md](testing.md#browser-sdk-acceptance--2026-10-31) and CI. Browser tooling
-is a developer/test prerequisite, not a shipped SDK runtime dependency. Native
-examples and the terminal inspector remain native targets.
+is a developer/test prerequisite, not a shipped SDK runtime dependency. The terminal
+inspector remains a native target.
 
-SDK README snippets use rustdoc's
+Client README snippets use rustdoc's
 [`standalone_crate`](https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html)
 with `no_run`, so browser doc compilation does not attempt to execute a merged
-WASM test harness as a native process. Both snippets compile against the pin on
-native and WASM; no ignored examples or feature gates are needed.
-
-## TV volume example — 2026-10-31
-
-The unchanged nightly pin builds `examples/tv-volume`, a native workspace
-application. Reqwest 0.13.5 (default features off; local HTTP only), URL 2.5.8 and
-roxmltree 0.21.1 supply HTTP requests, URL resolution and XML parsing. Existing
-Axum, Tokio, SDK, tracing and thiserror versions are reused; no unstable gates
-or compatibility wrappers were added. Cargo.lock includes the new dependency
-graph without upgrading existing packages. The example is not a browser target.
-
-API checks used [Reqwest redirect policy](https://docs.rs/reqwest/0.13.5/reqwest/redirect/),
-[roxmltree Document](https://docs.rs/roxmltree/0.21.1/roxmltree/struct.Document.html),
-and pinned source for `Node::has_tag_name`, `Response::chunk` and SDK observers.
-Named XML tags match regardless of namespace prefix. Parser defaults disallow
-DTDs. Compile, Clippy and integration checks exercise the actual pinned APIs.
-
-TV discovery (2026-11-01) reuses the existing pinned Tokio UDP sockets,
-`lookup_host`, `timeout_at` and `JoinSet`, plus Reqwest/roxmltree. No dependencies,
-compiler pin or unstable gates change. APIs were checked against
-[Tokio UdpSocket](https://docs.rs/tokio/1.53.2/tokio/net/struct.UdpSocket.html)
-and the UPnP Device Architecture discovery specification. UDP connect/local_addr
-chooses a callback route without sending a datagram. Loopback compile/runtime
-tests verify the pinned APIs; production discovery uses IPv4 multicast.
-
-The empty-notification fix (2026-11-01) uses existing roxmltree text extraction
-and standard `str::trim` to classify empty events. Compiler, dependency pins and
-feature gates are unchanged; parser and loopback regression tests exercise the
-same compiled bridge in debug and release modes. A standard `BTreeMap` and
-Tokio `Instant`/`sleep_until` provide bounded notification reordering; no
-additional dependency or runtime task is introduced.
-
-Mute support (2026-11-01) reuses the existing compiler and dependencies with no
-new feature gates. The RenderingControl v1 specification confirms SetMute's
-InstanceID, Channel and DesiredMute arguments. Existing SDK typed bool handles,
-atomic batches, raw NodeView claim metadata and fallible payload decoding were
-checked in repository source and compiled in debug/release tests. A generic
-local tracker operates on already decoded payloads without adding Serde bounds,
-a new dependency or an async trait.
+WASM test harness as a native process.

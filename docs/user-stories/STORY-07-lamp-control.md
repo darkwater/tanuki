@@ -37,7 +37,7 @@ state; clients needing every command or transition use raw update listeners.
 
 ## Implementation and evidence
 
-- Native SDK evidence: `tanuki/tests/native_sdk.rs::a_controller_receives_each_request_until_its_claim_is_taken` verifies a `Controller` reporting pending intent first, each submission once (repeated values too), clearing, and claim loss; `sessions_reconnect_resume_observers_and_reclaim_inputs` and `a_reconnecting_controller_does_not_take_back_an_input_claimed_meanwhile` cover re-claiming after a server restart. `batches_commit_atomically_and_report_encoding_and_rejection_errors` covers the paired hue/brightness batch and rollback. The compiled `controller` example uses `session.control`. No physical lamp action is verified.
+- Rust client evidence: the session-SDK tests that covered this story were removed with the session layer on 2026-11-22. Protocol-level coverage remains in `tanuki/tests/websocket_api.rs` and `tanuki/tests/client_connection.rs`; Rust state-management coverage is pending the user's new client.
 
 - Core test links: [test plan](../test-plan.md) — C1, C2, L1, L2; E1 steps 2 and 5.
 - `tanuki/tests/core_publication.rs::two_state_writes_form_one_coherent_commit_batch` verifies the core commit portion of US-07.A2. `tanuki-protocol/tests/selected_view.rs::complete_update_is_applied_before_the_new_shape_is_observed` verifies transport-neutral whole-batch consumption.
@@ -60,3 +60,4 @@ state; clients needing every command or transition use raw update listeners.
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
 - 2026-11-21: Server WebSocket liveness (ping and peer-silence deadline) now releases claims of a controller that vanishes without closing its connection. Simulated with a non-reading test peer; no real network failure verified.
 - 2026-11-21: SDK rewrite: `session.control(&desired, release)` defines, claims and re-claims the input across reconnects and yields `Request::Submitted`/`Cleared`, replacing hand-written claim tracking. Simulated only.
+- 2026-11-22: The user is writing their own Rust client, so `tanuki-client` was reduced to the protocol layer (typed messages over one WebSocket) and the session SDK (Session, typed topics, observers, controllers) and its tests were removed. Server behaviour is unchanged; SDK-level criteria evidence is pending the new client.

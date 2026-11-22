@@ -42,7 +42,7 @@ verification remain absent.
   whose outcomes remain unknown. This makes script shutdown diagnostics more
   precise without adding retries or a rollback guarantee.
 
-- Native SDK evidence: ordinary `publisher`, `dashboard` and `controller` examples were compiled and exercised on loopback against the production binary. `tanuki/tests/native_sdk.rs` covers raw wire control, typed freeform values, warnings, server rejection and mixed codecs. Existing stateless HTTP criteria remain covered by the server suites; the SDK adds no HTTP or Unix-socket transport.
+- Rust client evidence: the session-SDK tests that covered this story were removed with the session layer on 2026-11-22. Protocol-level coverage remains in `tanuki/tests/websocket_api.rs` and `tanuki/tests/client_connection.rs`; Rust state-management coverage is pending the user's new client.
 
 - Core test links: [test plan](../test-plan.md) — C1, S1, T1; HTTP task 04; add socket parity tests when that adapter lands.
 - `tanuki/tests/http_api.rs::stateless_battery_publish_and_anonymous_read_cross_the_real_router`
@@ -68,3 +68,4 @@ verification remain absent.
 - 2026-10-07: Native SDK delivery added typed WebSocket clients and raw/latest-state observation tests, plus compiled loopback examples. Browser bindings and Iced integration remain deferred; no real hardware/deployment verification was added.
 
 - 2026-10-07: Server regression tests cover concurrent managed-session replacement, idle and non-reading stream shutdown, and final-save ordering with a connected WebSocket publisher. Shutdown closes admission and joins timer work; this remains loopback evidence, not deployment verification.
+- 2026-11-22: The user is writing their own Rust client, so `tanuki-client` was reduced to the protocol layer (typed messages over one WebSocket) and the session SDK (Session, typed topics, observers, controllers) and its tests were removed. Server behaviour is unchanged; SDK-level criteria evidence is pending the new client.

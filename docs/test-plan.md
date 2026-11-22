@@ -257,19 +257,18 @@ replaces evidence that core invariants and complete flows were exercised.
 
 ## Inspector transport increment — US-13, Task 02
 
-Use a real loopback production server and simulated SDK producers. Verify empty
-and populated registration baselines, a write between hello and registration,
-new wildcard membership, complete paired changes, metadata refresh and expiry.
+Use a real loopback production server and simulated protocol-level producers.
+Verify empty and populated hello baselines, new wildcard membership, complete paired changes, metadata refresh and expiry.
 Compare broad `/**` selection with explicit exposed system diagnostics; do not
 apply schema matchers' ordinary-only domain to subscriptions or invent nodes
 for unexposed branches. Record missing public projections as limitations.
 
-Disconnect, replacement and lag must stop claiming cached data is current.
-Reconnect uses a fresh listener baseline and removes absent stale nodes, with
-no retry or occurrence replay. Inject the exact lag receive result at the UI
-boundary deterministically; SDK tests establish queue-overflow guarantees.
+Disconnect and abnormal closes must stop claiming cached data is current.
+Reconnect uses a fresh hello baseline and removes absent stale nodes, with
+no retry or occurrence replay. Inject received messages and connection errors
+at the UI boundary deterministically.
 Assert receive cancellation and skipped draw opportunities do not skip batches.
-Client close joins client tasks; check server cleanup after joined server
+Check server cleanup after joined server
 shutdown rather than assuming immediate cross-transport acknowledgement.
 Terminal layout/input/restoration remain inspector Task 03 acceptance.
 
@@ -291,63 +290,15 @@ production panic switch or catch all panics. A1/A2 get local inspector evidence;
 A3/A4 and deployed hardware remain unverified. Run full workspace debug/release,
 formatting and all-target Clippy at this milestone.
 
-## Browser SDK transport — US-09, 2026-10-31
+## Protocol client — 2026-11-22
 
-Compile protocol/client for `wasm32-unknown-unknown` and run actual Rust WASM in
-headless Chrome against the production server, in debug and release. Cover both
-outgoing codecs, mixed wire frames, typed bytes, complete paired state, preserved
-registration baseline, removal and immutable history, independent raw listeners,
-explicit lag, invalid endpoint/oversized writes, local unsent deadlines, duplicate
-name replacement with close reason, and joined close. Run shared projection and
-raw drainage tests in the browser too. Unit-check malformed/trailing/oversized
-incoming frames and clean/abnormal close codes. A silent socket peer may inject a
-stalled handshake for browser timer testing; it does not substitute for the real
-server's behavior. Browser TLS deployment, other engines and rendered web UI
-remain unverified. See [test evidence](testing.md#browser-sdk-acceptance--2026-10-31).
-
-## TV volume example acceptance — US-03.A5–A9
-
-Run `cargo test -p tanuki-tv-volume` and its `--release` equivalent. XML unit
-scenarios select instance 0/Master, reject invalid volume and malformed XML,
-resolve namespaced device descriptions/URLBase, and honor granted lease times.
-Real-socket tests in `examples/tv-volume/tests/bridge.rs` use production Tanuki
-and a simulated HTTP TV: initial/changed actual state, desired SOAP control,
-no optimistic publication, invalid requests, foreign SID isolation, renewal,
-sequence-gap and renewal-failure exit, claim takeover, and output removal.
-These do not certify a physical TV or tablet. Hardware notification behavior,
-crash expiry and systemd recovery remain manual checks in the example guide;
-US-03's power/HDMI criteria are still deferred.
-
-US-03.A8 adds SSDP response parsing, GET-only device-description fetching,
-URL/UDN duplicate handling, unrelated-device filtering, ambiguous/missing-device
-errors, stable-ID/friendly-name selection and automatic callback routing/port
-selection. Discovery socket tests use an isolated loopback responder, never the
-LAN multicast destination. `--discover` is the only command used for read-only
-LAN verification: no SDK session, subscriptions or SOAP commands. Media playback
-must not be disturbed by live control tests. Bridge tests continue using fake
-TVs bound to loopback. Actual callbacks and controls on the Samsung TV remain
-manual/unverified.
-
-US-03.A5 regression: a Samsung TV can send an empty `LastChange` between real
-volume updates. Accept self-closing, empty text, whitespace and empty/whitespace
-CDATA as no-volume updates. These notifications must receive HTTP 200 and still
-advance SEQ. Parser tests cover each form; the real-server regression
-`empty_notification_burst_preserves_sequence_and_next_volume` delivers 130
-sequential no-op notifications followed by a valid volume change, verifying
-continued publication and no SOAP control requests. Actual queue saturation
-and genuinely missing sequence numbers remain distinct failure conditions.
-
-Live receive-only testing also found out-of-order sequences (78/77 and 169/168).
-`reordered_notifications_preserve_latest_volume_without_restart` exercises the
-real callback/production-server path with reordered volume updates. Unit tests
-cover no-op predecessors, duplicate/late events, sequence wrap skipping zero,
-the one-second gap deadline and 64-event reorder capacity. The existing missing-
-event integration scenario must still end the service when that deadline fires.
-
-US-03.A9 covers Master/instance-0 mute parsing (UPnP 0/1, true/false, yes/no),
-invalid mute rejection, absent-until-observed state, mute-only and combined
-atomic reports, SetMute true/false, no optimistic state, wrong desired payload
-type, input deduplication, reordered changes preserving both fields, renewal,
-claim takeover with invalid pending intent, and atomic observed-state cleanup.
-Run the example debug/release suites; tests use production Tanuki and isolated
-loopback TV callbacks/actions. Physical mute control remains manual/unverified.
+Run `tanuki-client` against the production server on loopback natively
+(`tanuki/tests/client_connection.rs`) and as Rust WASM in headless Chrome
+(`tanuki-client/tests/browser.rs`). Cover hello, both outgoing codecs and mixed
+frames, update-before-reply, correlated errors, bytes/floats/tag maps through
+updates and fresh snapshots, split halves used from separate tasks, an idle
+split receiver surviving the server's silence window, 4001 replacement, and
+local failures for invalid URLs and oversized messages. Unit-check
+malformed/trailing/oversized incoming frames and clean/abnormal close codes.
+Reading after a client close must end cleanly (`None`), proving the server
+acknowledges the close. State management above the connection is out of scope.

@@ -268,50 +268,28 @@ cargo test --all-targets --all-features
 cargo test --release --all-targets --all-features
 ```
 
-## Native SDK acceptance — rewritten 2026-11-21
+## Protocol client acceptance — 2026-11-22
 
-The SDK runs against the production server over loopback (`tanuki/tests/native_sdk.rs`),
-against scripted peers (`tanuki-client/tests/session_failures.rs`), and in a
-real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
+`tanuki-client` is the protocol layer only (the session SDK and its
+`native_sdk.rs`/`session_failures.rs` suites were removed with it). It runs
+against the production server over loopback (`tanuki/tests/client_connection.rs`)
+and in a real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
 
 | Behaviour | Coverage |
 | --- | --- |
-| Direct connection: hello, mixed codecs, update-before-reply, errors | `direct_connection_exchanges_hello_update_reply_and_errors_in_both_codecs` |
-| Wildcard observation, typed values, read-your-writes, provenance, NotObserved/WrongKind (US-01, US-09) | `observers_see_wildcards_typed_values_and_their_own_writes` |
-| Atomic batches, local payload errors at commit, rejected batches without effect, leases | `batches_commit_atomically_and_report_encoding_and_rejection_errors` |
-| Controllers: pending intent, each submission once (also repeats), clear, claim loss, stateless cannot claim (US-07, US-08) | `a_controller_receives_each_request_until_its_claim_is_taken` |
-| Typed event occurrences in batch order; command controllers | `events_and_commands_arrive_typed_and_in_order` |
-| Listener lag resynchronises with current state | `a_lagging_listener_is_resynchronised_with_the_current_state`; browser `a_lagging_listener_is_resynchronised_without_affecting_another` |
-| Server restart: status, fail-fast writes, resumed observers, re-claimed inputs | `sessions_reconnect_resume_observers_and_reclaim_inputs` |
-| A reconnecting controller does not take back a claimed input | `a_reconnecting_controller_does_not_take_back_an_input_claimed_meanwhile` |
-| `start()` retries until the server appears | `start_keeps_trying_until_the_server_appears` |
-| Replacement ends the old session; close and drop end observers | `a_replaced_managed_session_ends_while_the_new_one_continues`, `closing_ends_observers_and_rejects_later_calls` |
-| Bytes and literal tag maps through `Topic<Value>` in both codecs | `both_codecs_preserve_bytes_and_literal_tag_maps` |
-| Reply timeout and late replies, unknown outcome, oversize, sequence regression, trailing bytes, 4001 without reconnect, close during a write, failing first connect | `session_failures.rs` (one test each) |
+| Hello, mixed codecs, update-before-reply, correlated errors, clean close acknowledged | `client_connection::a_connection_exchanges_hello_update_reply_and_errors_in_both_codecs`; browser `exchanges_hello_updates_replies_and_errors_in_both_codecs` |
+| Bytes, exact floats, `i64::MIN`, null and literal tag maps through updates and fresh snapshots in both codecs | `client_connection::both_codecs_preserve_bytes_floats_and_literal_tag_maps` |
+| Split halves from separate tasks; an idle split receiver answers pings past the silence window | `client_connection::split_halves_work_from_separate_tasks_and_keep_the_connection_alive`; browser `split_halves_send_and_receive_independently` |
+| Replacement surfaces close code 4001 and reason `session_replaced` | browser `a_replaced_managed_session_closes_with_4001` |
+| Invalid URLs and oversized outgoing messages fail locally; the connection stays usable | browser `invalid_urls_and_oversized_messages_fail_locally` |
 | Native `wss://` reaches the TLS handshake | `tanuki-client/tests/tls.rs` |
-| Serde payload conversion | `tanuki-client/tests/payload.rs` |
-| Regression found by SDK | `tanuki/tests/persistence.rs::binary_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
+| Serde payload conversion | `tanuki-protocol/tests/payload.rs` |
+| Regression found by the earlier SDK | `tanuki/tests/persistence.rs::binary_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
 
-Behavioral red phases caught missing receive behavior, missing projection
-baseline, incorrect payload conversion, buffered MessagePack byte decoding in
-requests/persistence, and loss of admitted data on clean closure. Missing imports
-were not treated as behavioral evidence.
-
-Publisher/dashboard/controller examples are compiled by
-`cargo clippy --workspace --all-targets -- -D warnings` and
-`cargo build --workspace --examples`. They were also exercised together against
-the compiled production binary on an ephemeral loopback port and isolated
-snapshot directory: native battery publication, HTTP desired submission,
-controller's atomic hue/brightness report, dashboard typed reads, Ctrl-C exits
-and final save all passed. This is local simulated use, not hardware/deployment
-or Iced verification. The native supported transport profile is plain `ws://`;
-TLS, browser/WASM transport and bindings are outside current acceptance.
-
-Final verification: formatting and all-target workspace Clippy passed; all 156
-workspace tests (including documentation checks) passed in both debug and release
-modes, with no ignored tests. Protocol-only native compilation and package
-dependency direction were checked. The browser-target attempt is accurately
-recorded in [toolchain.md](toolchain.md); it could not compile without target std.
+Red phase: reading after `close()` failed with
+`ResetWithoutClosingHandshake` because the server returned on a client close
+frame without flushing the queued acknowledgement. The server now flushes it
+(`transport::acknowledge_close`), including for a close sent instead of hello.
 
 ## API/protocol review — 2026-10-07
 
@@ -327,10 +305,6 @@ Behavioral regressions reproduced and corrected:
   previously panicked with capacity overflow. The visitor now grows runtime
   lists only as elements arrive. `truncated_messagepack_array_returns_a_decode_error`
   also exercises a real maximum-length array32 header with no payload.
-- `session_failures::closing_answers_a_write_in_flight_as_closed` and
-  `a_connection_lost_after_sending_leaves_the_outcome_unknown` pin the
-  outcome boundary: a write the peer received but never answered is
-  `OutcomeUnknown` on connection loss and `Closed` on an explicit close.
 - `trailing_messagepack_bytes_fail_without_applying_a_partial_message`
   covers the earlier regression where a malformed binary message delivered an update. Shared frame
   decoding now rejects trailing data in direct and session clients and in the
@@ -339,7 +313,7 @@ Behavioral regressions reproduced and corrected:
   sends a valid subsequent write to confirm recovery. Shared request fixtures
   cover exact MessagePack message consumption too.
 
-Existing `selected_view` and native SDK observation tests cover sequence rejection,
+Existing `selected_view` tests cover sequence rejection,
 whole-batch atomicity and immutable historical snapshots after removing the
 unnecessary per-delta clone from `SelectedView::apply`.
 
@@ -435,11 +409,12 @@ logic over ephemeral loopback WebSockets, with simulated producers:
 | Generated local names coexist (stateless connections never replace) | `generated_names_allow_multiple_inspectors_without_replacement` |
 | Cancelled idle receive and multiple commits before rendering lose no batches | `cancelled_idle_receive_and_delayed_rendering_do_not_skip_batches` |
 
-App unit tests inject SDK events for lag resynchronisation, clean end and
-failed end, checking stale-state retention and typed error sources. A
-production-server unit test connects the inspector with the same name as a
-claiming controller, verifies the controller keeps its claim, follows live
-updates and explicitly reconnects to a fresh baseline. Model replacement coverage accepts a restarted
+App unit tests inject received server messages and connection errors (server
+error reports, a 1013 close, clean end), checking stale-state retention and
+typed error sources. `live.rs::a_same_named_managed_session_does_not_replace_the_stateless_inspector`
+connects the inspector with the same name as a managed session, verifies that
+session survives, follows live updates and explicitly reconnects to a fresh
+baseline. Model replacement coverage accepts a restarted
 sequence, preserves surviving navigation and rejects malformed snapshots without
 mutation. The library README example is a compiled doctest.
 
@@ -467,10 +442,8 @@ cargo test -p tanuki-ui --release
 
 Task 01's headless suite is now `cargo test -p tanuki-ui --test inspector`
 (12 tests, including replacement); the full UI package also requires sockets.
-Existing SDK `session::tests::clean_closure_drains_already_admitted_batches`,
-`observe::tests::projection_input_lag_is_terminal_even_with_unread_output`,
-and `tests/session_failures.rs` continue to verify raw driver guarantees and
-termination priority. Public diagnostics are covered; connection nodes are not
+Since 2026-11-22 the inspector uses the raw `Connection`; its live tests drive
+the server with a small protocol-level writer. Public diagnostics are covered; connection nodes are not
 exposed by the current server. This remains model/transport evidence for US-13,
 not terminal interaction, complete policy coverage or verified deployment.
 
@@ -541,28 +514,16 @@ footer/layout correction. Provisional UI defaults are 100 ms dirty redraw ticks,
 a 60x10 minimum full layout and eight-scalar horizontal key steps. There is no
 new compiler gate, server API or deployment claim.
 
-## Browser SDK acceptance — 2026-10-31
+## Browser connection acceptance — 2026-10-31, reduced 2026-11-22
 
-`tanuki-client` and `tanuki-protocol` now compile for
-`wasm32-unknown-unknown` on the pinned nightly. Browser transport uses the same
-Session driver, typed operations and projections; native SDK/server/UI regression
-suites remain supported. The browser suite runs real Rust WASM in headless Chrome
+`tanuki-client` and `tanuki-protocol` compile for `wasm32-unknown-unknown` on
+the pinned nightly. The browser suite runs real Rust WASM in headless Chrome
 against the production server binary, with temporary persistence and assigned
 ports. `run-browser.py` waits for the listener readiness log, launches the WASM
-runner, then requests SIGINT and joins shutdown. Only a silent handshake peer is
-scripted for timeout injection; it does not implement Tanuki's server behavior.
-
-| Evidence | Contract |
-| --- | --- |
-| `tests/browser.rs::sessions_preserve_atomic_batches_typed_bytes_and_removal_in_both_codecs` | US-09.A1/A2 and removal portion of A4: baseline, complete paired hue/brightness, JSON/MessagePack bytes, immutable history, continued delivery after observer drop, dead weak handles after close |
-| `direct_connection_waits_for_open_mixes_codecs_and_reports_remote_errors` | Handshake readiness, explicit hello, mixed outgoing codecs and correlated remote errors, actual close and rejection of later sends |
-| `replacement_preserves_abnormal_close_code_and_reason` | Production same-name replacement preserves code 4001/reason, reports terminal listener error once, joins both sessions |
-| `raw_lag_is_local_and_reported_once` | Independent bounded listeners; healthy consumer establishes driver progress without sleeps; slow listener reports lag once |
-| `invalid_urls_and_oversized_writes_fail_locally`, `zero_write_deadline_rejects_before_sending` | Typed failures before sending, no cache mutation, connection remains live |
-| `stalled_handshake_obeys_browser_deadline` | Browser timer cancels a pending open/hello with ConnectTimeout |
-| `connection::browser::tests` | Receive size limits, malformed JSON/trailing MessagePack and clean/abnormal close translation |
-| `runtime::tests` | Local task join/abort drops future state; monotonic waits and timeout work without a Tokio runtime |
-| Shared `observe::tests` and `session::tests`, also run in WASM | Initial baseline survives coalescing, complete latest output, terminal input lag, clean final snapshot/raw drainage |
+runner, then requests SIGINT and joins shutdown. Since the session layer was
+removed, the suite covers the connection only (see the table above);
+`connection::browser::tests` covers receive size limits, malformed
+JSON/trailing MessagePack and clean/abnormal close translation.
 
 Red evidence: before adapters, browser checking failed in Mio/native networking
 and native randomness. More substantively, running the direct-connection browser
@@ -586,8 +547,9 @@ cargo test --workspace
 cargo test --workspace --release
 ```
 
-Verification: browser debug and release each passed **15 tests** (8 unit/shared,
-7 production-socket scenarios), using Chrome/ChromeDriver 156.0.8078.80. Native
+Verification (2026-11-22): the browser suite passed 6 tests (2 unit, 4
+production-socket scenarios). Originally (2026-10-31, with the session layer)
+debug and release each passed 15 tests using Chrome/ChromeDriver 156.0.8078.80. Native
 workspace debug/release (210 tests each), both Clippy configurations, formatting, target checks
 and the two SDK documentation snippets pass. Local socket checks need permission
 to create loopback sockets; the first sandboxed full run stopped at EPERM in the
@@ -595,95 +557,7 @@ existing HTTP socket test, then passed with socket access enabled. CI includes a
 separate browser job with the same target checks and both browser profiles.
 The CI definition is added; hosted execution is distinct from these local results.
 
-Defaults preserve JSON, 1 MiB messages, 64 pending requests/raw batches and
-10-second deadlines. Native plain WebSockets remain unchanged. Browser `wss://`
+Defaults preserve JSON and 1 MiB messages. Browser `wss://`
 uses browser TLS behind a proxy; TLS deployment, other engines, workers, Node,
 WASI, JavaScript bindings and rendered/deployed dashboards are unverified.
-Browser event/network buffers are outside SDK queue limits, and suspended tabs
-may delay deadlines and cleanup. These are not replay or retry guarantees.
-
-## TV volume example — 2026-10-31
-
-The example's red phase demonstrated missing Master volume extraction and
-missing range rejection, then an actual loopback integration failure because
-the stub bridge never subscribed. The implemented bridge passes four parser/
-subscription unit tests and five real-socket scenarios (production Tanuki plus
-simulated TV). A claim-check regression exposed an older observer registration
-baseline arriving after setup acceptance; the adapter now waits for an observed
-snapshot covering setup before checking its claim.
-
-Verification: `cargo fmt --all -- --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`, and
-`cargo test --workspace` passed. Final example tests passed in debug and release
-(`cargo test -p tanuki-tv-volume [--release]`), including initial-event timeout,
-sequence gap, renewal failure, claim displacement, invalid/duplicate events,
-lease metadata and orderly cleanup. The binary's `--help` command also ran.
-Loopback tests require permission to bind local sockets in restricted sandboxes.
-No actual TV, systemd installation or new browser behavior was tested.
-
-## TV discovery — 2026-11-01
-
-The red phase showed missing SSDP LOCATION extraction, missing device identity,
-and arbitrary selection with multiple renderers. CLI tests also demonstrated
-that the stub ignored `--discover` and `--device`. Implementation now passes
-16 example tests in both debug and release: nine library tests, two binary
-argument tests and the five existing production-server/loopback-TV scenarios.
-The new real-socket discovery test checks M-SEARCH packets, repeated/duplicate
-locations and UDNs, filtering non-renderers, and HTTP GET-only access; route
-selection checks the actual callback port. No live LAN endpoints appear in
-these automated fixtures.
-
-`cargo fmt --all -- --check`, workspace/all-target Clippy with `-D warnings`,
-`cargo test -p tanuki-tv-volume --offline` and its release equivalent passed on
-the unchanged nightly pin. No shared protocol/server code or dependency changes
-were made. Live `cargo run -p tanuki-tv-volume --offline -- --discover` found
-`[TV] Samsung TV` (`uuid:b79e314d-c9c0-4dc1-8ac3-1c46fee17138`) and two other
-renderers. Live testing used only SSDP and HTTP description GETs: the bridge was
-not launched and no volume-setting request was sent to the playing TV. Physical
-notification/control behavior remains unverified.
-
-## Samsung empty/reordered notifications — 2026-11-01
-
-The parser regression first failed with `Protocol("empty LastChange")`, and the
-real HTTP callback regression received 400 for the first empty event. The fix
-accepts self-closing, empty, whitespace and empty/whitespace CDATA as no-op
-notifications that still advance SEQ. A 130-event sequential burst followed by
-a valid volume report now keeps the production bridge/server session alive.
-
-With the user's assistance, a temporary receive-only probe using the actual
-fixed parser accepted over 300 physical-TV notifications, with successful
-subscription renewals and no parser rejections. It exposed arrivals 78 before
-77 and 169 before 168. This prompted a second red regression (an out-of-order
-volume must wait for its predecessor) and a bounded 64-event, one-second reorder
-buffer. Tests cover later volume winning in sequence order, no-op predecessors,
-duplicate/late suppression, wraparound, capacity and unresolved-gap expiry.
-
-All 21 example tests passed in debug and release, as did workspace/all-target
-Clippy (`-D warnings`), rustfmt and `git diff --check`. Socket tests require
-sandbox network permission and bind only loopback. The temporary live probe
-performed only event subscription, reception/acknowledgement, renewal and
-unsubscribe (HTTP 200 on exit). It had no Tanuki session or SOAP control path;
-all live volume changes were made by the user. The complete reorder/mutation
-flow was verified against production Tanuki with a simulated TV, not by running
-a live controller against the playing TV. No compiler/dependency changes.
-
-## TV mute — 2026-11-01
-
-The red parser test observed missing mute after a combined volume/mute report;
-the red production-server/loopback-TV test also failed because `/tv/mute` was
-absent from that report. The implementation now extracts both Master/instance-0
-fields and publishes a combined change atomically. Tests cover UPnP boolean
-forms, missing/invalid mute, absent-until-observed state, SetMute true/false,
-no optimistic publication, mute-only updates, per-field reorder merging,
-boolean-only desired input, renewal, deduplication and atomic cleanup.
-
-A takeover test with an invalid pending mute payload initially timed out:
-payload decoding hid claim replacement. Both input trackers now check raw claim
-metadata before decoding and check both claims before acting on a snapshot.
-The same real-server test verifies takeover stops the bridge in this condition.
-
-All 24 example tests (13 library, two CLI, nine integration) pass in debug and
-release, with workspace/all-target Clippy `-D warnings`, rustfmt and diff checks.
-Only loopback simulated TVs received control commands. No live TV mute/volume
-commands were sent; physical mute support remains unverified. Toolchain and
-Cargo dependency graph are unchanged.
+Browser event/network buffers are outside the client's limits.
