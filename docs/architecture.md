@@ -367,12 +367,50 @@ loses `is_human_readable`, breaking MessagePack bytes/extensions and literal tag
 maps. Serialization and the v1 wire shape stay unchanged. Snapshot persistence's
 payload-bearing enum uses the same approach, without changing its file format.
 
+### Client crate split (2026-11-23)
+
+The client is two crates. `tanuki-client-core` (agent-maintained) owns every
+connection concern; `tanuki-client` (user-maintained) owns the friendly API and
+state management, built on the core's output. The core's surface is
+deliberately small: a cloneable `Client` (write, select, set_setup, status,
+close) and one owned `Events` stream (`Snapshot { cause }`, `Update`,
+`SetupRejected`, `Disconnected`, `Closed`). Request IDs never leave the core.
+
+`client/driver` is one background task per `Client` family, spawned with
+`tokio::spawn` natively and `spawn_local` in the browser (`runtime` holds the
+spawn/sleep/timeout shim). It owns the current `Connection`, pending requests
+keyed by internal request ID, the latest selection and the setup batch. Handles
+reach it through an unbounded command channel; it ends on `close()` or when the
+last handle drops. Per connection: hello with the latest selection under the
+connect timeout, push `Snapshot { Connected }`, send the setup batch, then
+select over server messages and commands. On loss, pending writes fail `Lost`,
+pending selects resolve (the next hello carries the selection), and the driver
+waits out a jittered exponential backoff while failing writes `NotConnected`.
+Close code 4001 and a rejected hello stop it permanently.
+
+Why setup replay instead of letting the upper crate re-claim on `Connected`:
+the core alone knows when a new connection starts, and sending setup first on
+the socket orders it before every later write without any gating (the server
+handles one socket's messages in order; an earlier gate was removed when a
+mutation test showed it was redundant). This is a provisional default: the user
+has not decided how claims should be expressed in the upper crate.
+
+`client/queue` is the event queue: a mutex-protected deque with an
+`AtomicWaker`, so `Events` implements `Stream` without a stored future. Only
+updates count toward its capacity. On overflow it drops queued updates and the
+driver sends a `select` of the unchanged selection, dropping further updates
+until its snapshot arrives as `Snapshot { Resync }`. The driver never waits on
+the reader, because pings and write replies must keep flowing. Write replies
+are resolved after their update is queued, preserving the server's
+update-before-reply order for callers unless an overflow intervened.
+
 ### Protocol client structure (2026-11-22)
 
-`tanuki-client` is the protocol layer only. The session layer (reconnecting
-`Session`, typed topic handles, observers, listeners, controllers) was removed
-on 2026-11-22 so applications can build their own state management; the
-tv-volume example that used it moved to its own repository.
+(Now `tanuki-client-core`'s `connection` module; see the split above.) The
+session layer (reconnecting `Session`, typed topic handles, observers,
+listeners, controllers) was removed on 2026-11-22 so applications can build
+their own state management; the tv-volume example that used it moved to its
+own repository.
 
 `Connection` is a `Sender` plus a `Receiver`, so `split()` costs nothing and
 each target has one implementation. The sender shares the socket's sink behind
@@ -382,7 +420,7 @@ when Tungstenite has queued a pong or close acknowledgement, so a receiver
 running in its own task keeps the connection alive. `connection/native` and
 `connection/browser` each decode frames into one shared `Incoming` enum.
 Request IDs, reply correlation, caching, reconnection and timeouts belong to
-the application.
+the caller of `Connection`; `Client` provides all but caching.
 
 ## Flat package layout — 2026-10-07
 
@@ -480,7 +518,7 @@ leaves cached nodes intact. Full batches apply through the existing Model/
 SelectedView boundary before a caller can draw; there is no extra queue or
 projection task. `next_update` is cancellation-safe at its receive await.
 
-Updated 2026-11-22: `App` now owns a raw `tanuki_client::Connection`. It sends
+Updated 2026-11-22: `App` now owns a raw `tanuki_client::Connection` (now `tanuki_client_core`). It sends
 one stateless hello for `/**`; that hello's snapshot is the baseline, and each
 update is applied as one batch. A slow-consumer close (1013) or any abnormal
 close ends the stream as an error with stale data; there is no SDK listener or

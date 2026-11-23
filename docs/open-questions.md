@@ -37,7 +37,7 @@ No unresolved question currently blocks tasks 10 or 11.
    deadline without renewing the prior relative duration.
 2. JSON tags are `$bytes`, `$int`, and `$map`; literal maps containing reserved tag keys must use `$map`.
 3. `Cargo.lock` is committed. Application crates pin exact versions; the
-   reusable `tanuki-protocol` and `tanuki-client` libraries use ordinary caret
+   reusable `tanuki-protocol`, `tanuki-client-core` and `tanuki-client` libraries use ordinary caret
    requirements so downstream applications can resolve shared dependencies.
 4. A second managed connection with the same name closes the old socket with
    private-use code 4001. Slow consumers use retry-later code 1013.

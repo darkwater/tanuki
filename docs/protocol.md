@@ -339,8 +339,11 @@ MessagePack); `to_value`/`from_value` and the views' `decode::<T>()` convert any
 Serde type, where `Vec<u8>` becomes bytes and fixed arrays such as `[u8; 3]`
 stay lists. `SelectedView` is a minimal cache that applies snapshots and updates.
 
-`tanuki-client` is a WebSocket connection for these messages, native and in the
-browser; see [its README](../tanuki-client/README.md).
+`tanuki-client-core` implements these messages for Rust, native and in the
+browser: a raw `Connection`, and a reconnecting `Client` that follows the
+reconnect rules above (new hello, replace state from the snapshot, no retry
+after 4001, re-claim through its setup batch). See
+[its README](../tanuki-client-core/README.md).
 
 ## Persistence
 

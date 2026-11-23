@@ -119,4 +119,4 @@ Related stories: [US-09](STORY-09-dashboard.md) for composed dashboards and
 
 Implementation planning: [bounded inspector handoff](../inspector-implementation-plan.md).
 - 2026-11-21: The inspector connects as a stateless session (hello `session: "stateless"`): a duplicate name no longer replaces a controller's managed session or releases its claims. Lag now resynchronises from a fresh baseline instead of ending the stream; the LAGGED status is gone. Recovery remains an explicit reconnect, by design.
-- 2026-11-22: The inspector now uses the raw protocol connection (`tanuki_client::Connection`): one stateless hello for `/**`, whose snapshot is the baseline, then complete update batches. A slow-consumer close (1013) shows as an error with stale data; recovery is an explicit reconnect.
+- 2026-11-22: The inspector now uses the raw protocol connection (`tanuki_client::Connection`, now `tanuki_client_core::Connection`): one stateless hello for `/**`, whose snapshot is the baseline, then complete update batches. A slow-consumer close (1013) shows as an error with stale data; recovery is an explicit reconnect.

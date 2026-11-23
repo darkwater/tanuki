@@ -1,8 +1,8 @@
 #![cfg(target_arch = "wasm32")]
 //! The browser connection against a real server (run with tests/run-browser.py).
 
-use tanuki_client::protocol::*;
-use tanuki_client::{Codec, Connection, ConnectionError};
+use tanuki_client_core::protocol::*;
+use tanuki_client_core::{Codec, Connection, ConnectionError};
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -175,4 +175,43 @@ async fn invalid_urls_and_oversized_messages_fail_locally() {
         ServerMessage::Reply { .. }
     ));
     connection.close().await.unwrap();
+}
+
+// The reconnecting client's background task and timers on the browser event
+// loop: connect, a correlated write, a rejected write, and a normal close.
+#[wasm_bindgen_test]
+async fn the_client_connects_writes_and_closes_without_a_tokio_runtime() {
+    use tanuki_client_core::{Client, ClientError, Closed, Event, SnapshotCause};
+    let (client, mut events) = Client::builder(URL, ClientName::parse("browser-client").unwrap())
+        .selectors([Selector::parse("/browser-client/*").unwrap()])
+        .start();
+    assert!(matches!(
+        events.next().await,
+        Some(Event::Snapshot {
+            cause: SnapshotCause::Connected,
+            ..
+        })
+    ));
+    let commit = client
+        .write(vec![WireOperation::PublishState {
+            topic: TopicPath::parse("/browser-client/value").unwrap(),
+            value: Value::Integer(5),
+            expiry: None,
+        }])
+        .await
+        .unwrap();
+    assert!(matches!(
+        events.next().await,
+        Some(Event::Update(update)) if update.sequence == commit.sequence
+    ));
+    assert!(matches!(
+        client.write(vec![]).await,
+        Err(ClientError::Rejected(error)) if error.code == ErrorCode::EmptyBatch
+    ));
+    client.close().await;
+    assert!(matches!(
+        events.next().await,
+        Some(Event::Closed(Closed::Requested))
+    ));
+    assert!(events.next().await.is_none());
 }

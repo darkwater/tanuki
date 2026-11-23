@@ -1,5 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
-use tanuki_client::{Connection, ConnectionError};
+use tanuki_client_core::{Connection, ConnectionError};
 use tokio_tungstenite::tungstenite::{Error, error::UrlError};
 
 /// A `wss://` URL must reach the TLS handshake. The peer here accepts TCP and

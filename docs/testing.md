@@ -268,12 +268,37 @@ cargo test --all-targets --all-features
 cargo test --release --all-targets --all-features
 ```
 
+## Client core acceptance — 2026-11-23
+
+`tanuki-client-core`'s `Client` runs against the production server over
+loopback (`tanuki/tests/client_core.rs`); restarts reuse the same core and port.
+The browser suite adds `the_client_connects_writes_and_closes_without_a_tokio_runtime`.
+
+| Behaviour | Coverage |
+| --- | --- |
+| Cloned handles write; a write resolves after its update is queued; rejections are typed; close ends the stream and later writes fail `Closed` | `writes_from_cloned_handles_resolve_after_their_update_is_queued`; browser test |
+| `select` yields a `Selected` snapshot and the next hello after a restart uses it | `select_replaces_the_selection_and_survives_reconnects` |
+| Retrying while no server listens; writes fail `NotConnected` meanwhile; reconnect succeeds | `writes_fail_fast_while_disconnected_and_reconnecting_recovers` |
+| Setup re-claims after a restart, before a write sent right after the snapshot | `the_setup_batch_reclaims_inputs_before_other_writes_after_a_reconnect` |
+| A rejected setup is reported and the connection stays usable | `a_rejected_setup_is_reported_and_the_connection_stays_usable` |
+| 4001 replacement ends with `Closed(Replaced)` and no reconnect | `a_replaced_session_closes_without_reconnecting` |
+| Overflow resyncs and folded state converges | `a_consumer_that_falls_behind_gets_a_resync_snapshot`; unit tests in `client/queue.rs` |
+| Connect timeout against a server that never completes the handshake; close while backing off | `a_silent_server_times_out_the_connection_attempt` |
+| Dropping every handle closes the session | `dropping_every_handle_closes_the_connection` |
+
+Red phases were checked by mutating the driver: disabling setup replay, retrying
+after 4001, and disabling the overflow resync each fail the corresponding tests.
+Gating writes behind the setup reply was also mutated away and no test failed,
+which showed the gate was redundant (per-socket ordering already guarantees
+it), so it was removed. A server shutdown sometimes resets the socket instead
+of sending 1001; tests accept either disconnect.
+
 ## Protocol client acceptance — 2026-11-22
 
-`tanuki-client` is the protocol layer only (the session SDK and its
+The raw `Connection` (then `tanuki-client`, now `tanuki-client-core`) is the protocol layer only (the session SDK and its
 `native_sdk.rs`/`session_failures.rs` suites were removed with it). It runs
 against the production server over loopback (`tanuki/tests/client_connection.rs`)
-and in a real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
+and in a real browser (`tanuki-client-core/tests/browser.rs` via `run-browser.py`).
 
 | Behaviour | Coverage |
 | --- | --- |
@@ -282,7 +307,7 @@ and in a real browser (`tanuki-client/tests/browser.rs` via `run-browser.py`).
 | Split halves from separate tasks; an idle split receiver answers pings past the silence window | `client_connection::split_halves_work_from_separate_tasks_and_keep_the_connection_alive`; browser `split_halves_send_and_receive_independently` |
 | Replacement surfaces close code 4001 and reason `session_replaced` | browser `a_replaced_managed_session_closes_with_4001` |
 | Invalid URLs and oversized outgoing messages fail locally; the connection stays usable | browser `invalid_urls_and_oversized_messages_fail_locally` |
-| Native `wss://` reaches the TLS handshake | `tanuki-client/tests/tls.rs` |
+| Native `wss://` reaches the TLS handshake | `tanuki-client-core/tests/tls.rs` |
 | Serde payload conversion: enums, options, `serde_bytes`, `Value` as a nested Serde type (exact, not tagged), Tanuki JSON and native MessagePack for `Value`, `u8` sequences as bytes but fixed arrays and tuples as lists | `tanuki-protocol/tests/payload.rs` |
 | Regression found by the earlier SDK | `tanuki/tests/persistence.rs::binary_and_tag_looking_values_survive_a_snapshot_round_trip` verifies streaming stored-node decoding without changing persistence format |
 
@@ -439,7 +464,7 @@ bounded receive deadlines and no sleeps.
 Run focused checks with loopback access:
 
 ```sh
-cargo test -p tanuki-ui -p tanuki-client
+cargo test -p tanuki-ui -p tanuki-client-core
 cargo test -p tanuki-ui --release
 ```
 
@@ -519,7 +544,7 @@ new compiler gate, server API or deployment claim.
 
 ## Browser connection acceptance — 2026-10-31, reduced 2026-11-22
 
-`tanuki-client` and `tanuki-protocol` compile for `wasm32-unknown-unknown` on
+`tanuki-client-core`, `tanuki-client` and `tanuki-protocol` compile for `wasm32-unknown-unknown` on
 the pinned nightly. The browser suite runs real Rust WASM in headless Chrome
 against the production server binary, with temporary persistence and assigned
 ports. `run-browser.py` waits for the listener readiness log, launches the WASM
@@ -539,11 +564,11 @@ Commands (Chrome plus matching ChromeDriver, or configured WebDriver required):
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.130 --locked
-cargo check -p tanuki-protocol -p tanuki-client --target wasm32-unknown-unknown --locked
-cargo clippy -p tanuki-client --target wasm32-unknown-unknown --lib --test browser --locked -- -D warnings
-cargo test -p tanuki-client --target wasm32-unknown-unknown --doc --locked
-python3 tanuki-client/tests/run-browser.py
-python3 tanuki-client/tests/run-browser.py --release
+cargo check -p tanuki-protocol -p tanuki-client-core -p tanuki-client --target wasm32-unknown-unknown --locked
+cargo clippy -p tanuki-client-core --target wasm32-unknown-unknown --lib --test browser --locked -- -D warnings
+cargo test -p tanuki-client-core --target wasm32-unknown-unknown --doc --locked
+python3 tanuki-client-core/tests/run-browser.py
+python3 tanuki-client-core/tests/run-browser.py --release
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

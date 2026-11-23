@@ -5,27 +5,7 @@ edition = "2024"
 
 [features]
 default = ["rustls"]
-# Native `wss://` with webpki roots. Browsers always use their own TLS.
-rustls = ["dep:rustls", "tokio-tungstenite/rustls-tls-webpki-roots"]
+rustls = ["tanuki-client-core/rustls"]
 
 [dependencies]
-tanuki-protocol = { path = "../tanuki-protocol" }
-futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-serde_json = "1.0.151"
-rmp-serde = "1.3.1"
-thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["sync"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.53.2", features = ["net"] }
-tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-gloo-net = { version = "0.7.0", default-features = false, features = ["websocket"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-tokio = { version = "1.53.2", features = ["macros", "rt", "time"] }
-
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "0.3.80"
+tanuki-client-core = { path = "../tanuki-client-core", default-features = false }

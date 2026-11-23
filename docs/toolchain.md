@@ -37,6 +37,15 @@ cargo test --workspace --release
 The default toolchain selected by each command comes from
 `rust-toolchain.toml`.
 
+## Client core — 2026-11-23
+
+`tanuki-client` was renamed `tanuki-client-core` and a new, user-maintained
+`tanuki-client` depends on it. The core's reconnecting `Client` adds Tokio's
+`macros`, `rt` and `time` features natively and `tracing`; in the browser it
+uses `wasm-bindgen-futures` (`spawn_local`) and `gloo-timers` 0.4.0. No feature
+gates, async-trait or nightly upgrade were needed: the driver is one concrete
+spawned future, so there is no trait or dyn boundary.
+
 ## Native SDK verification — 2026-10-07
 
 The workspace adds `tanuki-protocol` and `tanuki-client` on the existing nightly

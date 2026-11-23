@@ -56,7 +56,7 @@ def main():
                 WASM_BINDGEN_USE_BROWSER="1",
                 WASM_BINDGEN_TEST_TIMEOUT="30",
             )
-            result = subprocess.run(["cargo", "test", "-p", "tanuki-client", "--target", "wasm32-unknown-unknown", "--lib", "--test", "browser", "--locked", *sys.argv[1:]], cwd=ROOT, env=env)
+            result = subprocess.run(["cargo", "test", "-p", "tanuki-client-core", "--target", "wasm32-unknown-unknown", "--lib", "--test", "browser", "--locked", *sys.argv[1:]], cwd=ROOT, env=env)
         finally:
             server.send_signal(signal.SIGINT)
             try:

@@ -78,7 +78,7 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
 
 - 2026-10-31: The user requested WASM/web support for the Rust SDK. Browser
   Session, typed handles and observations now run in headless Chrome against the
-  production server. `tanuki-client/tests/browser.rs` verifies US-09.A1/A2 and the
+  production server. `tanuki-client-core/tests/browser.rs` (then `tanuki-client`) verifies US-09.A1/A2 and the
   removal portion of A4, with paired `/browser-json/{hue,brightness}` and
   `/browser-msgpack/{hue,brightness}` updates plus binary bytes. Shared projection
   tests also run in WASM, including immutable history, latest output and terminal
@@ -88,3 +88,4 @@ claim. Ordinary Rust SDK observation now has compiled examples and acceptance te
   JavaScript SDK, TLS deployment or actual user deployment has been verified.
 - 2026-11-21: SDK rewrite driven by a human-written egui dashboard (fbk-red) that had bypassed the SDK for the raw connection: it needed `/battery/*` wildcards, a shareable session usable from UI code, automatic reconnection and native `wss://`. All four are now in the SDK (`observe` with selectors, cloneable `Session`, `Reconnect`, default `rustls` feature) and covered by tests. fbk-red itself has not been ported yet.
 - 2026-11-22: The user is writing their own Rust client, so `tanuki-client` was reduced to the protocol layer (typed messages over one WebSocket) and the session SDK (Session, typed topics, observers, controllers) and its tests were removed. Server behaviour is unchanged; SDK-level criteria evidence is pending the new client.
+- 2026-11-23: The client is now two crates: `tanuki-client-core` (agent-maintained: raw `Connection` plus a reconnecting `Client` with an event stream, reply correlation and setup replay for claims) and `tanuki-client` (user-maintained friendly API, currently a placeholder). SDK-level criteria evidence is still pending the user's API.

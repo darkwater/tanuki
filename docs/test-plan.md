@@ -290,11 +290,24 @@ production panic switch or catch all panics. A1/A2 get local inspector evidence;
 A3/A4 and deployed hardware remain unverified. Run full workspace debug/release,
 formatting and all-target Clippy at this milestone.
 
+## Client core — 2026-11-23
+
+Run `tanuki-client-core`'s `Client` against the production server natively
+(`tanuki/tests/client_core.rs`), restarting the server on the same port and
+core to force reconnects, and once in the browser. Cover: cloned handles
+writing; a write resolving after its update is queued; typed rejections;
+`select` and its reuse on reconnect; writes failing fast while disconnected;
+retry until a server appears; setup replay re-claiming before later writes; a
+rejected setup leaving the connection usable; 4001 ending without reconnect;
+overflow producing a resync snapshot whose folded state converges; connect
+timeout; close while backing off; dropping every handle closing the session.
+The friendly API in `tanuki-client` is out of scope here.
+
 ## Protocol client — 2026-11-22
 
-Run `tanuki-client` against the production server on loopback natively
+Run the raw `Connection` (now in `tanuki-client-core`) against the production server on loopback natively
 (`tanuki/tests/client_connection.rs`) and as Rust WASM in headless Chrome
-(`tanuki-client/tests/browser.rs`). Cover hello, both outgoing codecs and mixed
+(`tanuki-client-core/tests/browser.rs`). Cover hello, both outgoing codecs and mixed
 frames, update-before-reply, correlated errors, bytes/floats/tag maps through
 updates and fresh snapshots, split halves used from separate tasks, an idle
 split receiver surviving the server's silence window, 4001 replacement, and

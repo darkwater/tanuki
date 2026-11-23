@@ -22,13 +22,16 @@ The repository root is a virtual Cargo workspace:
 
 - `tanuki/` — authoritative server library, binary and integration tests
 - `tanuki-protocol/` — shared wire types/codecs and validated primitives
-- `tanuki-client/` — native/browser Rust WebSocket protocol client
+- `tanuki-client-core/` — native/browser connection layer: raw protocol `Connection` and the reconnecting `Client`
+- `tanuki-client/` — user-facing client API (hand-maintained; currently a placeholder)
 - `tanuki-ui/` — read-only terminal inspector and model/formatting/connection library
 
 Shared documentation, `Cargo.lock`, toolchain configuration and CI remain at the
-workspace root. [`tanuki-client`](tanuki-client/README.md) is the protocol
-layer only: typed messages over one WebSocket, with state management left to
-the application.
+workspace root. [`tanuki-client-core`](tanuki-client-core/README.md)
+handles staying connected (hello, reconnects, reply correlation, setup replay)
+and exposes a cloneable `Client` plus an event stream;
+[`tanuki-client`](tanuki-client/README.md) builds the friendly API and state
+management on top of it.
 
 ## Run it
 

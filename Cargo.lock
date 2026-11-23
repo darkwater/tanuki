@@ -490,6 +490,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gloo-timers"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4460540da666acdb5722b2a62ac47d18f627fcfc0c728d04dc7226b3f6d40a7"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "gloo-utils"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1449,7 +1461,7 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "tanuki-client",
+ "tanuki-client-core",
  "tanuki-protocol",
  "thiserror",
  "tokio",
@@ -1463,8 +1475,16 @@ dependencies = [
 name = "tanuki-client"
 version = "0.1.0"
 dependencies = [
+ "tanuki-client-core",
+]
+
+[[package]]
+name = "tanuki-client-core"
+version = "0.1.0"
+dependencies = [
  "futures-util",
  "gloo-net",
+ "gloo-timers",
  "rmp-serde",
  "rustls",
  "serde_json",
@@ -1472,6 +1492,8 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 
@@ -1498,7 +1520,7 @@ dependencies = [
  "ratatui",
  "serde_json",
  "tanuki",
- "tanuki-client",
+ "tanuki-client-core",
  "tanuki-protocol",
  "thiserror",
  "tokio",

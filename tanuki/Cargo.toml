@@ -19,7 +19,7 @@ tracing = { version = "=0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["fmt", "std"] }
 
 [dev-dependencies]
-tanuki-client = { path = "../tanuki-client" }
+tanuki-client-core = { path = "../tanuki-client-core" }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 tokio = { version = "=1.53.2", features = ["test-util"] }
 tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "handshake"] }

@@ -8,7 +8,7 @@ use std::{
 
 use tokio::{sync::oneshot, task::JoinHandle};
 
-use tanuki_client::{Connection, ConnectionError};
+use tanuki_client_core::{Connection, ConnectionError};
 use tanuki_protocol::{
     ClientMessage, ClientName, ErrorView, RequestId, Selector, ServerMessage, SessionMode,
     SnapshotView, UpdateView,

@@ -11,7 +11,7 @@ use tanuki::{
     domain::Timestamp,
     server::serve_with_core,
 };
-use tanuki_client::Connection;
+use tanuki_client_core::Connection;
 use tanuki_protocol::*;
 use tanuki_ui::{
     app::{App, AppError, ConnectionConfig},

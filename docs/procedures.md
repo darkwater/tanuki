@@ -231,9 +231,27 @@ in-progress save is joined before the final snapshot is captured. A final failur
 returned to the process rather than hidden. Crash recovery may lose writes
 since the last completed replacement; there is no WAL or replay.
 
+## Client operation
+
+`tanuki_client_core::Client::builder(url, name)...start()` returns a cloneable
+`Client` and an `Events` stream and connects in the background (natively inside
+a Tokio runtime). Startup: open, hello with the latest selection, receive the
+hello's snapshot (all within the connect timeout, default 10 s), emit
+`Snapshot { Connected }`, send the setup batch. Disconnect: pending writes fail
+`Lost` (outcome unknown), `Disconnected { error, retry_in }` is emitted, writes
+fail `NotConnected` until the next connection, and reconnect attempts back off
+from 0.5 s to 30 s with jitter. Expiry of claims across the gap is the
+server's (immediate or grace release); the setup batch re-claims. Shutdown:
+`close()` sends a normal close, waits up to one second for the server's
+acknowledgement, emits `Closed(Requested)` and ends the stream; dropping the
+last `Client` does the same. A 4001 replacement or rejected hello ends with
+`Closed(Replaced)` or `Closed(Rejected)` and no retry. A reader that falls
+`event_capacity` updates behind gets `Snapshot { Resync }` instead of the
+dropped updates.
+
 ## Protocol client operation
 
-`tanuki_client::Connection` is one WebSocket with no background tasks. Send
+`tanuki_client_core::Connection` is one WebSocket with no background tasks. Send
 hello first; keep receiving for the connection's lifetime (the native receiver
 answers pings, and the server closes a peer silent for 60 seconds). Split the
 connection to receive in one task while sending from others. A normal close is
@@ -320,7 +338,7 @@ snapshot storage. It is distinct from headless CI and deployment verification.
 ## Browser procedures — 2026-10-31
 
 Install `wasm32-unknown-unknown` for the pinned nightly, then run
-`cargo check -p tanuki-client --target wasm32-unknown-unknown --locked`.
+`cargo check -p tanuki-client-core -p tanuki-client --target wasm32-unknown-unknown --locked`.
 A Rust browser application depends on the same client crate; Cargo selects its
 browser dependencies. Drive futures through a framework's local executor or
 `wasm_bindgen_futures::spawn_local`, without a Tokio runtime. Page unload

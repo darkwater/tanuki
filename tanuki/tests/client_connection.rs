@@ -1,4 +1,4 @@
-//! The Rust protocol client (`tanuki_client::Connection`) against the real
+//! The Rust protocol client (`tanuki_client_core::Connection`) against the real
 //! server over loopback WebSockets.
 use std::{
     collections::BTreeMap,
@@ -11,8 +11,8 @@ use tanuki::{
     server::serve_with_core_and_timeouts,
     transport::{Heartbeat, SharedCore, WebSocketTimeouts},
 };
-use tanuki_client::protocol::*;
-use tanuki_client::{Codec, Connection};
+use tanuki_client_core::protocol::*;
+use tanuki_client_core::{Codec, Connection};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle, time::timeout};
 
 struct Server {

@@ -34,13 +34,13 @@ jobs:
         with:
           chrome-version: stable
           install-chromedriver: true
-      - run: cargo check -p tanuki-protocol -p tanuki-client --target wasm32-unknown-unknown --locked
-      - run: cargo clippy -p tanuki-client --target wasm32-unknown-unknown --lib --test browser --locked -- -D warnings
-      - run: cargo test -p tanuki-client --target wasm32-unknown-unknown --doc --locked
+      - run: cargo check -p tanuki-protocol -p tanuki-client-core -p tanuki-client --target wasm32-unknown-unknown --locked
+      - run: cargo clippy -p tanuki-client-core --target wasm32-unknown-unknown --lib --test browser --locked -- -D warnings
+      - run: cargo test -p tanuki-client-core --target wasm32-unknown-unknown --doc --locked
       - name: Test browser SDK against the production server
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
         run: |
-          python3 tanuki-client/tests/run-browser.py
-          python3 tanuki-client/tests/run-browser.py --release
+          python3 tanuki-client-core/tests/run-browser.py
+          python3 tanuki-client-core/tests/run-browser.py --release
